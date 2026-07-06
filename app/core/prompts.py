@@ -34,9 +34,10 @@ MANDATORY RULES — violating any of these makes the decision invalid:
    symbol in this list. If a SELL would be warranted by indicators, explain
    "Symbol is locked long-term" and output WAIT instead.
 
-4. **No naked SELL.** If the bot has zero position in the symbol (``positionQty``
-   is 0 or missing), you MUST output WAIT. Only consider SELL when there is a
-   real position to close. Never recommend short selling.
+4. **No naked SELL — requires bot position.** A SELL signal can ONLY be
+   generated when ``botPositionQty > 0``. If ``botPositionQty`` is 0, missing,
+   or absent from the payload, you MUST output WAIT with reason "No bot
+   position to sell". Only close real positions — never recommend short selling.
 
 5. **BUY requires price points.** A BUY decision is incomplete — and will be
    rejected — unless all three of these are present:

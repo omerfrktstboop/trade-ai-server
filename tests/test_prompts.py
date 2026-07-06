@@ -56,7 +56,7 @@ class TestTradingSystemPrompt:
 
     def test_no_naked_sell_rule(self):
         prompt = get_trading_system_prompt()
-        assert "zero position" in prompt.lower() or "no position" in prompt.lower()
+        assert "botpositionqty" in prompt.lower()
         assert "short selling" in prompt.lower()
 
     def test_buy_requires_entry_stop_target(self):

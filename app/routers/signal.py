@@ -20,7 +20,7 @@ from app.db.session import async_session_factory
 from app.models.db import AiDecision as AiDecisionModel
 from app.models.db import MarketSnapshot
 from app.models.db import RiskDecision as RiskDecisionModel
-from app.models.signal import SignalAction, SignalRequest, SignalResponse
+from app.models.signal import EntryRange, SignalAction, SignalRequest, SignalResponse
 from app.services.ai_provider import get_default_provider
 from app.services.broker_flow_service import get_broker_flow_context
 from app.services.fund_scanner import get_fund_context
@@ -125,10 +125,29 @@ def _dict_to_risk_decision(raw: dict, _req: SignalRequest) -> RiskDecision:
         risk_score=float(raw.get("risk_score", 0)),
         reason=str(raw.get("reason", "Provider returned no reason")),
         qty=float(raw.get("qty", 0)),
-        entry_range=None,  # TODO: parse from raw when provider supports it
-        stop_loss=raw.get("stop_loss"),
-        target_price=raw.get("target_price"),
+        entry_range=_parse_entry_range(raw),
+        stop_loss=raw.get("stop_loss") or raw.get("stopLoss"),
+        target_price=raw.get("target_price") or raw.get("targetPrice"),
     )
+
+
+def _parse_entry_range(raw: dict) -> EntryRange | None:
+    """Parse entryRange from AI response (supports camelCase + snake_case)."""
+    # camelCase nested: {"entryRange": {"min": 100, "max": 105}}
+    entry_range = raw.get("entryRange") or raw.get("entry_range")
+    if isinstance(entry_range, dict):
+        mn = entry_range.get("min") or entry_range.get("entryMin") or entry_range.get("entry_min")
+        mx = entry_range.get("max") or entry_range.get("entryMax") or entry_range.get("entry_max")
+        if mn is not None and mx is not None:
+            return EntryRange(min=float(mn), max=float(mx))
+
+    # Flat camelCase: {"entryMin": 100, "entryMax": 105}
+    entry_min = raw.get("entryMin") or raw.get("entry_min")
+    entry_max = raw.get("entryMax") or raw.get("entry_max")
+    if entry_min is not None and entry_max is not None:
+        return EntryRange(min=float(entry_min), max=float(entry_max))
+
+    return None
 
 
 # ── Persistence ───────────────────────────────────────────────────────────────

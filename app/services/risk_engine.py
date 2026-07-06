@@ -166,6 +166,41 @@ class RiskEngine:
                 f"Confidence {decision.confidence:.1f} < threshold {threshold:.0f}"
             )
 
+        # ── 9. BUY pre-flight: entryRange / stopLoss / targetPrice required ──
+        if (
+            allow_order
+            and action == SignalAction.BUY
+            and request.mode in (SignalMode.MANUAL, SignalMode.LIVE)
+        ):
+            if decision.entry_range is None:
+                allow_order = False
+                reasons.append("BUY missing entryRange")
+            elif decision.stop_loss is None:
+                allow_order = False
+                reasons.append("BUY missing stopLoss")
+            elif decision.target_price is None:
+                allow_order = False
+                reasons.append("BUY missing targetPrice")
+
+        # ── Determine order type and price ────────────────────────────
+        if not allow_order:
+            order_type = OrderType.NONE
+            price = None
+        elif request.mode == SignalMode.PAPER:
+            order_type = OrderType.NONE
+            price = None
+        else:
+            order_type = OrderType.LIMIT
+            if decision.entry_range is not None:
+                if action == SignalAction.BUY:
+                    price = min(decision.entry_range.max, request.last_price)
+                elif action == SignalAction.SELL:
+                    price = max(decision.entry_range.min, request.last_price)
+                else:
+                    price = request.last_price
+            else:
+                price = request.last_price
+
         # ── Build final reason ───────────────────────────────────────
         if reasons:
             base_reason = "; ".join(reasons)
@@ -179,8 +214,8 @@ class RiskEngine:
             symbol=request.symbol,
             action=action,
             qty=qty if allow_order else 0.0,
-            orderType=OrderType.MARKET if allow_order else OrderType.NONE,
-            price=None,
+            orderType=order_type,
+            price=price,
             confidenceScore=decision.confidence,
             riskScore=decision.risk_score,
             allowOrder=allow_order,

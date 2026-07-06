@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from app.core.risk_config import RiskConfig
-from app.models.signal import SignalAction, SignalMode, SignalRequest
+from app.models.signal import SignalAction, SignalMode, SignalRequest, EntryRange
 from app.services.ai_provider import MockAiProvider
 from app.services.risk_engine import RiskDecision, RiskEngine
 
@@ -166,6 +166,9 @@ class TestRiskEngineEdgeCases:
             confidence=85.0,
             reason="Strong BUY",
             qty=5,
+            entry_range=EntryRange(min=95.0, max=102.0),
+            stop_loss=93.0,
+            target_price=110.0,
         )
         resp = engine.evaluate(req, decision)
         assert resp.action == SignalAction.BUY

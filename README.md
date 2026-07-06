@@ -77,7 +77,7 @@ The API waits for PostgreSQL to be healthy before starting (`depends_on` + healt
 ### Signal Evaluate
 
 ```bash
-# PAPER mode — always returns allowOrder: false
+# PAPER mode — always returns allowOrder: false, requiresConfirmation: false
 curl -X POST http://localhost:8000/api/signal/evaluate \
   -H "Authorization: Bearer ***" \
   -H "Content-Type: application/json" \
@@ -107,6 +107,7 @@ curl -X POST http://localhost:8000/api/signal/evaluate \
   "confidenceScore": 0.0,
   "riskScore": 0.0,
   "allowOrder": false,
+  "requiresConfirmation": false,
   "reason": "Safe default: PAPER mode or no decision.",
   "entryRange": null,
   "stopLoss": null,

@@ -154,42 +154,52 @@ class RiskEngine:
         threshold = self.config.get_min_confidence(action.value)
         confidence_ok = decision.confidence >= threshold
 
-        # ── 8. PAPER mode ────────────────────────────────────────────
-        paper_mode = request.mode == SignalMode.PAPER
-
-        allow_order = confidence_ok and not paper_mode and action != SignalAction.WAIT
-
-        if paper_mode:
-            reasons.append("PAPER mode — allowOrder forced to false")
         if not confidence_ok:
             reasons.append(
                 f"Confidence {decision.confidence:.1f} < threshold {threshold:.0f}"
             )
 
-        # ── 9. BUY pre-flight: entryRange / stopLoss / targetPrice required ──
+        # ── 8. Mode-based allowOrder / requiresConfirmation ─────────
+        if request.mode == SignalMode.PAPER:
+            allow_order = False
+            requires_confirmation = False
+            reasons.append("PAPER mode — allowOrder forced to false")
+        elif request.mode == SignalMode.MANUAL:
+            allow_order = False
+            requires_confirmation = (action != SignalAction.WAIT)
+            if requires_confirmation:
+                reasons.append("MANUAL mode — requires user confirmation")
+            else:
+                reasons.append("MANUAL mode — allowOrder forced to false")
+        else:  # LIVE
+            requires_confirmation = False
+            allow_order = confidence_ok and action != SignalAction.WAIT
+
+        # ── 9. BUY pre-flight: entryRange / stopLoss / targetPrice ──
         if (
-            allow_order
-            and action == SignalAction.BUY
+            action == SignalAction.BUY
             and request.mode in (SignalMode.MANUAL, SignalMode.LIVE)
         ):
             if decision.entry_range is None:
-                allow_order = False
+                if allow_order:  # only LIVE can be True here
+                    allow_order = False
                 reasons.append("BUY missing entryRange")
             elif decision.stop_loss is None:
-                allow_order = False
+                if allow_order:
+                    allow_order = False
                 reasons.append("BUY missing stopLoss")
             elif decision.target_price is None:
-                allow_order = False
+                if allow_order:
+                    allow_order = False
                 reasons.append("BUY missing targetPrice")
 
-        # ── Determine order type and price ────────────────────────────
-        if not allow_order:
+        # ── Determine order type and price ──────────────────────────
+        show_details = allow_order or request.mode == SignalMode.MANUAL
+
+        if request.mode == SignalMode.PAPER:
             order_type = OrderType.NONE
             price = None
-        elif request.mode == SignalMode.PAPER:
-            order_type = OrderType.NONE
-            price = None
-        else:
+        elif show_details:
             order_type = OrderType.LIMIT
             if decision.entry_range is not None:
                 if action == SignalAction.BUY:
@@ -200,6 +210,9 @@ class RiskEngine:
                     price = request.last_price
             else:
                 price = request.last_price
+        else:
+            order_type = OrderType.NONE
+            price = None
 
         # ── Build final reason ───────────────────────────────────────
         if reasons:
@@ -213,16 +226,17 @@ class RiskEngine:
             requestId=request.request_id,
             symbol=request.symbol,
             action=action,
-            qty=qty if allow_order else 0.0,
+            qty=qty if show_details else 0.0,
             orderType=order_type,
             price=price,
             confidenceScore=decision.confidence,
             riskScore=decision.risk_score,
             allowOrder=allow_order,
+            requiresConfirmation=requires_confirmation,
             reason=base_reason,
-            entryRange=decision.entry_range if allow_order else None,
-            stopLoss=decision.stop_loss if allow_order else None,
-            targetPrice=decision.target_price if allow_order else None,
+            entryRange=decision.entry_range if show_details else None,
+            stopLoss=decision.stop_loss if show_details else None,
+            targetPrice=decision.target_price if show_details else None,
         )
 
     # ------------------------------------------------------------------
@@ -241,6 +255,7 @@ class RiskEngine:
             confidenceScore=0.0,
             riskScore=0.0,
             allowOrder=False,
+            requiresConfirmation=False,
             reason=reason,
             entryRange=None,
             stopLoss=None,

@@ -66,11 +66,11 @@ kararıyla döner.
 
 ### Mode açıklaması
 
-| Mode | Emir izni | Kullanım |
-|---|---|---|
-| `PAPER` | ❌ Asla emir göndermez | Geliştirme / test |
-| `MANUAL` | ✅ Risk geçerse izin verir | Onaylı yarı-otonom |
-| `LIVE` | ✅ Risk geçerse izin verir | Tam otonom |
+| Mode | Emir izni | Onay gerekir | Kullanım |
+|---|---|---|---|
+| `PAPER` | ❌ Asla emir göndermez | ❌ | Geliştirme / test |
+| `MANUAL` | ❌ Otomatik emir göndermez | ✅ `requiresConfirmation=true` | Onaylı yarı-otonom |
+| `LIVE` | ✅ Risk geçerse izin verir | ❌ | Tam otonom |
 
 ---
 
@@ -188,6 +188,7 @@ public class SignalResponse
     public double ConfidenceScore { get; set; }
     public double RiskScore { get; set; }
     public bool AllowOrder { get; set; }
+    public bool RequiresConfirmation { get; set; }
     public string Reason { get; set; } = "";
 }
 
@@ -245,6 +246,7 @@ HTTP 200 OK
   "confidenceScore": 50,
   "riskScore": 0,
   "allowOrder": false,
+  "requiresConfirmation": false,
   "reason": "MockProvider returns WAIT for all symbols",
   "entryRange": null,
   "stopLoss": null,
@@ -252,7 +254,7 @@ HTTP 200 OK
 }
 ```
 
-### LIVE modunda (örnek — gerçek AI kararı)
+### MANUAL modunda (örnek — AI BUY önerisi, onay bekler)
 
 ```json
 HTTP 200 OK
@@ -263,10 +265,37 @@ HTTP 200 OK
   "action": "BUY",
   "qty": 42,
   "orderType": "LIMIT",
-  "price": null,
+  "price": 71.25,
+  "confidenceScore": 82,
+  "riskScore": 15,
+  "allowOrder": false,
+  "requiresConfirmation": true,
+  "reason": "MANUAL mode — requires user confirmation; Strong buy signal.",
+  "entryRange": {
+    "min": 70.80,
+    "max": 71.50
+  },
+  "stopLoss": 68.90,
+  "targetPrice": 76.00
+}
+```
+
+### LIVE modunda (örnek — gerçek AI kararı, otomatik emir)
+
+```json
+HTTP 200 OK
+
+{
+  "requestId": "thyao-15m-003",
+  "symbol": "THYAO",
+  "action": "BUY",
+  "qty": 42,
+  "orderType": "LIMIT",
+  "price": 71.25,
   "confidenceScore": 82,
   "riskScore": 15,
   "allowOrder": true,
+  "requiresConfirmation": false,
   "reason": "RSI oversold bounce with MACD golden cross on 15m. Strong buy signal.",
   "entryRange": {
     "min": 70.80,
@@ -292,6 +321,7 @@ HTTP 200 OK
 | `confidenceScore` | float | AI güven skoru (0-100) |
 | `riskScore` | float | Risk skoru (0–100, düşük = güvenli) |
 | `allowOrder` | bool | **Risk engine emre izin verdi mi?** `true` ise emri gönder |
+| `requiresConfirmation` | bool | **Kullanıcıdan onay istenmeli mi?** MANUAL modda BUY/SELL için `true` |
 | `reason` | string | Kararın gerekçesi |
 | `entryRange` | object\|null | Limit emir için fiyat aralığı (`min`, `max`) |
 | `stopLoss` | float\|null | Önerilen zarar-kes seviyesi |
@@ -314,18 +344,24 @@ Matriks IQ                           trade-ai-server
   │                                        │─── AI provider (DeepSeek)
   │                                        │─── RiskEngine.evaluate()
   │                                        │
-  │  200 { action, allowOrder, ... }       │
+  │  200 { action, allowOrder,           │
+  │        requiresConfirmation, ... }    │
   │ <──────────────────────────────────────│
   │                                        │
-  │  if allowOrder == false:               │
-  │    → skip (reason: "PAPER blocked")    │
+  │  if allowOrder == true:                │
+  │    --> emri otomatik gonder (LIVE)    │
   │                                        │
-  │  if action == "WAIT":                  │
-  │    → skip, bekle                       │
+  │  if requiresConfirmation == true:      │
+  │    --> kullaniciya sor (MANUAL)       │
   │                                        │
-  │  if action in ("BUY","SELL")           │
-  │    and allowOrder == true:             │
-  │    → Matriks'e emir gönder             │
+  │  if allowOrder == false                │
+  │     and requiresConfirmation == false: │
+  │    --> skip (PAPER / risk blocked)    │
+  │                                        │
+  │  if action in (BUY, SELL)              │
+  │    and (allowOrder or                  │
+  │         requiresConfirmation):         │
+  │    --> emir gonder veya onay goster   │
   │      (qty, orderType, price,           │
   │       entryRange)                      │
   │                                        │
@@ -349,8 +385,9 @@ Matriks IQ                           trade-ai-server
 
 ## Notlar
 
-- **PAPER modunda** `allowOrder` her zaman `false` döner — emir göndermeye kalkmayın.
-- **MANUAL / LIVE** modlarında `allowOrder: true` dönse bile `action: "WAIT"` ise emir yoktur.
+- **PAPER modunda** `allowOrder` her zaman `false`, `requiresConfirmation` her zaman `false` — emir göndermeye kalkmayın.
+- **MANUAL modunda** `allowOrder` her zaman `false`'tır. AI BUY veya SELL önerirse `requiresConfirmation: true` döner — Matriks IQ kullanıcıya onay sormalı. WAIT ise `requiresConfirmation: false` döner.
+- **LIVE modunda** risk kontrolleri geçerse `allowOrder: true` dönebilir, `requiresConfirmation: false`.
 - `confidenceScore < 70` genelde `allowOrder: false` ile sonuçlanır (risk eşikleri).
 - Sunucu `requestId`'yi aynen döndürür — Matriks tarafında request/response eşleşmesi için kullanın.
 - Timeout: AI çağrısı 3-10 saniye sürebilir. C# tarafında `HttpClient.Timeout` en az 15s olmalı.

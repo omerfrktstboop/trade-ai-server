@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from app.services.fund_scanner import get_fund_context
 
@@ -72,7 +71,11 @@ class TestFundInPayload:
             "THYAO": {
                 "fundInterest": "HIGH",
                 "topFundsHolding": [
-                    {"fundCode": "TCD", "fundName": "Tacirler Değişken Fon", "weight": 8.5},
+                    {
+                        "fundCode": "TCD",
+                        "fundName": "Tacirler Değişken Fon",
+                        "weight": 8.5,
+                    },
                 ],
                 "fundScore": 72,
             }
@@ -152,7 +155,9 @@ class TestFundInPayload:
         )
 
         news = {"AKBNK": {"latestNews": [], "kapNews": [], "sentiment": "NEUTRAL"}}
-        funds = {"AKBNK": {"fundInterest": "MEDIUM", "topFundsHolding": [], "fundScore": 45}}
+        funds = {
+            "AKBNK": {"fundInterest": "MEDIUM", "topFundsHolding": [], "fundScore": 45}
+        }
 
         payload = _build_payload(req, news_context=news, fund_context=funds)
 

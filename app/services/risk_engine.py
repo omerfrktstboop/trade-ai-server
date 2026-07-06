@@ -21,7 +21,7 @@ Checks applied (in order):
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from app.core.risk_config import RiskConfig
@@ -58,7 +58,9 @@ class RiskDecision:
 # Default decisions
 # ---------------------------------------------------------------------------
 
-DEFAULT_WAIT = RiskDecision(action=SignalAction.WAIT, reason="Safe default: no AI decision yet.")
+DEFAULT_WAIT = RiskDecision(
+    action=SignalAction.WAIT, reason="Safe default: no AI decision yet."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +124,9 @@ class RiskEngine:
             reasons.append("Unknown action — defaulting to WAIT")
 
         # ── 3. Long-term lock blocks SELL ────────────────────────────
-        if action == SignalAction.SELL and self.config.is_long_term_locked(request.symbol):
+        if action == SignalAction.SELL and self.config.is_long_term_locked(
+            request.symbol
+        ):
             if not self.config.allow_sell_long_term:
                 return self._block(
                     request,
@@ -130,14 +134,20 @@ class RiskEngine:
                 )
 
         # ── 3.5. Trading cutoff time ─────────────────────────────────
-        if action in (SignalAction.BUY, SignalAction.SELL) and not self.config.can_trade_now():
+        if (
+            action in (SignalAction.BUY, SignalAction.SELL)
+            and not self.config.can_trade_now()
+        ):
             return self._block(
                 request,
                 f"Trading blocked: after cutoff time {self.config.disable_trading_after}",
             )
 
         # ── 3.6. Daily trade count limit ─────────────────────────────
-        if action in (SignalAction.BUY, SignalAction.SELL) and request.daily_trade_count >= self.config.max_daily_trade_count:
+        if (
+            action in (SignalAction.BUY, SignalAction.SELL)
+            and request.daily_trade_count >= self.config.max_daily_trade_count
+        ):
             return self._block(
                 request,
                 f"Trading blocked: daily trade count limit reached "
@@ -163,7 +173,9 @@ class RiskEngine:
         #   İki sınırlayıcıdan küçük olan geçerlidir.
         qty = decision.qty
         if action == SignalAction.SELL:
-            account_free_qty = max(0.0, request.total_account_qty - request.locked_long_term_qty)
+            account_free_qty = max(
+                0.0, request.total_account_qty - request.locked_long_term_qty
+            )
             sellable_qty = min(request.bot_position_qty, account_free_qty)
 
             if sellable_qty <= 0:
@@ -211,7 +223,7 @@ class RiskEngine:
             reasons.append("PAPER mode — allowOrder forced to false")
         elif request.mode == SignalMode.MANUAL:
             allow_order = False
-            requires_confirmation = (action != SignalAction.WAIT)
+            requires_confirmation = action != SignalAction.WAIT
             if requires_confirmation:
                 reasons.append("MANUAL mode — requires user confirmation")
             else:
@@ -221,9 +233,9 @@ class RiskEngine:
             allow_order = confidence_ok and action != SignalAction.WAIT
 
         # ── 9. BUY pre-flight: entryRange / stopLoss / targetPrice ──
-        if (
-            action == SignalAction.BUY
-            and request.mode in (SignalMode.MANUAL, SignalMode.LIVE)
+        if action == SignalAction.BUY and request.mode in (
+            SignalMode.MANUAL,
+            SignalMode.LIVE,
         ):
             missing: list[str] = []
             if decision.entry_range is None:
@@ -272,7 +284,9 @@ class RiskEngine:
         elif show_details:
             order_type = OrderType.LIMIT
             if action == SignalAction.BUY:
-                price = decision.entry_range.max  # BUY pre-flight guarantees entry_range is set
+                price = (
+                    decision.entry_range.max
+                )  # BUY pre-flight guarantees entry_range is set
             elif action == SignalAction.SELL:
                 price = request.last_price
             else:

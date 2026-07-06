@@ -19,7 +19,10 @@ class TestTradingSystemPrompt:
 
     def test_contains_data_driven_rule(self):
         prompt = get_trading_system_prompt()
-        assert "provided structured data" in prompt.lower() or "use all provided" in prompt.lower()
+        assert (
+            "provided structured data" in prompt.lower()
+            or "use all provided" in prompt.lower()
+        )
 
     def test_ignores_social_media_noise(self):
         prompt = get_trading_system_prompt()

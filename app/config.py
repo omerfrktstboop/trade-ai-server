@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import BeforeValidator, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict

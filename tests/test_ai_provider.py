@@ -53,7 +53,6 @@ def _fake_resp(status: int = 200, content: str = "", json_body: dict | None = No
 
 def _mock_session(resp=None):
     """Return a mock ClientSession whose post() returns the given response."""
-    import aiohttp
 
     session = AsyncMock()
     session.__aenter__ = AsyncMock(return_value=session)
@@ -93,15 +92,11 @@ class TestExtractJson:
         assert result == {"action": "BUY", "confidence": 80}
 
     def test_json_block(self):
-        result = _extract_json(
-            '```json\n{"action": "SELL", "confidence": 90}\n```'
-        )
+        result = _extract_json('```json\n{"action": "SELL", "confidence": 90}\n```')
         assert result == {"action": "SELL", "confidence": 90}
 
     def test_code_block_no_lang(self):
-        result = _extract_json(
-            '```\n{"action": "WAIT", "confidence": 50}\n```'
-        )
+        result = _extract_json('```\n{"action": "WAIT", "confidence": 50}\n```')
         assert result == {"action": "WAIT", "confidence": 50}
 
     def test_embedded_braces(self):
@@ -160,7 +155,13 @@ class TestNormalizeDecision:
 
     def test_optional_fields(self):
         result = _normalize_decision(
-            {"action": "BUY", "confidence": 80, "qty": 5, "stop_loss": 95.5, "target_price": 110.0}
+            {
+                "action": "BUY",
+                "confidence": 80,
+                "qty": 5,
+                "stop_loss": 95.5,
+                "target_price": 110.0,
+            }
         )
         assert result["qty"] == 5.0
         assert result["stop_loss"] == 95.5
@@ -185,11 +186,13 @@ class TestDeepSeekDecide:
         resp = _fake_resp(
             status=200,
             json_body={
-                "choices": [{
-                    "message": {
-                        "content": '{"action": "BUY", "confidence": 85.5, "reason": "RSI oversold at 22"}'
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"action": "BUY", "confidence": 85.5, "reason": "RSI oversold at 22"}'
+                        }
                     }
-                }]
+                ]
             },
         )
 
@@ -208,11 +211,13 @@ class TestDeepSeekDecide:
         resp = _fake_resp(
             status=200,
             json_body={
-                "choices": [{
-                    "message": {
-                        "content": '{"action": "SELL", "confidence": 90, "reason": "RSI overbought", "qty": 10}'
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"action": "SELL", "confidence": 90, "reason": "RSI overbought", "qty": 10}'
+                        }
                     }
-                }]
+                ]
             },
         )
 
@@ -231,9 +236,7 @@ class TestDeepSeekDecide:
         content = '```json\n{"action": "WAIT", "confidence": 60, "reason": "neutral RSI"}\n```'
         resp = _fake_resp(
             status=200,
-            json_body={
-                "choices": [{"message": {"content": content}}]
-            },
+            json_body={"choices": [{"message": {"content": content}}]},
         )
 
         with patch("aiohttp.ClientSession") as mock_cls:
@@ -262,7 +265,9 @@ class TestDeepSeekDecide:
         """aiohttp.ClientError → WAIT fallback."""
         provider = _provider()
         session = _mock_session()
-        session.post.side_effect = __import__("aiohttp").ClientError("connection refused")
+        session.post.side_effect = __import__("aiohttp").ClientError(
+            "connection refused"
+        )
 
         with patch("aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value = session
@@ -283,7 +288,10 @@ class TestDeepSeekDecide:
             result = await provider.decide({})
 
         assert result["action"] == "WAIT"
-        assert "timed out" in result["reason"].lower() or "timeout" in result["reason"].lower()
+        assert (
+            "timed out" in result["reason"].lower()
+            or "timeout" in result["reason"].lower()
+        )
 
     @pytest.mark.asyncio
     async def test_unparseable_response_fallback(self):
@@ -292,7 +300,9 @@ class TestDeepSeekDecide:
         resp = _fake_resp(
             status=200,
             json_body={
-                "choices": [{"message": {"content": "I think you should buy this stock!"}}]
+                "choices": [
+                    {"message": {"content": "I think you should buy this stock!"}}
+                ]
             },
         )
 
@@ -339,11 +349,13 @@ class TestDeepSeekDecide:
         resp = _fake_resp(
             status=200,
             json_body={
-                "choices": [{
-                    "message": {
-                        "content": '{"action": "WAIT", "confidence": 50, "reason": "test"}'
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"action": "WAIT", "confidence": 50, "reason": "test"}'
+                        }
                     }
-                }]
+                ]
             },
         )
 
@@ -351,12 +363,14 @@ class TestDeepSeekDecide:
 
         with patch("aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value = session
-            await provider.decide({
-                "symbol": "TUPRS",
-                "rsi": 45.0,
-                "ema20": 200.0,
-                "lastPrice": 205.0,
-            })
+            await provider.decide(
+                {
+                    "symbol": "TUPRS",
+                    "rsi": 45.0,
+                    "ema20": 200.0,
+                    "lastPrice": 205.0,
+                }
+            )
 
         # Check that the request was made with proper body
         call_args = session.post.call_args

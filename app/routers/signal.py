@@ -150,7 +150,12 @@ def _dict_to_risk_decision(raw: dict, _req: SignalRequest) -> RiskDecision:
     action = _safe_action(raw.get("action"))
     fallbacks: list[str] = []
 
-    if action == SignalAction.WAIT and raw.get("action") not in (None, "WAIT", "BUY", "SELL"):
+    if action == SignalAction.WAIT and raw.get("action") not in (
+        None,
+        "WAIT",
+        "BUY",
+        "SELL",
+    ):
         fallbacks.append(f"Invalid AI action '{raw.get('action')}', fallback WAIT")
 
     reason = str(raw.get("reason") or "Provider returned no reason")
@@ -164,8 +169,12 @@ def _dict_to_risk_decision(raw: dict, _req: SignalRequest) -> RiskDecision:
         reason=reason,
         qty=_safe_float(raw.get("qty")),
         entry_range=_parse_entry_range(raw),
-        stop_loss=_safe_float(raw.get("stop_loss") or raw.get("stopLoss"), default=0.0) or None,
-        target_price=_safe_float(raw.get("target_price") or raw.get("targetPrice"), default=0.0) or None,
+        stop_loss=_safe_float(raw.get("stop_loss") or raw.get("stopLoss"), default=0.0)
+        or None,
+        target_price=_safe_float(
+            raw.get("target_price") or raw.get("targetPrice"), default=0.0
+        )
+        or None,
     )
 
 
@@ -177,8 +186,16 @@ def _parse_entry_range(raw: dict) -> EntryRange | None:
     # camelCase nested: {"entryRange": {"min": 100, "max": 105}}
     entry_range = raw.get("entryRange") or raw.get("entry_range")
     if isinstance(entry_range, dict):
-        mn = entry_range.get("min") or entry_range.get("entryMin") or entry_range.get("entry_min")
-        mx = entry_range.get("max") or entry_range.get("entryMax") or entry_range.get("entry_max")
+        mn = (
+            entry_range.get("min")
+            or entry_range.get("entryMin")
+            or entry_range.get("entry_min")
+        )
+        mx = (
+            entry_range.get("max")
+            or entry_range.get("entryMax")
+            or entry_range.get("entry_max")
+        )
         if mn is not None and mx is not None:
             mn = _safe_float(mn, default=None)
             mx = _safe_float(mx, default=None)

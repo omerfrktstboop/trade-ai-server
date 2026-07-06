@@ -237,21 +237,20 @@ class DeepSeekProvider(AiProvider):
 
         except aiohttp.ClientError as exc:
             elapsed = time.monotonic() - t0
-            logger.error(
-                "DeepSeek network error after %.2fs: %s", elapsed, exc
-            )
+            logger.error("DeepSeek network error after %.2fs: %s", elapsed, exc)
             return {**_WAIT_FALLBACK, "reason": f"Network error: {exc}"}
 
         except asyncio.TimeoutError:
             elapsed = time.monotonic() - t0
             logger.error("DeepSeek request timed out after %.2fs", elapsed)
-            return {**_WAIT_FALLBACK, "reason": f"Request timed out after {self.timeout:.0f}s"}
+            return {
+                **_WAIT_FALLBACK,
+                "reason": f"Request timed out after {self.timeout:.0f}s",
+            }
 
         except Exception as exc:
             elapsed = time.monotonic() - t0
-            logger.exception(
-                "DeepSeek unexpected error after %.2fs", elapsed
-            )
+            logger.exception("DeepSeek unexpected error after %.2fs", elapsed)
             return {**_WAIT_FALLBACK, "reason": f"Unexpected error: {exc}"}
 
         # Extract assistant message content
@@ -322,10 +321,7 @@ def get_provider(name: str | AIProvider | None = None) -> AiProvider:
             timeout=settings.deepseek_timeout,
         )
 
-    raise ValueError(
-        f"Unknown AI_PROVIDER: {resolved!r}. "
-        f"Supported: mock, deepseek"
-    )
+    raise ValueError(f"Unknown AI_PROVIDER: {resolved!r}. Supported: mock, deepseek")
 
 
 # ── Module-level default ──────────────────────────────────────────────────────

@@ -19,11 +19,7 @@ async def latest_signals(
     db: AsyncSession = Depends(get_async_session),
 ) -> list[dict]:
     """Return the 20 most recent risk decisions, optionally filtered by symbol."""
-    stmt = (
-        select(RiskDecision)
-        .order_by(RiskDecision.created_at.desc())
-        .limit(20)
-    )
+    stmt = select(RiskDecision).order_by(RiskDecision.created_at.desc()).limit(20)
     if symbol:
         stmt = stmt.where(RiskDecision.symbol == symbol.upper())
 

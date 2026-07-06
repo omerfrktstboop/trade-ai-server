@@ -159,7 +159,9 @@ async def test_order_log_insert_read(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_bot_position_insert_read(session: AsyncSession):
-    pos = BotPosition(symbol="BTCUSDT", qty=2.5, avg_price=66800.0, total_value=167000.0)
+    pos = BotPosition(
+        symbol="BTCUSDT", qty=2.5, avg_price=66800.0, total_value=167000.0
+    )
     session.add(pos)
     await session.commit()
 

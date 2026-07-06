@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from app.services.broker_flow_service import get_broker_flow_context
 
@@ -88,7 +87,9 @@ class TestBrokerFlowInPayload:
         assert "brokerFlowContext" in payload
         assert payload["brokerFlowContext"] == flow
         assert payload["brokerFlowContext"]["THYAO"]["brokerFlow"] == "BUY"
-        assert payload["brokerFlowContext"]["THYAO"]["netInstitutionalFlow"] == 1_250_000.0
+        assert (
+            payload["brokerFlowContext"]["THYAO"]["netInstitutionalFlow"] == 1_250_000.0
+        )
 
     def test_build_payload_without_broker_flow_context_excluded(self):
         from app.models.signal import SignalMode, SignalRequest
@@ -157,12 +158,22 @@ class TestBrokerFlowInPayload:
         )
 
         news = {"AKBNK": {"latestNews": [], "kapNews": [], "sentiment": "NEUTRAL"}}
-        funds = {"AKBNK": {"fundInterest": "MEDIUM", "topFundsHolding": [], "fundScore": 45}}
-        flow = {"AKBNK": {"symbol": "AKBNK", "brokerFlow": "SELL", "netInstitutionalFlow": None,
-                          "topBrokers": [], "comment": "..."}}
+        funds = {
+            "AKBNK": {"fundInterest": "MEDIUM", "topFundsHolding": [], "fundScore": 45}
+        }
+        flow = {
+            "AKBNK": {
+                "symbol": "AKBNK",
+                "brokerFlow": "SELL",
+                "netInstitutionalFlow": None,
+                "topBrokers": [],
+                "comment": "...",
+            }
+        }
 
-        payload = _build_payload(req, news_context=news, fund_context=funds,
-                                 broker_flow_context=flow)
+        payload = _build_payload(
+            req, news_context=news, fund_context=funds, broker_flow_context=flow
+        )
 
         assert "newsContext" in payload
         assert "fundContext" in payload

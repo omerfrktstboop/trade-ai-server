@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import patch
 
 import pytest
@@ -66,16 +65,18 @@ class TestOrderResultRequest:
     """Pydantic schema validation for the order-result payload."""
 
     def test_parses_camel_case_matrix_message(self):
-        body = OrderResultRequest.model_validate({
-            "requestId": "r-1",
-            "symbol": "THYAO",
-            "action": "BUY",
-            "qty": 100,
-            "price": 71.25,
-            "status": "FILLED",
-            "matriksMessage": "OK — executed at 71.25",
-            "orderId": "XCH-99",
-        })
+        body = OrderResultRequest.model_validate(
+            {
+                "requestId": "r-1",
+                "symbol": "THYAO",
+                "action": "BUY",
+                "qty": 100,
+                "price": 71.25,
+                "status": "FILLED",
+                "matriksMessage": "OK — executed at 71.25",
+                "orderId": "XCH-99",
+            }
+        )
         assert body.request_id == "r-1"
         # Access via Python attribute name (not the alias)
         body_dict = body.model_dump()
@@ -84,25 +85,29 @@ class TestOrderResultRequest:
 
     def test_matrix_message_required(self):
         with pytest.raises(ValueError, match="matriksMessage"):
-            OrderResultRequest.model_validate({
-                "requestId": "r-2",
+            OrderResultRequest.model_validate(
+                {
+                    "requestId": "r-2",
+                    "symbol": "THYAO",
+                    "action": "BUY",
+                    "qty": 100,
+                    "price": 71.25,
+                    "status": "FILLED",
+                }
+            )
+
+    def test_order_id_optional(self):
+        body = OrderResultRequest.model_validate(
+            {
+                "requestId": "r-3",
                 "symbol": "THYAO",
                 "action": "BUY",
                 "qty": 100,
                 "price": 71.25,
                 "status": "FILLED",
-            })
-
-    def test_order_id_optional(self):
-        body = OrderResultRequest.model_validate({
-            "requestId": "r-3",
-            "symbol": "THYAO",
-            "action": "BUY",
-            "qty": 100,
-            "price": 71.25,
-            "status": "FILLED",
-            "matriksMessage": "OK",
-        })
+                "matriksMessage": "OK",
+            }
+        )
         body_dict = body.model_dump()
         assert body_dict.get("order_id") is None
 
@@ -111,15 +116,17 @@ class TestOrderResultRequest:
         """When DB commit fails, endpoint still returns {'status': 'ok'}."""
         from app.routers.order_result import record_order_result
 
-        request = OrderResultRequest.model_validate({
-            "requestId": "r-4",
-            "symbol": "THYAO",
-            "action": "BUY",
-            "qty": 100,
-            "price": 71.25,
-            "status": "FILLED",
-            "matriksMessage": "fine",
-        })
+        request = OrderResultRequest.model_validate(
+            {
+                "requestId": "r-4",
+                "symbol": "THYAO",
+                "action": "BUY",
+                "qty": 100,
+                "price": 71.25,
+                "status": "FILLED",
+                "matriksMessage": "fine",
+            }
+        )
 
         with patch(
             "app.routers.order_result.async_session_factory",
@@ -130,16 +137,18 @@ class TestOrderResultRequest:
 
     def test_matrix_message_passed_to_order_log(self):
         """Verify matrix_message flows from request body into OrderLog."""
-        body = OrderResultRequest.model_validate({
-            "requestId": "r-5",
-            "symbol": "THYAO",
-            "action": "SELL",
-            "qty": 50,
-            "price": 80.0,
-            "status": "FILLED",
-            "matriksMessage": "Partial fill: 50/100",
-            "orderId": "XCH-200",
-        })
+        body = OrderResultRequest.model_validate(
+            {
+                "requestId": "r-5",
+                "symbol": "THYAO",
+                "action": "SELL",
+                "qty": 50,
+                "price": 80.0,
+                "status": "FILLED",
+                "matriksMessage": "Partial fill: 50/100",
+                "orderId": "XCH-200",
+            }
+        )
 
         body_dict = body.model_dump()
         entry = OrderLog(

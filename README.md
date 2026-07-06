@@ -104,6 +104,26 @@ DEEPSEEK_API_KEY=sk-your-real-key
 > **Note:** `AI_PROVIDER=mock` is **blocked in production**. Trying to deploy with
 > mock will fail at startup. This ensures you never accidentally ship a dead AI.
 
+## ⚠️ Canlı Öncesi Güvenlik Kontrol Listesi
+
+Aşağıdaki adımları **LIVE** moda geçmeden önce mutlaka tamamlayın:
+
+| # | Kontrol | Nasıl | Beklenen |
+|---|---|---|---|
+| 1 | **Default mod PAPER** | `.env` → `DEFAULT_MODE=paper` | İsteklerde `mode` belirtilmezse PAPER çalışır |
+| 2 | **Mock AI test** | `AI_PROVIDER=mock` + `uvicorn` ile test | Tüm istekler `WAIT` döner, emir oluşmaz |
+| 3 | **DeepSeek test (PAPER)** | `AI_PROVIDER=deepseek`, `mode=PAPER` | AI karar üretir ama `allowOrder=false` |
+| 4 | **MANUAL test** | `mode=MANUAL` ile test istekleri | `requiresConfirmation=true`, emir otomatik gönderilmez |
+| 5 | **LIVE test (gerçek AI)** | `mode=LIVE` test istekleri | `allowOrder=true` olabilir, emirler gerçek gönderilir |
+| 6 | **Uzun vade lotlar** | `RISK_LOCKED_LONG_TERM_SYMBOLS=ASELS,EREGL` ayarlandı mı? | Kilitli semboller asla satılmaz |
+| 7 | **Günlük limit** | `RISK_MAX_DAILY_TRADE_COUNT=3` doğru mu? | Aşılınca BUY/SELL bloklanır |
+| 8 | **Cutoff saati** | `RISK_DISABLE_TRADING_AFTER=17:30` doğru mu? | Sonrası sadece WAIT |
+| 9 | **PostgreSQL** | `DATABASE_URL=postgresql+asyncpg://...` ayarlandı mı? | Production'da SQLite çalışmaz |
+| 10 | **Docker healtcheck** | `docker compose up --build` + `/api/health` → 200 | Tüm servisler ayakta |
+
+> **⚠️ LIVE mod gerçek emir gönderir.** Sadece PAPER → MANUAL → LIVE sırasıyla
+> test ettikten ve tüm kontrolleri tamamladıktan sonra aktif edin.
+
 ## API Endpoints
 
 | Method | Path                    | Auth     | Description              |
@@ -120,7 +140,7 @@ DEEPSEEK_API_KEY=sk-your-real-key
 ```bash
 # PAPER mode — always returns allowOrder: false, requiresConfirmation: false
 curl -X POST http://localhost:8000/api/signal/evaluate \
-  -H "Authorization: Bearer ***" \
+  -H "Authorization: Bearer *** \
   -H "Content-Type: application/json" \
   -d '{
     "requestId": "sig-001",
@@ -136,7 +156,7 @@ curl -X POST http://localhost:8000/api/signal/evaluate \
   }'
 ```
 
-**Response (200):**
+**Response (200) — PAPER mode:**
 ```json
 {
   "requestId": "sig-001",
@@ -155,6 +175,49 @@ curl -X POST http://localhost:8000/api/signal/evaluate \
   "targetPrice": null
 }
 ```
+
+**Response (200) — LIVE mode, BUY signal:**
+```json
+{
+  "requestId": "sig-002",
+  "symbol": "THYAO",
+  "action": "BUY",
+  "qty": 42,
+  "orderType": "LIMIT",
+  "price": 71.50,
+  "confidenceScore": 82,
+  "riskScore": 15,
+  "allowOrder": true,
+  "requiresConfirmation": false,
+  "reason": "RSI oversold bounce with MACD golden cross.",
+  "entryRange": {"min": 70.80, "max": 71.50},
+  "stopLoss": 68.90,
+  "targetPrice": 76.00
+}
+```
+
+**Key request fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `mode` | string | `"PAPER"` / `"MANUAL"` / `"LIVE"` (default: `"PAPER"`) |
+| `dailyTradeCount` | int | Günlük işlem sayısı — risk motoru limit kontrolünde kullanır |
+| `botPositionQty` | float | Bot'un mevcut pozisyonu — SELL clamp üst sınırı |
+| `totalAccountQty` | float | Hesaptaki toplam lot |
+| `lockedLongTermQty` | float | Uzun vade kilitli lot — asla satılmaz |
+
+**Key response fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `action` | enum | `"BUY"` / `"SELL"` / `"WAIT"` |
+| `orderType` | enum | `"LIMIT"` / `"NONE"` — **MARKET order asla üretilmez** |
+| `price` | float\|null | BUY → `entryRange.max`, SELL → `lastPrice`, WAIT → `null` |
+| `allowOrder` | bool | `true` ise emri gönder (LIVE mode), `false` ise emir yok |
+| `requiresConfirmation` | bool | `true` ise kullanıcıya sor (MANUAL mode), `false` ise onaysız |
+| `entryRange` | object\|null | `{"min": ..., "max": ...}` — limit emir için fiyat aralığı |
+| `stopLoss` | float\|null | Önerilen zarar-kes |
+| `targetPrice` | float\|null | Önerilen hedef fiyat |
 
 ### Order Result
 

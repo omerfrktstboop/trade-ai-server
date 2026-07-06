@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.init_db import drop_all, init_db
@@ -179,20 +178,49 @@ class TestLatestSignals:
 class TestLatestSignalsSymbolFilter:
     """GET /api/signals/latest?symbol=..."""
 
-    async def test_filter_exact_match(self, db_session: AsyncSession, client: AsyncClient):
+    async def test_filter_exact_match(
+        self, db_session: AsyncSession, client: AsyncClient
+    ):
         """?symbol=THYAO returns only THYAO records."""
         await _seed_decisions(
             db_session,
             [
-                {"request_id": "r1", "symbol": "THYAO", "action": "BUY", "confidence": 80.0,
-                 "risk_score": 15.0, "allow_order": True, "reason": "buy thyao",
-                 "order_type": "LIMIT", "qty": 10, "mode": "LIVE"},
-                {"request_id": "r2", "symbol": "AKBNK", "action": "WAIT", "confidence": 50.0,
-                 "risk_score": 0.0, "allow_order": False, "reason": "wait akbnk",
-                 "order_type": "NONE", "qty": 0, "mode": "PAPER"},
-                {"request_id": "r3", "symbol": "THYAO", "action": "SELL", "confidence": 75.0,
-                 "risk_score": 20.0, "allow_order": True, "reason": "sell thyao",
-                 "order_type": "LIMIT", "qty": 5, "mode": "LIVE"},
+                {
+                    "request_id": "r1",
+                    "symbol": "THYAO",
+                    "action": "BUY",
+                    "confidence": 80.0,
+                    "risk_score": 15.0,
+                    "allow_order": True,
+                    "reason": "buy thyao",
+                    "order_type": "LIMIT",
+                    "qty": 10,
+                    "mode": "LIVE",
+                },
+                {
+                    "request_id": "r2",
+                    "symbol": "AKBNK",
+                    "action": "WAIT",
+                    "confidence": 50.0,
+                    "risk_score": 0.0,
+                    "allow_order": False,
+                    "reason": "wait akbnk",
+                    "order_type": "NONE",
+                    "qty": 0,
+                    "mode": "PAPER",
+                },
+                {
+                    "request_id": "r3",
+                    "symbol": "THYAO",
+                    "action": "SELL",
+                    "confidence": 75.0,
+                    "risk_score": 20.0,
+                    "allow_order": True,
+                    "reason": "sell thyao",
+                    "order_type": "LIMIT",
+                    "qty": 5,
+                    "mode": "LIVE",
+                },
             ],
         )
 
@@ -203,14 +231,25 @@ class TestLatestSignalsSymbolFilter:
         symbols = {r["symbol"] for r in data}
         assert symbols == {"THYAO"}
 
-    async def test_filter_case_insensitive(self, db_session: AsyncSession, client: AsyncClient):
+    async def test_filter_case_insensitive(
+        self, db_session: AsyncSession, client: AsyncClient
+    ):
         """?symbol=thyao (lowercase) still matches THYAO."""
         await _seed_decisions(
             db_session,
             [
-                {"request_id": "r1", "symbol": "THYAO", "action": "WAIT", "confidence": 50.0,
-                 "risk_score": 0.0, "allow_order": False, "reason": "test",
-                 "order_type": "NONE", "qty": 0, "mode": "PAPER"},
+                {
+                    "request_id": "r1",
+                    "symbol": "THYAO",
+                    "action": "WAIT",
+                    "confidence": 50.0,
+                    "risk_score": 0.0,
+                    "allow_order": False,
+                    "reason": "test",
+                    "order_type": "NONE",
+                    "qty": 0,
+                    "mode": "PAPER",
+                },
             ],
         )
 
@@ -225,9 +264,18 @@ class TestLatestSignalsSymbolFilter:
         await _seed_decisions(
             db_session,
             [
-                {"request_id": "r1", "symbol": "THYAO", "action": "WAIT", "confidence": 50.0,
-                 "risk_score": 0.0, "allow_order": False, "reason": "test",
-                 "order_type": "NONE", "qty": 0, "mode": "PAPER"},
+                {
+                    "request_id": "r1",
+                    "symbol": "THYAO",
+                    "action": "WAIT",
+                    "confidence": 50.0,
+                    "risk_score": 0.0,
+                    "allow_order": False,
+                    "reason": "test",
+                    "order_type": "NONE",
+                    "qty": 0,
+                    "mode": "PAPER",
+                },
             ],
         )
 

@@ -14,7 +14,9 @@ class BotPosition(Base):
     __tablename__ = "bot_positions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    symbol: Mapped[str] = mapped_column(String(16), unique=True, index=True, nullable=False)
+    symbol: Mapped[str] = mapped_column(
+        String(16), unique=True, index=True, nullable=False
+    )
 
     qty: Mapped[float] = mapped_column(Float, default=0.0)
     avg_price: Mapped[float | None] = mapped_column(Float, nullable=True)

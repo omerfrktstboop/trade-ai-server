@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from app.core.risk_config import RiskConfig
 from app.models.signal import (
-    EntryRange,
     SignalAction,
     SignalRequest,
 )
@@ -87,11 +86,7 @@ def _suggest_qty(request: SignalRequest, config: RiskConfig | None = None) -> fl
     Falls back to 1 share if no price/limit information is available.
     """
     if request.last_price and request.last_price > 0:
-        max_value = (
-            config.max_position_value_per_symbol
-            if config
-            else 1000.0
-        )
+        max_value = config.max_position_value_per_symbol if config else 1000.0
         # Target ~20 % of max value per symbol
         target = max_value * 0.20
         qty = max(1, int(target / request.last_price))

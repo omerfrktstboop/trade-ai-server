@@ -8,7 +8,6 @@ so the endpoint is always safe regardless of the input.
 
 from __future__ import annotations
 
-import pytest
 
 from app.core.risk_config import RiskConfig
 from app.models.signal import SignalAction, SignalMode, SignalRequest, EntryRange
@@ -65,6 +64,7 @@ class TestMockProviderFlow:
         provider = MockAiProvider()
 
         import asyncio
+
         raw = asyncio.run(provider.decide({"symbol": "THYAO"}))
 
         from app.models.signal import SignalAction
@@ -85,12 +85,17 @@ class TestMockProviderFlow:
         provider = MockAiProvider()
 
         import asyncio
-        raw = asyncio.run(provider.decide({
-            "symbol": "THYAO",
-            "rsi": 10.0,
-            "lastPrice": 100.0,
-            "ema20": 80.0,
-        }))
+
+        raw = asyncio.run(
+            provider.decide(
+                {
+                    "symbol": "THYAO",
+                    "rsi": 10.0,
+                    "lastPrice": 100.0,
+                    "ema20": 80.0,
+                }
+            )
+        )
 
         from app.models.signal import SignalAction
         from app.services.risk_engine import RiskDecision

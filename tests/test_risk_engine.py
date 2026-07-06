@@ -360,10 +360,11 @@ class TestConfidenceThreshold:
     def test_buy_below_threshold_blocked(self):
         engine = RiskEngine(_cfg(min_confidence_for_buy=75))
         req = _make_request(symbol="THYAO", mode=SignalMode.LIVE)
-        dec = RiskDecision(action=SignalAction.BUY, confidence=70.0, qty=5)
+        dec = _make_buy_decision(confidence=70.0, stop_loss=None)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
-        assert "confidence" in resp.reason.lower()
+        assert resp.action == SignalAction.WAIT
+        assert "missing stopLoss" in resp.reason
 
     def test_buy_at_threshold_succeeds(self):
         engine = RiskEngine(_cfg(min_confidence_for_buy=75))
@@ -441,6 +442,103 @@ class TestBuyPreflight:
         assert resp.allow_order is True
         assert resp.action == SignalAction.BUY
 
+    def test_buy_missing_entry_range_waits(self):
+        """Missing entryRange → action WAIT."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(mode=SignalMode.LIVE)
+        dec = RiskDecision(action=SignalAction.BUY, confidence=90.0, qty=5)
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.action == SignalAction.WAIT
+        assert "missing entryRange" in resp.reason
+
+    def test_buy_stop_loss_not_below_entry_min(self):
+        """stopLoss >= entryRange.min → WAIT."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(mode=SignalMode.LIVE)
+        dec = _make_buy_decision(
+            entry_range=EntryRange(min=95.0, max=102.0),
+            stop_loss=96.0,  # above entry.min
+        )
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.action == SignalAction.WAIT
+        assert "stopLoss must be below entryRange.min" in resp.reason
+
+    def test_buy_stop_loss_equal_entry_min_blocked(self):
+        """stopLoss == entryRange.min → WAIT."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(mode=SignalMode.LIVE)
+        dec = _make_buy_decision(
+            entry_range=EntryRange(min=95.0, max=102.0),
+            stop_loss=95.0,
+        )
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.action == SignalAction.WAIT
+        assert "stopLoss must be below entryRange.min" in resp.reason
+
+    def test_buy_target_price_not_above_entry_max(self):
+        """targetPrice <= entryRange.max → WAIT."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(mode=SignalMode.LIVE)
+        dec = _make_buy_decision(
+            entry_range=EntryRange(min=95.0, max=102.0),
+            target_price=100.0,  # below entry.max
+        )
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.action == SignalAction.WAIT
+        assert "targetPrice must be above entryRange.max" in resp.reason
+
+    def test_buy_target_price_equal_entry_max_blocked(self):
+        """targetPrice == entryRange.max → WAIT."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(mode=SignalMode.LIVE)
+        dec = _make_buy_decision(
+            entry_range=EntryRange(min=95.0, max=102.0),
+            target_price=102.0,
+        )
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.action == SignalAction.WAIT
+        assert "targetPrice must be above entryRange.max" in resp.reason
+
+    def test_buy_entry_min_gt_max_blocked(self):
+        """entryRange.min > entryRange.max → WAIT."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(mode=SignalMode.LIVE)
+        dec = _make_buy_decision(
+            entry_range=EntryRange(min=105.0, max=100.0),
+        )
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.action == SignalAction.WAIT
+        assert "entryRange.min > entryRange.max" in resp.reason
+
+    def test_buy_valid_range_passes_preflight(self):
+        """Valid entryRange/stopLoss/targetPrice → risk kontrolleri devam eder."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(mode=SignalMode.LIVE)
+        dec = _make_buy_decision(
+            entry_range=EntryRange(min=95.0, max=102.0),
+            stop_loss=93.0,
+            target_price=110.0,
+        )
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is True
+        assert resp.action == SignalAction.BUY
+
+    def test_buy_missing_all_three_fields(self):
+        """All three fields missing → WAIT with all listed."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(mode=SignalMode.LIVE)
+        dec = RiskDecision(action=SignalAction.BUY, confidence=90.0, qty=5)
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.action == SignalAction.WAIT
+        assert "missing entryRange, stopLoss, targetPrice" in resp.reason
+
 
 class TestLimitOrderBehaviour:
     """LIVE/MANUAL modes produce LIMIT orders, not MARKET."""
@@ -459,6 +557,7 @@ class TestLimitOrderBehaviour:
         req = _make_request(mode=SignalMode.LIVE, lastPrice=100.0)
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=110.0),
+            target_price=115.0,
         )
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -470,6 +569,7 @@ class TestLimitOrderBehaviour:
         req = _make_request(mode=SignalMode.LIVE, lastPrice=100.0)
         dec = _make_buy_decision(
             entry_range=EntryRange(min=92.0, max=98.0),
+            stop_loss=88.0,
         )
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -563,6 +663,27 @@ class TestEntryRangeParsing:
         from app.routers.signal import _parse_entry_range
         result = _parse_entry_range({"action": "BUY"})
         assert result is None
+
+    def test_garbage_entry_range_returns_none(self):
+        """Garbage values in entryRange don't raise."""
+        from app.routers.signal import _parse_entry_range
+        assert _parse_entry_range({
+            "entryRange": {"min": "n/a", "max": "???"},
+        }) is None
+
+    def test_entry_range_with_one_missing_returns_none(self):
+        """If min present but max missing → None."""
+        from app.routers.signal import _parse_entry_range
+        assert _parse_entry_range({
+            "entryRange": {"min": 95},
+        }) is None
+
+    def test_non_numeric_entry_range_returns_none(self):
+        """String values that aren't numbers → None."""
+        from app.routers.signal import _parse_entry_range
+        assert _parse_entry_range({
+            "entry_range": {"min": "high", "max": "low"},
+        }) is None
 
 
 class TestDailyTradeCount:

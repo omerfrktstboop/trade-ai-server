@@ -130,7 +130,7 @@ def _safe_action(raw_value: Any) -> SignalAction:
         return SignalAction.WAIT
 
 
-def _safe_float(raw_value: Any, default: float = 0.0) -> float:
+def _safe_float(raw_value: Any, default: Any = 0.0) -> Any:
     """Parse a float safely — non-numeric values return the default."""
     if raw_value is None:
         return default
@@ -170,20 +170,29 @@ def _dict_to_risk_decision(raw: dict, _req: SignalRequest) -> RiskDecision:
 
 
 def _parse_entry_range(raw: dict) -> EntryRange | None:
-    """Parse entryRange from AI response (supports camelCase + snake_case)."""
+    """Parse entryRange from AI response (supports camelCase + snake_case).
+
+    Never raises — garbage values produce None.
+    """
     # camelCase nested: {"entryRange": {"min": 100, "max": 105}}
     entry_range = raw.get("entryRange") or raw.get("entry_range")
     if isinstance(entry_range, dict):
         mn = entry_range.get("min") or entry_range.get("entryMin") or entry_range.get("entry_min")
         mx = entry_range.get("max") or entry_range.get("entryMax") or entry_range.get("entry_max")
         if mn is not None and mx is not None:
-            return EntryRange(min=float(mn), max=float(mx))
+            mn = _safe_float(mn, default=None)
+            mx = _safe_float(mx, default=None)
+            if mn is not None and mx is not None:
+                return EntryRange(min=mn, max=mx)
 
     # Flat camelCase: {"entryMin": 100, "entryMax": 105}
     entry_min = raw.get("entryMin") or raw.get("entry_min")
     entry_max = raw.get("entryMax") or raw.get("entry_max")
     if entry_min is not None and entry_max is not None:
-        return EntryRange(min=float(entry_min), max=float(entry_max))
+        entry_min = _safe_float(entry_min, default=None)
+        entry_max = _safe_float(entry_max, default=None)
+        if entry_min is not None and entry_max is not None:
+            return EntryRange(min=entry_min, max=entry_max)
 
     return None
 

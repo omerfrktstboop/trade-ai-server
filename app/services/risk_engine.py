@@ -225,18 +225,43 @@ class RiskEngine:
             action == SignalAction.BUY
             and request.mode in (SignalMode.MANUAL, SignalMode.LIVE)
         ):
+            missing: list[str] = []
             if decision.entry_range is None:
-                if allow_order:  # only LIVE can be True here
-                    allow_order = False
-                reasons.append("BUY missing entryRange")
-            elif decision.stop_loss is None:
-                if allow_order:
-                    allow_order = False
-                reasons.append("BUY missing stopLoss")
-            elif decision.target_price is None:
-                if allow_order:
-                    allow_order = False
-                reasons.append("BUY missing targetPrice")
+                missing.append("entryRange")
+            if decision.stop_loss is None:
+                missing.append("stopLoss")
+            if decision.target_price is None:
+                missing.append("targetPrice")
+
+            if missing:
+                reason_text = f"BUY blocked: missing {', '.join(missing)}"
+                return self._block(
+                    request,
+                    reason_text,
+                )
+
+            # Validate price relationships
+            entry = decision.entry_range
+            sl = decision.stop_loss
+            tp = decision.target_price
+
+            if entry.min > entry.max:  # type: ignore[union-attr]  # guarded above
+                return self._block(
+                    request,
+                    "BUY blocked: entryRange.min > entryRange.max",
+                )
+
+            if sl is not None and sl >= entry.min:  # type: ignore[union-attr]
+                return self._block(
+                    request,
+                    "BUY blocked: stopLoss must be below entryRange.min",
+                )
+
+            if tp is not None and tp <= entry.max:  # type: ignore[union-attr]
+                return self._block(
+                    request,
+                    "BUY blocked: targetPrice must be above entryRange.max",
+                )
 
         # ── Determine order type and price ──────────────────────────
         show_details = allow_order or request.mode == SignalMode.MANUAL

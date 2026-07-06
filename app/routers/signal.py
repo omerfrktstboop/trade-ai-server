@@ -119,18 +119,53 @@ def _build_payload(
     return payload
 
 
+def _safe_action(raw_value: Any) -> SignalAction:
+    """Parse action string safely — invalid values fall back to WAIT."""
+    if not raw_value:
+        return SignalAction.WAIT
+    try:
+        action = SignalAction(str(raw_value).upper())
+        return action
+    except ValueError:
+        return SignalAction.WAIT
+
+
+def _safe_float(raw_value: Any, default: float = 0.0) -> float:
+    """Parse a float safely — non-numeric values return the default."""
+    if raw_value is None:
+        return default
+    try:
+        return float(raw_value)
+    except (ValueError, TypeError):
+        return default
+
+
 def _dict_to_risk_decision(raw: dict, _req: SignalRequest) -> RiskDecision:
-    """Parse a provider response dict into a RiskDecision."""
-    action = SignalAction(raw.get("action", "WAIT"))
+    """Parse a provider response dict into a RiskDecision.
+
+    Every field is parsed defensively — no matter what garbage the AI
+    returns, this function will not raise.  Invalid actions fall back
+    to WAIT, non-numeric fields default to 0.
+    """
+    action = _safe_action(raw.get("action"))
+    fallbacks: list[str] = []
+
+    if action == SignalAction.WAIT and raw.get("action") not in (None, "WAIT", "BUY", "SELL"):
+        fallbacks.append(f"Invalid AI action '{raw.get('action')}', fallback WAIT")
+
+    reason = str(raw.get("reason") or "Provider returned no reason")
+    if fallbacks:
+        reason = reason + " | " + " | ".join(fallbacks)
+
     return RiskDecision(
         action=action,
-        confidence=float(raw.get("confidence", 0)),
-        risk_score=float(raw.get("risk_score", 0)),
-        reason=str(raw.get("reason", "Provider returned no reason")),
-        qty=float(raw.get("qty", 0)),
+        confidence=_safe_float(raw.get("confidence")),
+        risk_score=_safe_float(raw.get("risk_score")),
+        reason=reason,
+        qty=_safe_float(raw.get("qty")),
         entry_range=_parse_entry_range(raw),
-        stop_loss=raw.get("stop_loss") or raw.get("stopLoss"),
-        target_price=raw.get("target_price") or raw.get("targetPrice"),
+        stop_loss=_safe_float(raw.get("stop_loss") or raw.get("stopLoss"), default=0.0) or None,
+        target_price=_safe_float(raw.get("target_price") or raw.get("targetPrice"), default=0.0) or None,
     )
 
 

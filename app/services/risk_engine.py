@@ -88,7 +88,21 @@ class RiskEngine:
         request: SignalRequest,
         decision: RiskDecision | None = None,
     ) -> SignalResponse:
-        """Run all risk checks and return a safe ``SignalResponse``."""
+        """Run all risk checks and return a safe ``SignalResponse``.
+
+        Checks (ordered):
+        1.  Symbol — allowed list
+        2.  Action — normalisation
+        3.  Long‑term locked symbols (SELL blocked unless override)
+        4.  Cutoff time (BUY/SELL blocked after disable_trading_after)
+        5.  Daily trade count (BUY/SELL blocked when dailyTradeCount >= maxDailyTradeCount)
+        6.  Short selling guard (SELL needs botPositionQty > 0)
+        7.  SELL qty clamp — sellableQty = min(botPositionQty, max(0, totalAccountQty − lockedLongTermQty))
+        8.  Max position value (BUY)
+        9.  Confidence threshold
+        10. Mode gates (PAPER / MANUAL / LIVE)
+        11. BUY pre-flight (entryRange, stopLoss, targetPrice required)
+        """
         if decision is None:
             decision = DEFAULT_WAIT
 
@@ -142,18 +156,31 @@ class RiskEngine:
                 pass  # not relevant right now but gate is here
 
         # ── 5. SELL qty clamp ────────────────────────────────────────
+        #   sellableQty = min(botPositionQty, max(0, totalAccountQty - lockedLongTermQty))
+        #
+        #   Bot yalnızca kendi aldığı lotu satabilir (botPositionQty).
+        #   Uzun vadeli kilitli lot hesap bakiye üzerinden korunur.
+        #   İki sınırlayıcıdan küçük olan geçerlidir.
         qty = decision.qty
         if action == SignalAction.SELL:
-            available = request.bot_position_qty - request.locked_long_term_qty
-            if available <= 0:
+            account_free_qty = max(0.0, request.total_account_qty - request.locked_long_term_qty)
+            sellable_qty = min(request.bot_position_qty, account_free_qty)
+
+            if sellable_qty <= 0:
                 return self._block(
                     request,
-                    f"SELL blocked: all held qty is locked long-term "
-                    f"(bot={request.bot_position_qty}, locked={request.locked_long_term_qty})",
+                    f"SELL blocked: no sellable qty "
+                    f"(bot={request.bot_position_qty}, "
+                    f"free_acct={account_free_qty}, "
+                    f"locked={request.locked_long_term_qty})",
                 )
-            if qty > available:
-                reasons.append(f"SELL qty clamped from {qty} to {available} (locked qty excluded)")
-                qty = available
+            if qty > sellable_qty:
+                reasons.append(
+                    f"SELL qty clamped from {qty} to {sellable_qty} "
+                    f"(bot_pos={request.bot_position_qty}, "
+                    f"free_acct={account_free_qty})"
+                )
+                qty = sellable_qty
 
         # ── 6. Max position value check ──────────────────────────────
         if action == SignalAction.BUY and qty > 0:

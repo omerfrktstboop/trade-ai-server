@@ -105,7 +105,7 @@ class TestLockedLongTerm:
 
     def test_locked_symbol_sell_blocked(self):
         engine = RiskEngine(_cfg(allowed_symbols="ASELS,THYAO"))
-        req = _make_request(symbol="ASELS", botPositionQty=10)
+        req = _make_request(symbol="ASELS", totalAccountQty=20, botPositionQty=10)
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
         resp = engine.evaluate(req, dec)
         assert resp.action == SignalAction.WAIT
@@ -114,7 +114,7 @@ class TestLockedLongTerm:
 
     def test_locked_symbol_sell_allowed_when_override(self):
         engine = RiskEngine(_cfg(allowed_symbols="ASELS,THYAO", allow_sell_long_term=True))
-        req = _make_request(symbol="ASELS", botPositionQty=10, mode=SignalMode.LIVE)
+        req = _make_request(symbol="ASELS", totalAccountQty=20, botPositionQty=10, mode=SignalMode.LIVE)
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -144,7 +144,7 @@ class TestSellPositionChecks:
 
     def test_sell_with_position_succeeds(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", botPositionQty=10, mode=SignalMode.LIVE)
+        req = _make_request(symbol="THYAO", totalAccountQty=20, botPositionQty=10, mode=SignalMode.LIVE)
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -152,11 +152,11 @@ class TestSellPositionChecks:
 
 
 class TestSellQtyClamp:
-    """Check 4: SELL qty ≤ botPositionQty."""
+    """Check 4: SELL qty ≤ botPositionQty (bot kendi pozisyonu üstü satamaz)."""
 
     def test_sell_qty_exceeds_position_clamped(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", botPositionQty=10, mode=SignalMode.LIVE)
+        req = _make_request(symbol="THYAO", totalAccountQty=30, botPositionQty=10, mode=SignalMode.LIVE)
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=20)
         resp = engine.evaluate(req, dec)
         assert resp.action == SignalAction.SELL
@@ -166,25 +166,83 @@ class TestSellQtyClamp:
 
 
 class TestLockedLongTermQty:
-    """Check 5: lockedLongTermQty never sellable."""
+    """Check 5: lockedLongTermQty never sellable — uses totalAccountQty floor.
+
+    Formula: sellableQty = min(botPositionQty, max(0, totalAccountQty - lockedLongTermQty))
+    """
 
     def test_all_qty_locked_blocks_sell(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", botPositionQty=10, lockedLongTermQty=10)
+        req = _make_request(symbol="THYAO", totalAccountQty=10, botPositionQty=10, lockedLongTermQty=10)
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
         resp = engine.evaluate(req, dec)
         assert resp.action == SignalAction.WAIT
         assert resp.allow_order is False
-        assert "locked long-term" in resp.reason.lower()
+        assert "no sellable qty" in resp.reason.lower()
 
     def test_partial_locked_sellable_qty_capped(self):
+        """totalAccountQty=8, lockedLongTermQty=3 → free=5, bot=10 → sellable=5."""
         engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", botPositionQty=10, lockedLongTermQty=3, mode=SignalMode.LIVE)
+        req = _make_request(
+            symbol="THYAO",
+            totalAccountQty=8,
+            botPositionQty=10,
+            lockedLongTermQty=3,
+            mode=SignalMode.LIVE,
+        )
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=10)
         resp = engine.evaluate(req, dec)
         assert resp.action == SignalAction.SELL
-        assert resp.qty == 7.0  # 10 - 3
+        assert resp.qty == 5.0  # min(10, max(0, 8-3)) = 5
         assert resp.allow_order is True
+        assert "clamped" in resp.reason.lower()
+
+    def test_account_free_limits_bot_position(self):
+        """totalAccountQty=120, locked=100 → free=20, bot=50 → sellable=20 (hesap tarafı sınırlar)."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(
+            symbol="THYAO",
+            totalAccountQty=120,
+            botPositionQty=50,
+            lockedLongTermQty=100,
+            mode=SignalMode.LIVE,
+        )
+        dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=40)
+        resp = engine.evaluate(req, dec)
+        assert resp.action == SignalAction.SELL
+        assert resp.qty == 20.0  # min(50, max(0, 120-100)) = 20
+        assert resp.allow_order is True
+        assert "clamped" in resp.reason.lower()
+
+    def test_negative_account_free_floor_to_zero(self):
+        """totalAccountQty=10, locked=20 → free=0, bot=5 → sellable=0 → BLOCKED."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(
+            symbol="THYAO",
+            totalAccountQty=10,
+            botPositionQty=5,
+            lockedLongTermQty=20,
+        )
+        dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
+        resp = engine.evaluate(req, dec)
+        assert resp.action == SignalAction.WAIT
+        assert resp.allow_order is False
+        assert "no sellable qty" in resp.reason.lower()
+
+    def test_no_free_blocks_even_with_bot_position(self):
+        """totalAccountQty=0 → free=0, bot=10 → sellable=0 → BLOCKED (güvenli taraf)."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(
+            symbol="THYAO",
+            totalAccountQty=0,
+            botPositionQty=10,
+            lockedLongTermQty=0,
+        )
+        dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
+        resp = engine.evaluate(req, dec)
+        assert resp.action == SignalAction.WAIT
+        assert resp.allow_order is False
+        assert "no sellable qty" in resp.reason.lower()
 
 
 class TestPaperMode:
@@ -209,7 +267,7 @@ class TestPaperMode:
 
     def test_paper_mode_sell_also_blocked(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", mode=SignalMode.PAPER, botPositionQty=10)
+        req = _make_request(symbol="THYAO", mode=SignalMode.PAPER, totalAccountQty=20, botPositionQty=10)
         dec = RiskDecision(action=SignalAction.SELL, confidence=95.0, qty=5)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
@@ -242,7 +300,7 @@ class TestManualMode:
 
     def test_manual_sell_requires_confirmation(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", mode=SignalMode.MANUAL, botPositionQty=10)
+        req = _make_request(symbol="THYAO", mode=SignalMode.MANUAL, totalAccountQty=20, botPositionQty=10)
         dec = RiskDecision(
             action=SignalAction.SELL,
             confidence=85.0,
@@ -316,14 +374,14 @@ class TestConfidenceThreshold:
 
     def test_sell_below_threshold_blocked(self):
         engine = RiskEngine(_cfg(min_confidence_for_sell=70))
-        req = _make_request(symbol="THYAO", botPositionQty=10, mode=SignalMode.LIVE)
+        req = _make_request(symbol="THYAO", totalAccountQty=20, botPositionQty=10, mode=SignalMode.LIVE)
         dec = RiskDecision(action=SignalAction.SELL, confidence=65.0, qty=5)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
 
     def test_sell_at_threshold_succeeds(self):
         engine = RiskEngine(_cfg(min_confidence_for_sell=70))
-        req = _make_request(symbol="THYAO", botPositionQty=10, mode=SignalMode.LIVE)
+        req = _make_request(symbol="THYAO", totalAccountQty=20, botPositionQty=10, mode=SignalMode.LIVE)
         dec = RiskDecision(action=SignalAction.SELL, confidence=70.0, qty=5)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -419,7 +477,7 @@ class TestLimitOrderBehaviour:
 
     def test_sell_produces_limit_order(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE, symbol="THYAO", botPositionQty=10)
+        req = _make_request(mode=SignalMode.LIVE, symbol="THYAO", totalAccountQty=20, botPositionQty=10)
         dec = RiskDecision(
             action=SignalAction.SELL,
             confidence=85.0,
@@ -434,7 +492,7 @@ class TestLimitOrderBehaviour:
     def test_sell_price_uses_entry_min_or_last(self):
         """entryRange.min (97) < lastPrice (100) → price = max(97, 100) = 100."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE, symbol="THYAO", botPositionQty=10, lastPrice=100.0)
+        req = _make_request(mode=SignalMode.LIVE, symbol="THYAO", totalAccountQty=20, botPositionQty=10, lastPrice=100.0)
         dec = RiskDecision(
             action=SignalAction.SELL,
             confidence=85.0,
@@ -449,7 +507,7 @@ class TestLimitOrderBehaviour:
     def test_sell_price_floors_at_last(self):
         """entryRange.min (103) > lastPrice (100) → price = 103 (floor)."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE, symbol="THYAO", botPositionQty=10, lastPrice=100.0)
+        req = _make_request(mode=SignalMode.LIVE, symbol="THYAO", totalAccountQty=20, botPositionQty=10, lastPrice=100.0)
         dec = RiskDecision(
             action=SignalAction.SELL,
             confidence=85.0,
@@ -536,7 +594,7 @@ class TestDailyTradeCount:
         engine = RiskEngine(_cfg(max_daily_trade_count=3))
         req = _make_request(
             symbol="THYAO", mode=SignalMode.LIVE,
-            botPositionQty=10, dailyTradeCount=3,
+            totalAccountQty=20, botPositionQty=10, dailyTradeCount=3,
         )
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
         resp = engine.evaluate(req, dec)
@@ -558,7 +616,7 @@ class TestDailyTradeCount:
         engine = RiskEngine(_cfg(max_daily_trade_count=3))
         req = _make_request(
             symbol="THYAO", mode=SignalMode.LIVE,
-            botPositionQty=10, dailyTradeCount=2,
+            totalAccountQty=20, botPositionQty=10, dailyTradeCount=2,
         )
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
         resp = engine.evaluate(req, dec)
@@ -610,7 +668,7 @@ class TestCutoffTime:
         engine = RiskEngine(_cfg(disable_trading_after="17:30"))
         req = _make_request(
             symbol="THYAO", mode=SignalMode.LIVE,
-            botPositionQty=10,
+            totalAccountQty=20, botPositionQty=10,
         )
 
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)

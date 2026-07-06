@@ -60,9 +60,9 @@ kararıyla döner.
 | `ema50` | float | ❌ | 50 periyot EMA |
 | `macd` | float | ❌ | MACD çizgisi |
 | `macdSignal` | float | ❌ | MACD sinyal çizgisi |
-| `botPositionQty` | float | ❌ | Bot'un şu anda tuttuğu lot (varsayılan: `0`) |
-| `totalAccountQty` | float | ❌ | Hesaptaki toplam lot (varsayılan: `0`) |
-| `lockedLongTermQty` | float | ❌ | Uzun vade kilitli lot (varsayılan: `0`) |
+| `botPositionQty` | float | ❌ | Bot'un şu anda tuttuğu lot (varsayılan: `0`) — SELL clamp için üst sınır |
+| `totalAccountQty` | float | ❌ | Hesaptaki toplam lot (varsayılan: `0`) — `lockedLongTermQty` ile birlikte serbest lot hesabında kullanılır |
+| `lockedLongTermQty` | float | ❌ | Uzun vade kilitli lot (varsayılan: `0`) — hiçbir koşulda satılamaz. `accountFreeQty = max(0, totalAccountQty − lockedLongTermQty)` |
 | `dailyTradeCount` | int | ❌ | Günlük işlem sayısı (varsayılan: `0`) — `maxDailyTradeCount` ile sınırlı |
 | `mode` | string | ❌ | `"PAPER"` / `"MANUAL"` / `"LIVE"` (varsayılan: `"PAPER"`) |
 
@@ -392,6 +392,7 @@ Matriks IQ                           trade-ai-server
 - **LIVE modunda** risk kontrolleri geçerse `allowOrder: true` dönebilir, `requiresConfirmation: false`.
 - **Cutoff kontrolü:** `disableTradingAfter` (varsayılan `17:30`) saatinden sonra BUY/SELL otomatik engellenir (`reason: "Trading blocked: after cutoff time 17:30"`). WAIT kararları etkilenmez.
 - **Günlük işlem limiti:** `maxDailyTradeCount` (varsayılan `3`) aşıldığında BUY/SELL engellenir. Matriks IQ `dailyTradeCount` alanını göndererek günlük işlem sayısını bildirmeli.
+- **SELL qty clamp:** `sellableQty = min(botPositionQty, max(0, totalAccountQty − lockedLongTermQty))`. Bot yalnızca kendi pozisyonu kadar ve hesaptaki serbest lot kadar satabilir. `accountFreeQty ≤ 0` ise SELL tamamen engellenir (`action=WAIT`).
 - `confidenceScore < 70` genelde `allowOrder: false` ile sonuçlanır (risk eşikleri).
 - Sunucu `requestId`'yi aynen döndürür — Matriks tarafında request/response eşleşmesi için kullanın.
 - Timeout: AI çağrısı 3-10 saniye sürebilir. C# tarafında `HttpClient.Timeout` en az 15s olmalı.

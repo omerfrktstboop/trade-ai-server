@@ -101,6 +101,36 @@ curl -X POST http://localhost:8000/api/signal/evaluate \
 }
 ```
 
+## Risk Configuration
+
+Trading safety rules live in `app/core/risk_config.py` and are loaded from
+`RISK_*` environment variables with sensible defaults.
+
+| Rule                        | Default                 | Env Var                        | Description                              |
+|-----------------------------|-------------------------|--------------------------------|------------------------------------------|
+| Allowed symbols             | `THYAO,AKBNK,SISE,...`  | `RISK_ALLOWED_SYMBOLS`         | Comma-separated tradeable symbols        |
+| Locked long-term symbols    | `ASELS,EREGL`           | `RISK_LOCKED_LONG_TERM_SYMBOLS`| Never auto-sold                          |
+| Max position per symbol     | `3000`                  | `RISK_MAX_POSITION_VALUE_PER_SYMBOL` | TL limit per symbol               |
+| Max daily trades            | `3`                     | `RISK_MAX_DAILY_TRADE_COUNT`   | Hard cap per day                         |
+| Min confidence for BUY      | `75`                    | `RISK_MIN_CONFIDENCE_FOR_BUY`  | Score threshold (0–100)                  |
+| Min confidence for SELL     | `70`                    | `RISK_MIN_CONFIDENCE_FOR_SELL` | Score threshold (0–100)                  |
+| Allow sell long-term        | `false`                 | `RISK_ALLOW_SELL_LONG_TERM`    | Override locked symbol protection        |
+| Allow short selling         | `false`                 | `RISK_ALLOW_SHORT_SELLING`     | Enable short positions                   |
+| Trading cutoff time         | `17:30`                 | `RISK_DISABLE_TRADING_AFTER`  | HH:MM — no trades past this time         |
+
+**How it works:**
+- `risk_config.is_symbol_allowed("THYAO")` → `True` / `False`
+- `risk_config.is_long_term_locked("ASELS")` → `True` / `False`
+- `risk_config.can_trade_now()` → `True` before 17:30, `False` after
+- `risk_config.get_min_confidence("BUY")` → `75.0`
+
+Override any rule via `.env`:
+```bash
+RISK_ALLOWED_SYMBOLS=THYAO,AKBNK,GARAN,YKBNK
+RISK_MAX_DAILY_TRADE_COUNT=5
+RISK_DISABLE_TRADING_AFTER=18:00
+```
+
 ## Project Structure
 
 ```

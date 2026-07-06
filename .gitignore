@@ -33,4 +33,5 @@ htmlcov/
 .coverage
 
 # Logs
+logs/
 *.log

@@ -74,6 +74,9 @@ class SignalRequest(BaseModel):
     total_account_qty: float = Field(0.0, alias="totalAccountQty")
     locked_long_term_qty: float = Field(0.0, alias="lockedLongTermQty")
 
+    # Daily trade count (fed by caller — e.g. Matriks IQ or DB)
+    daily_trade_count: int = Field(0, alias="dailyTradeCount", ge=0)
+
     # Mode
     mode: SignalMode = SignalMode.PAPER
 

@@ -61,7 +61,7 @@ def _cfg(**kwargs) -> RiskConfig:
         min_confidence_for_sell=70,
         allow_sell_long_term=False,
         allow_short_selling=False,
-        disable_trading_after="17:30",
+        disable_trading_after="23:59",
     )
     defaults.update(kwargs)
     return RiskConfig(**defaults, _env_file="")
@@ -505,6 +505,134 @@ class TestEntryRangeParsing:
         from app.routers.signal import _parse_entry_range
         result = _parse_entry_range({"action": "BUY"})
         assert result is None
+
+
+class TestDailyTradeCount:
+    """Check 4: dailyTradeCount ≥ maxDailyTradeCount → BUY/SELL blocked."""
+
+    def test_buy_blocked_at_limit(self):
+        """dailyTradeCount=3, maxDailyTradeCount=3 → BUY blocked."""
+        engine = RiskEngine(_cfg(max_daily_trade_count=3))
+        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE, dailyTradeCount=3)
+        dec = _make_buy_decision()
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.action == SignalAction.WAIT
+        assert "daily trade count limit reached" in resp.reason.lower()
+        assert "3/3" in resp.reason
+
+    def test_buy_blocked_over_limit(self):
+        """dailyTradeCount=5, maxDailyTradeCount=3 → BUY blocked."""
+        engine = RiskEngine(_cfg(max_daily_trade_count=3))
+        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE, dailyTradeCount=5)
+        dec = _make_buy_decision()
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.action == SignalAction.WAIT
+        assert "daily trade count limit reached" in resp.reason.lower()
+
+    def test_sell_blocked_at_limit(self):
+        """dailyTradeCount=3, maxDailyTradeCount=3 → SELL blocked."""
+        engine = RiskEngine(_cfg(max_daily_trade_count=3))
+        req = _make_request(
+            symbol="THYAO", mode=SignalMode.LIVE,
+            botPositionQty=10, dailyTradeCount=3,
+        )
+        dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.action == SignalAction.WAIT
+        assert "daily trade count limit reached" in resp.reason.lower()
+
+    def test_buy_succeeds_below_limit(self):
+        """dailyTradeCount=2, maxDailyTradeCount=3 → BUY risk kontrollerine devam eder."""
+        engine = RiskEngine(_cfg(max_daily_trade_count=3))
+        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE, dailyTradeCount=2)
+        dec = _make_buy_decision()
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is True
+        assert resp.action == SignalAction.BUY
+
+    def test_sell_succeeds_below_limit(self):
+        """dailyTradeCount=2, maxDailyTradeCount=3 → SELL risk kontrollerine devam eder."""
+        engine = RiskEngine(_cfg(max_daily_trade_count=3))
+        req = _make_request(
+            symbol="THYAO", mode=SignalMode.LIVE,
+            botPositionQty=10, dailyTradeCount=2,
+        )
+        dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is True
+        assert resp.action == SignalAction.SELL
+
+    def test_wait_not_blocked_at_limit(self):
+        """WAIT kararları dailyTradeCount'tan etkilenmez."""
+        engine = RiskEngine(_cfg(max_daily_trade_count=3))
+        req = _make_request(symbol="THYAO", mode=SignalMode.MANUAL, dailyTradeCount=5)
+        dec = RiskDecision(action=SignalAction.WAIT, confidence=90.0)
+        resp = engine.evaluate(req, dec)
+        assert resp.action == SignalAction.WAIT
+        assert resp.allow_order is False  # MANUAL always false
+        # Reason should NOT mention daily trade count
+        assert "daily trade count" not in resp.reason.lower()
+
+    def test_default_daily_trade_count_zero(self):
+        """dailyTradeCount belirtilmezse 0 kabul edilir → limiti aşmaz."""
+        engine = RiskEngine(_cfg(max_daily_trade_count=3))
+        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE)  # dailyTradeCount defaults to 0
+        dec = _make_buy_decision()
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is True
+
+
+class TestCutoffTime:
+    """Check 3: cutoff sonrası BUY/SELL engellenir, WAIT etkilenmez."""
+
+    def test_buy_blocked_after_cutoff(self, monkeypatch):
+        """can_trade_now() returns False → BUY blocked."""
+        from app.core.risk_config import RiskConfig
+
+        monkeypatch.setattr(RiskConfig, "can_trade_now", lambda self, now=None: False)
+        engine = RiskEngine(_cfg(disable_trading_after="17:30"))
+        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE)
+
+        dec = _make_buy_decision()
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.action == SignalAction.WAIT
+        assert "after cutoff time 17:30" in resp.reason.lower()
+
+    def test_sell_blocked_after_cutoff(self, monkeypatch):
+        """can_trade_now() returns False → SELL blocked."""
+        from app.core.risk_config import RiskConfig
+
+        monkeypatch.setattr(RiskConfig, "can_trade_now", lambda self, now=None: False)
+        engine = RiskEngine(_cfg(disable_trading_after="17:30"))
+        req = _make_request(
+            symbol="THYAO", mode=SignalMode.LIVE,
+            botPositionQty=10,
+        )
+
+        dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.action == SignalAction.WAIT
+        assert "after cutoff time 17:30" in resp.reason.lower()
+
+    def test_wait_not_blocked_after_cutoff(self, monkeypatch):
+        """WAIT kararları cutoff'tan etkilenmez."""
+        from app.core.risk_config import RiskConfig
+
+        monkeypatch.setattr(RiskConfig, "can_trade_now", lambda self, now=None: False)
+        engine = RiskEngine(_cfg(disable_trading_after="17:30"))
+        req = _make_request(symbol="THYAO", mode=SignalMode.MANUAL)
+
+        dec = RiskDecision(action=SignalAction.WAIT, confidence=90.0)
+        resp = engine.evaluate(req, dec)
+        assert resp.action == SignalAction.WAIT
+        assert resp.allow_order is False  # MANUAL always false
+        # Reason should NOT mention cutoff
+        assert "cutoff" not in resp.reason.lower()
 
 
 class TestMaxPositionValue:

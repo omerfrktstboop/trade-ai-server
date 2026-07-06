@@ -8,12 +8,15 @@ Checks applied (in order):
 
 1. **Unknown symbol** — not in ``allowed_symbols`` → WAIT
 2. **Long-term lock** — locked symbol, SELL action → WAIT (protects ``ASELS``, ``EREGL``)
-3. **Empty position** — SELL when ``botPositionQty == 0`` → WAIT
-4. **Over-sell** — SELL qty > ``botPositionQty`` → cap qty
-5. **Locked qty** — ``lockedLongTermQty`` deducted from available SELL qty
-6. **PAPER mode** — always ``allowOrder=False``
-7. **Confidence floor** — below ``minConfidence` threshold → ``allowOrder=False``
-8. **Invalid action** — unknown action string → WAIT
+3. **Trading cutoff** — past ``disable_trading_after`` → BUY/SELL blocked
+4. **Daily trade count** — ``dailyTradeCount ≥ maxDailyTradeCount`` → BUY/SELL blocked
+5. **Short selling** — SELL when ``botPositionQty == 0`` → WAIT
+6. **Over-sell** — SELL qty > ``botPositionQty`` → cap qty
+7. **Locked qty** — ``lockedLongTermQty`` deducted from available SELL qty
+8. **Max position value** — BUY value > ``maxPositionValuePerSymbol`` → WAIT
+9. **Confidence floor** — below ``minConfidence`` threshold → ``allowOrder=False``
+10. **Mode-based allowOrder / requiresConfirmation** — PAPER/MANUAL/LIVE rules
+11. **BUY pre-flight** — missing ``entryRange`` / ``stopLoss`` / ``targetPrice`` → blocked
 """
 
 from __future__ import annotations
@@ -111,6 +114,21 @@ class RiskEngine:
                     request,
                     f"SELL blocked: {request.symbol} is a locked long-term symbol",
                 )
+
+        # ── 3.5. Trading cutoff time ─────────────────────────────────
+        if action in (SignalAction.BUY, SignalAction.SELL) and not self.config.can_trade_now():
+            return self._block(
+                request,
+                f"Trading blocked: after cutoff time {self.config.disable_trading_after}",
+            )
+
+        # ── 3.6. Daily trade count limit ─────────────────────────────
+        if action in (SignalAction.BUY, SignalAction.SELL) and request.daily_trade_count >= self.config.max_daily_trade_count:
+            return self._block(
+                request,
+                f"Trading blocked: daily trade count limit reached "
+                f"({request.daily_trade_count}/{self.config.max_daily_trade_count})",
+            )
 
         # ── 4. Short selling not allowed ─────────────────────────────
         if not self.config.allow_short_selling and request.bot_position_qty <= 0:

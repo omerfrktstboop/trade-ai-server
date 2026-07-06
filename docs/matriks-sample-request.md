@@ -38,6 +38,7 @@ kararıyla döner.
   "botPositionQty": 0,
   "totalAccountQty": 120,
   "lockedLongTermQty": 50,
+  "dailyTradeCount": 0,
   "mode": "PAPER"
 }
 ```
@@ -62,6 +63,7 @@ kararıyla döner.
 | `botPositionQty` | float | ❌ | Bot'un şu anda tuttuğu lot (varsayılan: `0`) |
 | `totalAccountQty` | float | ❌ | Hesaptaki toplam lot (varsayılan: `0`) |
 | `lockedLongTermQty` | float | ❌ | Uzun vade kilitli lot (varsayılan: `0`) |
+| `dailyTradeCount` | int | ❌ | Günlük işlem sayısı (varsayılan: `0`) — `maxDailyTradeCount` ile sınırlı |
 | `mode` | string | ❌ | `"PAPER"` / `"MANUAL"` / `"LIVE"` (varsayılan: `"PAPER"`) |
 
 ### Mode açıklaması
@@ -388,6 +390,8 @@ Matriks IQ                           trade-ai-server
 - **PAPER modunda** `allowOrder` her zaman `false`, `requiresConfirmation` her zaman `false` — emir göndermeye kalkmayın.
 - **MANUAL modunda** `allowOrder` her zaman `false`'tır. AI BUY veya SELL önerirse `requiresConfirmation: true` döner — Matriks IQ kullanıcıya onay sormalı. WAIT ise `requiresConfirmation: false` döner.
 - **LIVE modunda** risk kontrolleri geçerse `allowOrder: true` dönebilir, `requiresConfirmation: false`.
+- **Cutoff kontrolü:** `disableTradingAfter` (varsayılan `17:30`) saatinden sonra BUY/SELL otomatik engellenir (`reason: "Trading blocked: after cutoff time 17:30"`). WAIT kararları etkilenmez.
+- **Günlük işlem limiti:** `maxDailyTradeCount` (varsayılan `3`) aşıldığında BUY/SELL engellenir. Matriks IQ `dailyTradeCount` alanını göndererek günlük işlem sayısını bildirmeli.
 - `confidenceScore < 70` genelde `allowOrder: false` ile sonuçlanır (risk eşikleri).
 - Sunucu `requestId`'yi aynen döndürür — Matriks tarafında request/response eşleşmesi için kullanın.
 - Timeout: AI çağrısı 3-10 saniye sürebilir. C# tarafında `HttpClient.Timeout` en az 15s olmalı.

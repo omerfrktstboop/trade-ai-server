@@ -35,7 +35,8 @@ Copy `.env.example` → `.env` and fill in the required values:
 | `AI_PROVIDER`       | Yes      | `deepseek`              | `openai` / `deepseek` / `anthropic`      |
 | `DEEPSEEK_API_KEY`  | Prod     | —                       | DeepSeek API key                         |
 | `DEEPSEEK_MODEL`    | No       | `deepseek-chat`         | Model name                               |
-| `DATABASE_URL`      | No       | —                       | PostgreSQL / SQLite connection string    |
+| `DATABASE_URL`      | Yes      | —                       | asyncpg PostgreSQL connection string  |
+| `POSTGRES_PASSWORD`  | Yes      | —                       | PostgreSQL password (used by docker compose) |
 | `TELEGRAM_BOT_TOKEN`| No       | —                       | Telegram bot token                       |
 | `TELEGRAM_CHAT_ID`  | No       | —                       | Default chat ID                          |
 | `DEFAULT_MODE`      | No       | `paper`                 | `paper` / `live`                         |
@@ -47,8 +48,20 @@ provider's API key is missing.
 ## Docker
 
 ```bash
+# Copy env template and set a DB password
+cp .env.example .env
+# Edit .env → set POSTGRES_PASSWORD
+
+# Start both API + PostgreSQL
 docker compose up --build
 ```
+
+| Service    | Port | Credentials                      |
+|------------|------|----------------------------------|
+| API        | 8000 | Bearer token: `API_TOKEN`        |
+| PostgreSQL | 5432 | `trade_ai` / `trade_ai` / from `.env` |
+
+The API waits for PostgreSQL to be healthy before starting (`depends_on` + healthcheck).
 
 ## API Endpoints
 

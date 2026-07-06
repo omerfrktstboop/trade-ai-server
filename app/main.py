@@ -11,6 +11,7 @@ from app.db.init_db import init_db
 from app.routers.health import router as health_router
 from app.routers.order_result import router as order_result_router
 from app.routers.signal import router as signal_router
+from app.routers.signals import router as signals_router
 
 
 @asynccontextmanager
@@ -53,6 +54,7 @@ app.include_router(health_router, prefix="/api")
 # Protected (Bearer token required)
 app.include_router(signal_router, prefix="/api")
 app.include_router(order_result_router, prefix="/api")
+app.include_router(signals_router, prefix="/api")
 
 
 @app.get("/")

@@ -115,6 +115,63 @@ curl -X POST http://localhost:8000/api/signal/evaluate \
 }
 ```
 
+### Order Result
+
+Matriks IQ bir emri gerçekleştirdiğinde bu endpoint'e sonucu bildirir.
+`order_logs` tablosuna kaydedilir.
+
+```bash
+curl -X POST http://localhost:8000/api/order-result \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "requestId": "sig-001",
+    "symbol": "THYAO",
+    "action": "BUY",
+    "qty": 100,
+    "price": 71.25,
+    "status": "FILLED",
+    "matriksMessage": "Order accepted by exchange",
+    "orderId": "EXCH-12345"
+  }'
+```
+
+**Response (200):**
+```json
+{"status": "ok"}
+```
+
+**Request Alanları:**
+
+| Alan | Tip | Zorunlu | Açıklama |
+|---|---|---|---|
+| `requestId` | string | ✅ | Signal isteğiyle eşleşen ID |
+| `symbol` | string | ✅ | Sembol |
+| `action` | string | ✅ | `BUY` / `SELL` |
+| `qty` | float | ✅ | Gerçekleşen lot |
+| `price` | float | ✅ | Gerçekleşen fiyat |
+| `status` | string | ✅ | `FILLED` / `REJECTED` / `CANCELED` |
+| `matriksMessage` | string | ✅ | Matriks'ten dönen ham mesaj/hata |
+| `orderId` | string | ❌ | Borsa emir ID'si |
+
+DB hatası endpoint'i çökertmez — hata loglanır, istemci her zaman `{"status": "ok"}` alır.
+
+## Dev DB Notes
+
+Geliştirme ortamında `APP_ENV=development` ile SQLite (`dev.db`) kullanılır
+ve tablolar ilk istekte `create_all` ile otomatik oluşturulur. **Yeni sütun eklendiğinde**
+(örn. `matrix_message`) `create_all` mevcut tabloyu ALTER etmez — sütun eksik kalır.
+
+Çözüm: `dev.db` dosyasını silip sunucuyu yeniden başlatın:
+```bash
+rm -f dev.db
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+Tablolar yeniden oluşturulacak ve tüm sütunlar mevcut olacak.
+
+**Not:** Production ortamında (`APP_ENV=production`) PostgreSQL + Alembic migration
+kullanılması önerilir. Şu an migration sistemi kurulu değil.
+
 ## Risk Configuration
 
 Trading safety rules live in `app/core/risk_config.py` and are loaded from

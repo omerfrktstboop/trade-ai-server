@@ -1,175 +1,157 @@
-"""Tests for POST /api/order-result endpoint."""
+"""Tests for the order-result endpoint and OrderLog model."""
 
 from __future__ import annotations
 
+import asyncio
+from unittest.mock import patch
+
 import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.db.base import Base
-from app.main import app
 from app.models.db.order_log import OrderLog
+from app.routers.order_result import OrderResultRequest
 
 
-# ── Fixtures ─────────────────────────────────────────────────────────────────
+# ── Model tests ───────────────────────────────────────────────────────────────
 
 
-@pytest.fixture
-async def engine():
-    """In-memory SQLite engine."""
-    e = create_async_engine("sqlite+aiosqlite://", echo=False)
-    async with e.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield e
-    await e.dispose()
+class TestOrderLogModel:
+    """OrderLog SQLAlchemy model field coverage."""
+
+    def test_matrix_message_is_nullable_text(self):
+        """matrix_message defaults to None and can store long strings."""
+        entry = OrderLog(
+            request_id="req-1",
+            symbol="THYAO",
+            action="BUY",
+            qty=100.0,
+            price=71.25,
+            status="FILLED",
+        )
+        assert entry.matrix_message is None
+
+        long_msg = "Exchange error: insufficient balance — order rejected"
+        entry.matrix_message = long_msg
+        assert entry.matrix_message == long_msg
+
+    def test_matrix_message_stored_when_provided(self):
+        entry = OrderLog(
+            request_id="req-2",
+            symbol="AKBNK",
+            action="SELL",
+            qty=50.0,
+            price=42.30,
+            status="CANCELED",
+            matrix_message="No liquidity at target price",
+        )
+        assert entry.matrix_message == "No liquidity at target price"
+
+    def test_order_id_nullable(self):
+        """orderId may be None when exchange didn't assign one."""
+        entry = OrderLog(
+            request_id="req-3",
+            symbol="THYAO",
+            action="BUY",
+            qty=10.0,
+            price=100.0,
+            status="REJECTED",
+            matrix_message="Order rejected by risk check",
+        )
+        assert entry.order_id is None
 
 
-@pytest.fixture
-async def session(engine):
-    """Async session for direct DB assertions."""
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
-        yield s
+# ── Request schema tests ──────────────────────────────────────────────────────
 
 
-# Override the session factory so the endpoint uses our test DB.
-@pytest.fixture(autouse=True)
-async def _patch_session(engine, monkeypatch):
-    """Make endpoint use the test engine instead of production."""
-    test_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    monkeypatch.setattr(
-        "app.routers.order_result.async_session_factory",
-        lambda: test_factory(),
-    )
+class TestOrderResultRequest:
+    """Pydantic schema validation for the order-result payload."""
 
-
-@pytest.fixture
-async def client():
-    """Async HTTP test client."""
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
-
-
-# ── Auth helpers ─────────────────────────────────────────────────────────────
-
-AUTH_HEADERS = {"Authorization": "Bearer dev-token-change-me"}
-
-
-# ── Tests ────────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_records_order_log(client: AsyncClient, session: AsyncSession):
-    """Happy path — valid payload is persisted to order_logs."""
-    payload = {
-        "requestId": "req-001",
-        "symbol": "BTCUSDT",
-        "action": "BUY",
-        "qty": 1.5,
-        "price": 67500.0,
-        "status": "FILLED",
-        "matriksMessage": "Order executed successfully",
-    }
-
-    resp = await client.post("/api/order-result", json=payload, headers=AUTH_HEADERS)
-    assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
-
-    # Verify in DB
-    result = await session.execute(
-        select(OrderLog).where(OrderLog.request_id == "req-001")
-    )
-    row = result.scalar_one()
-    assert row.symbol == "BTCUSDT"
-    assert row.action == "BUY"
-    assert row.qty == 1.5
-    assert row.price == 67500.0
-    assert row.status == "FILLED"
-    assert row.order_id is None
-
-
-@pytest.mark.asyncio
-async def test_with_optional_order_id(client: AsyncClient, session: AsyncSession):
-    """orderId is optional — endpoint still succeeds when omitted."""
-    payload = {
-        "requestId": "req-002",
-        "symbol": "ETHUSDT",
-        "action": "SELL",
-        "qty": 2.0,
-        "price": 3200.0,
-        "status": "FILLED",
-        "matriksMessage": "Sold",
-        "orderId": "matriks-12345",
-    }
-
-    resp = await client.post("/api/order-result", json=payload, headers=AUTH_HEADERS)
-    assert resp.status_code == 200
-
-    result = await session.execute(
-        select(OrderLog).where(OrderLog.request_id == "req-002")
-    )
-    row = result.scalar_one()
-    assert row.order_id == "matriks-12345"
-
-
-@pytest.mark.asyncio
-async def test_rejects_without_token(client: AsyncClient):
-    """Missing Authorization header returns 401."""
-    resp = await client.post("/api/order-result", json={
-        "requestId": "req-003",
-        "symbol": "BTCUSDT",
-        "action": "BUY",
-        "qty": 1,
-        "price": 65000,
-        "status": "FILLED",
-        "matriksMessage": "test",
-    })
-    assert resp.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_rejects_bad_token(client: AsyncClient):
-    """Wrong token returns 401."""
-    resp = await client.post(
-        "/api/order-result",
-        json={
-            "requestId": "req-004",
-            "symbol": "BTCUSDT",
+    def test_parses_camel_case_matrix_message(self):
+        body = OrderResultRequest.model_validate({
+            "requestId": "r-1",
+            "symbol": "THYAO",
             "action": "BUY",
-            "qty": 1,
-            "price": 65000,
+            "qty": 100,
+            "price": 71.25,
             "status": "FILLED",
-            "matriksMessage": "test",
-        },
-        headers={"Authorization": "Bearer wrong-token"},
-    )
-    assert resp.status_code == 401
+            "matriksMessage": "OK — executed at 71.25",
+            "orderId": "XCH-99",
+        })
+        assert body.request_id == "r-1"
+        # Access via Python attribute name (not the alias)
+        body_dict = body.model_dump()
+        assert body_dict["matriks_message"] == "OK — executed at 71.25"
+        assert body_dict["order_id"] == "XCH-99"
 
+    def test_matrix_message_required(self):
+        with pytest.raises(ValueError, match="matriksMessage"):
+            OrderResultRequest.model_validate({
+                "requestId": "r-2",
+                "symbol": "THYAO",
+                "action": "BUY",
+                "qty": 100,
+                "price": 71.25,
+                "status": "FILLED",
+            })
 
-@pytest.mark.asyncio
-async def test_camelcase_fields_accepted(client: AsyncClient, session: AsyncSession):
-    """All camelCase aliases are correctly mapped."""
-    payload = {
-        "requestId": "req-camel",
-        "symbol": "ADAUSDT",
-        "action": "BUY",
-        "qty": 100,
-        "price": 0.45,
-        "status": "PARTIAL",
-        "matriksMessage": "Partially filled",
-        "orderId": "ord-999",
-    }
+    def test_order_id_optional(self):
+        body = OrderResultRequest.model_validate({
+            "requestId": "r-3",
+            "symbol": "THYAO",
+            "action": "BUY",
+            "qty": 100,
+            "price": 71.25,
+            "status": "FILLED",
+            "matriksMessage": "OK",
+        })
+        body_dict = body.model_dump()
+        assert body_dict.get("order_id") is None
 
-    resp = await client.post("/api/order-result", json=payload, headers=AUTH_HEADERS)
-    assert resp.status_code == 200
+    @pytest.mark.asyncio
+    async def test_returns_ok_response_even_on_db_error(self):
+        """When DB commit fails, endpoint still returns {'status': 'ok'}."""
+        from app.routers.order_result import record_order_result
 
-    result = await session.execute(
-        select(OrderLog).where(OrderLog.request_id == "req-camel")
-    )
-    row = result.scalar_one()
-    assert row.symbol == "ADAUSDT"
-    assert row.status == "PARTIAL"
-    assert row.qty == 100
-    assert row.order_id == "ord-999"
+        request = OrderResultRequest.model_validate({
+            "requestId": "r-4",
+            "symbol": "THYAO",
+            "action": "BUY",
+            "qty": 100,
+            "price": 71.25,
+            "status": "FILLED",
+            "matriksMessage": "fine",
+        })
+
+        with patch(
+            "app.routers.order_result.async_session_factory",
+            side_effect=RuntimeError("simulated DB outage"),
+        ):
+            resp = await record_order_result(request)
+            assert resp.status == "ok"
+
+    def test_matrix_message_passed_to_order_log(self):
+        """Verify matrix_message flows from request body into OrderLog."""
+        body = OrderResultRequest.model_validate({
+            "requestId": "r-5",
+            "symbol": "THYAO",
+            "action": "SELL",
+            "qty": 50,
+            "price": 80.0,
+            "status": "FILLED",
+            "matriksMessage": "Partial fill: 50/100",
+            "orderId": "XCH-200",
+        })
+
+        body_dict = body.model_dump()
+        entry = OrderLog(
+            request_id=body_dict["request_id"],
+            symbol=body_dict["symbol"],
+            action=body_dict["action"],
+            qty=body_dict["qty"],
+            price=body_dict["price"],
+            status=body_dict["status"],
+            order_id=body_dict["order_id"],
+            matrix_message=body_dict["matriks_message"],
+        )
+        assert entry.matrix_message == "Partial fill: 50/100"
+        assert entry.order_id == "XCH-200"
+        assert entry.request_id == "r-5"

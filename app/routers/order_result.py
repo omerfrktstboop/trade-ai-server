@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.core.auth import verify_token
 from app.db.session import async_session_factory
 from app.models.db import OrderLog
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Order"], dependencies=[Depends(verify_token)])
 
@@ -56,11 +60,15 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
                 price=body.price,
                 status=body.status,
                 order_id=body.order_id,
+                matrix_message=body.matrix_message,
             )
             session.add(entry)
             await session.commit()
     except Exception:
-        # DB outage must not block Matriks IQ acknowledgement
-        pass
+        logger.exception(
+            "Failed to persist order result request_id=%s symbol=%s",
+            body.request_id,
+            body.symbol,
+        )
 
     return OrderResultResponse(status="ok")

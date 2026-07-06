@@ -19,11 +19,30 @@ class TestTradingSystemPrompt:
 
     def test_contains_data_driven_rule(self):
         prompt = get_trading_system_prompt()
-        assert "data-driven" in prompt.lower() or "data only" in prompt.lower()
+        assert "provided structured data" in prompt.lower() or "use all provided" in prompt.lower()
 
     def test_ignores_social_media_noise(self):
         prompt = get_trading_system_prompt()
         assert "social media" in prompt.lower()
+
+    def test_uses_structured_contexts(self):
+        """Prompt instructs to use newsContext, fundContext, brokerFlowContext."""
+        prompt = get_trading_system_prompt()
+        assert "newscontext" in prompt.lower()
+        assert "fundcontext" in prompt.lower()
+        assert "brokerflowcontext" in prompt.lower()
+
+    def test_news_negativity_blocks_buy(self):
+        """Rule 8: negative KAP/news blocks BUY."""
+        prompt = get_trading_system_prompt()
+        assert "negative" in prompt.lower() and "buy" in prompt.lower()
+        assert "news context" in prompt.lower() or "newscontext" in prompt.lower()
+
+    def test_fund_broker_confidence_boost(self):
+        """Rule 9: fund + broker positivity adds confidence score."""
+        prompt = get_trading_system_prompt()
+        assert "confidence" in prompt.lower()
+        assert "10-20" in prompt or "10‑20" in prompt
 
     def test_allowed_symbols_rule(self):
         prompt = get_trading_system_prompt()

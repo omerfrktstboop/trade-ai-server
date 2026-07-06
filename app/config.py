@@ -96,6 +96,8 @@ class Settings(BaseSettings):
     ai_provider: AIProvider = AIProvider.MOCK
     deepseek_api_key: str = ""
     deepseek_model: str = "deepseek-chat"
+    deepseek_base_url: str = "https://api.deepseek.com/v1"
+    deepseek_timeout: int = 30
 
     # ── Database ──────────────────────────────────────────────────────────
 

@@ -32,11 +32,11 @@ Copy `.env.example` → `.env` and fill in the required values:
 |---------------------|----------|-------------------------|------------------------------------------|
 | `APP_ENV`           | Yes      | `development`           | `development` / `staging` / `production` |
 | `API_TOKEN`         | Prod     | `dev-token-change-me`   | API auth token                           |
-| `AI_PROVIDER`       | Yes      | `deepseek`              | `openai` / `deepseek` / `anthropic`      |
+| `AI_PROVIDER`       | Yes      | `deepseek`              | `openai` / `deepseek` / `anthropic` / `mock` |
 | `DEEPSEEK_API_KEY`  | Prod     | —                       | DeepSeek API key                         |
 | `DEEPSEEK_MODEL`    | No       | `deepseek-chat`         | Model name                               |
-| `DATABASE_URL`      | Yes      | —                       | asyncpg PostgreSQL connection string  |
-| `POSTGRES_PASSWORD`  | Yes      | —                       | PostgreSQL password (used by docker compose) |
+| `DATABASE_URL`      | Prod     | `sqlite+aiosqlite:///./dev.db` (dev) | PostgreSQL for production, SQLite auto for dev |
+| `POSTGRES_PASSWORD`  | Prod    | —                       | PostgreSQL password (used by docker compose) |
 | `TELEGRAM_BOT_TOKEN`| No       | —                       | Telegram bot token                       |
 | `TELEGRAM_CHAT_ID`  | No       | —                       | Default chat ID                          |
 | `DEFAULT_MODE`      | No       | `paper`                 | `paper` / `live`                         |
@@ -45,12 +45,21 @@ Copy `.env.example` → `.env` and fill in the required values:
 if `API_TOKEN` is empty, still set to the dev default, or if the selected AI
 provider's API key is missing.
 
+**Database:** In development, `DATABASE_URL` can be left empty — the server
+auto-creates a SQLite database (`dev.db`) on first request. No PostgreSQL
+setup needed for local development. In production, PostgreSQL is required:
+`DATABASE_URL` must be set and must not be SQLite.
+
 ## Docker
+
+`docker compose up` starts both the API server and a **PostgreSQL** database
+(postgres:16-alpine). It is the recommended way to run the full stack for
+staging and production.
 
 ```bash
 # Copy env template and set a DB password
 cp .env.example .env
-# Edit .env → set POSTGRES_PASSWORD
+# Edit .env → set POSTGRES_PASSWORD and uncomment the production DATABASE_URL
 
 # Start both API + PostgreSQL
 docker compose up --build

@@ -139,6 +139,18 @@ class Settings(BaseSettings):
         if self.ai_provider == AIProvider.DEEPSEEK and not self.deepseek_api_key:
             errors.append("DEEPSEEK_API_KEY is required when AI_PROVIDER=deepseek")
 
+        # Database: must be set and must NOT be SQLite in production
+        if not self.database_url:
+            errors.append(
+                "DATABASE_URL is required in production. "
+                "Use PostgreSQL (e.g. postgresql+asyncpg://...)."
+            )
+        elif self.database_url.startswith("sqlite"):
+            errors.append(
+                "DATABASE_URL must use PostgreSQL in production, not SQLite. "
+                f"Got: {self.database_url}"
+            )
+
         if errors:
             raise ValueError(
                 "Production safety check failed:\n- " + "\n- ".join(errors)

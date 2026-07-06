@@ -16,7 +16,15 @@ from sqlalchemy.ext.asyncio import (
 
 from app.config import settings
 
-DATABASE_URL = settings.database_url or "sqlite+aiosqlite:///./trade_ai.db"
+# Development: SQLite fallback when DATABASE_URL is empty.
+# Production: DATABASE_URL must be set (enforced by config validator).
+if settings.is_production:
+    if not settings.database_url:
+        raise RuntimeError("DATABASE_URL is required in production.")
+    if settings.database_url.startswith("sqlite"):
+        raise RuntimeError("SQLite is not allowed in production — use PostgreSQL.")
+
+DATABASE_URL = settings.database_url or "sqlite+aiosqlite:///./dev.db"
 
 engine = create_async_engine(
     DATABASE_URL,

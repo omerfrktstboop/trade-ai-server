@@ -52,12 +52,54 @@ docker compose up --build
 
 ## API Endpoints
 
-| Method | Path          | Description        |
-|--------|---------------|--------------------|
-| GET    | `/`           | Root (docs links)  |
-| GET    | `/api/health` | Health check       |
-| GET    | `/docs`       | Swagger UI         |
-| GET    | `/redoc`      | ReDoc              |
+| Method | Path                    | Auth     | Description              |
+|--------|-------------------------|----------|--------------------------|
+| GET    | `/`                     | —        | Root (docs links)        |
+| GET    | `/api/health`           | —        | Health check             |
+| POST   | `/api/signal/evaluate`  | Bearer   | Evaluate trading signal  |
+| POST   | `/api/order-result`     | Bearer   | Receive order result     |
+| GET    | `/docs`                 | —        | Swagger UI               |
+| GET    | `/redoc`                | —        | ReDoc                    |
+
+### Signal Evaluate
+
+```bash
+# PAPER mode — always returns allowOrder: false
+curl -X POST http://localhost:8000/api/signal/evaluate \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "requestId": "sig-001",
+    "symbol": "BTCUSDT",
+    "timeframe": "1h",
+    "lastPrice": 67500.0,
+    "open": 67200.0,
+    "high": 67800.0,
+    "low": 67000.0,
+    "volume": 1234.5,
+    "rsi": 65.2,
+    "mode": "PAPER"
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "requestId": "sig-001",
+  "symbol": "BTCUSDT",
+  "action": "WAIT",
+  "qty": 0.0,
+  "orderType": "NONE",
+  "price": null,
+  "confidenceScore": 0.0,
+  "riskScore": 0.0,
+  "allowOrder": false,
+  "reason": "Safe default: PAPER mode or no decision.",
+  "entryRange": null,
+  "stopLoss": null,
+  "targetPrice": null
+}
+```
 
 ## Project Structure
 

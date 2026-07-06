@@ -25,8 +25,9 @@ class AppEnv(str, Enum):
 class AIProvider(str, Enum):
     """Supported AI providers."""
 
-    OPENAI = "openai"
+    MOCK = "mock"
     DEEPSEEK = "deepseek"
+    OPENAI = "openai"
     ANTHROPIC = "anthropic"
 
 
@@ -92,7 +93,7 @@ class Settings(BaseSettings):
 
     # ── AI Provider ───────────────────────────────────────────────────────
 
-    ai_provider: AIProvider = AIProvider.DEEPSEEK
+    ai_provider: AIProvider = AIProvider.MOCK
     deepseek_api_key: str = ""
     deepseek_model: str = "deepseek-chat"
 

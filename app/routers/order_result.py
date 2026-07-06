@@ -1,34 +1,66 @@
-"""Order result endpoint — protected by Bearer token."""
+"""Order result endpoint — records filled orders from Matriks IQ."""
+
+from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.auth import verify_token
+from app.db.session import async_session_factory
+from app.models.db import OrderLog
 
 router = APIRouter(tags=["Order"], dependencies=[Depends(verify_token)])
 
 
-class OrderResultRequest(BaseModel):
-    """Placeholder schema for order result reporting."""
+# ── Schema ───────────────────────────────────────────────────────────────────
 
-    order_id: str
+
+class OrderResultRequest(BaseModel):
+    """Payload from Matriks IQ when an order is executed."""
+
+    request_id: str = Field(..., alias="requestId")
     symbol: str
-    side: str
-    filled: bool
-    price: float | None = None
+    action: str
+    qty: float
+    price: float
+    status: str
+    matriks_message: str = Field(..., alias="matriksMessage")
+    order_id: str | None = Field(None, alias="orderId")
+
+    model_config = {"populate_by_name": True}
 
 
 class OrderResultResponse(BaseModel):
-    """Placeholder response."""
+    """Simple acknowledgement."""
 
     status: str
-    order_id: str
+
+
+# ── Endpoint ─────────────────────────────────────────────────────────────────
 
 
 @router.post("/order-result")
 async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
-    """Record a completed order result. (Stub — DB logic not yet implemented.)"""
-    return OrderResultResponse(
-        status="recorded",
-        order_id=body.order_id,
-    )
+    """Record a completed order result from the trading platform.
+
+    Persists to ``order_logs`` table and returns ``{"status": "ok"}``.
+    DB errors are swallowed so that the endpoint never blocks Matriks IQ.
+    """
+    try:
+        async with async_session_factory() as session:
+            entry = OrderLog(
+                request_id=body.request_id,
+                symbol=body.symbol,
+                action=body.action,
+                qty=body.qty,
+                price=body.price,
+                status=body.status,
+                order_id=body.order_id,
+            )
+            session.add(entry)
+            await session.commit()
+    except Exception:
+        # DB outage must not block Matriks IQ acknowledgement
+        pass
+
+    return OrderResultResponse(status="ok")

@@ -8,3 +8,5 @@ asyncpg==0.30.0
 pytest
 pytest-asyncio
 aiohttp
+httpx
+aiosqlite

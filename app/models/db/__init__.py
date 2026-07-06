@@ -1,0 +1,9 @@
+"""SQLAlchemy ORM models — all in one import path for Metadata creation."""
+
+from app.models.db.market_snapshot import MarketSnapshot  # noqa: F401
+from app.models.db.ai_decision import AiDecision  # noqa: F401
+from app.models.db.risk_decision import RiskDecision  # noqa: F401
+from app.models.db.order_log import OrderLog  # noqa: F401
+from app.models.db.bot_position import BotPosition  # noqa: F401
+from app.models.db.locked_position import LockedPosition  # noqa: F401
+from app.models.db.news_cache import NewsCache  # noqa: F401

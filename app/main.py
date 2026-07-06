@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.db.init_db import init_db
 from app.routers.health import router as health_router
 from app.routers.order_result import router as order_result_router
 from app.routers.signal import router as signal_router
@@ -17,6 +18,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application startup and shutdown events."""
     # Startup
     print(f"🚀 {settings.app_name} v{settings.app_version} starting...")
+
+    if settings.is_development:
+        print("🛢️  [DEV] Creating database tables...")
+        await init_db()
+        print("✅ [DEV] Database tables ready.")
+
     yield
     # Shutdown
     print(f"👋 {settings.app_name} shutting down...")

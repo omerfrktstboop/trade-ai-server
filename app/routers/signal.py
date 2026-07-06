@@ -7,6 +7,10 @@ Flow::
                    AiDecision               RiskDecision    market_snapshots
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 from fastapi import APIRouter, Depends
 
 from app.core.auth import verify_token
@@ -18,11 +22,12 @@ from app.models.db import MarketSnapshot
 from app.models.db import RiskDecision as RiskDecisionModel
 from app.models.signal import SignalAction, SignalRequest, SignalResponse
 from app.services.ai_provider import get_default_provider
+from app.services.news_service import get_news_context
 from app.services.risk_engine import RiskDecision, RiskEngine
 
 router = APIRouter(tags=["Signal"], dependencies=[Depends(verify_token)])
 
-# ── Engine singleton ──────────────────────────────────────────────────────────
+# ── Engine singletons ─────────────────────────────────────────────────────────
 
 _risk_engine = RiskEngine(risk_config)
 _provider = get_default_provider()
@@ -39,10 +44,13 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
     5. Log to ``logs/signal.log``.
     6. Persist to ``market_snapshots``, ``ai_decisions``, ``risk_decisions``.
     """
-    # ── 1. Build payload for the AI provider ──────────────────────────────
-    payload = _build_payload(body)
+    # ── 1. Fetch news context ─────────────────────────────────────────────
+    news_context = await get_news_context([body.symbol])
 
-    # ── 2. Ask provider ───────────────────────────────────────────────────
+    # ── 2. Build payload for the AI provider ──────────────────────────────
+    payload = _build_payload(body, news_context)
+
+    # ── 3. Ask provider ───────────────────────────────────────────────────
     raw = await _provider.decide(payload)
 
     # ── 3. Wire into RiskDecision ─────────────────────────────────────────
@@ -69,9 +77,9 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _build_payload(req: SignalRequest) -> dict:
+def _build_payload(req: SignalRequest, news_context: dict[str, Any] | None = None) -> dict:
     """Convert a SignalRequest into a plain dict for the AI provider."""
-    return {
+    payload = {
         "symbol": req.symbol,
         "timeframe": req.timeframe,
         "lastPrice": req.last_price,
@@ -90,6 +98,9 @@ def _build_payload(req: SignalRequest) -> dict:
         "allowedSymbols": sorted(risk_config._allowed_set()),
         "lockedSymbols": sorted(risk_config._locked_set()),
     }
+    if news_context:
+        payload["newsContext"] = news_context
+    return payload
 
 
 def _dict_to_risk_decision(raw: dict, _req: SignalRequest) -> RiskDecision:

@@ -9,6 +9,7 @@ Flow::
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -26,6 +27,8 @@ from app.services.broker_flow_service import get_broker_flow_context
 from app.services.fund_scanner import get_fund_context
 from app.services.news_service import get_news_context
 from app.services.risk_engine import RiskDecision, RiskEngine
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Signal"], dependencies=[Depends(verify_token)])
 
@@ -226,4 +229,8 @@ async def _persist_to_db(
 
     except Exception:
         # DB is optional for signal flow — never fail the request
-        pass
+        logger.exception(
+            "Failed to persist signal evaluation request_id=%s symbol=%s",
+            req.request_id,
+            req.symbol,
+        )

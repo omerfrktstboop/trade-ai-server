@@ -22,6 +22,7 @@ from app.models.db import MarketSnapshot
 from app.models.db import RiskDecision as RiskDecisionModel
 from app.models.signal import SignalAction, SignalRequest, SignalResponse
 from app.services.ai_provider import get_default_provider
+from app.services.broker_flow_service import get_broker_flow_context
 from app.services.fund_scanner import get_fund_context
 from app.services.news_service import get_news_context
 from app.services.risk_engine import RiskDecision, RiskEngine
@@ -45,12 +46,13 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
     5. Log to ``logs/signal.log``.
     6. Persist to ``market_snapshots``, ``ai_decisions``, ``risk_decisions``.
     """
-    # ── 1. Fetch external context (news + fund flows) ─────────────────────
+    # ── 1. Fetch external context (news + fund + broker flows) ────────────
     news_context = await get_news_context([body.symbol])
     fund_context = await get_fund_context([body.symbol])
+    broker_flow_context = await get_broker_flow_context([body.symbol])
 
     # ── 2. Build payload for the AI provider ──────────────────────────────
-    payload = _build_payload(body, news_context, fund_context)
+    payload = _build_payload(body, news_context, fund_context, broker_flow_context)
 
     # ── 3. Ask provider ───────────────────────────────────────────────────
     raw = await _provider.decide(payload)
@@ -83,6 +85,7 @@ def _build_payload(
     req: SignalRequest,
     news_context: dict[str, Any] | None = None,
     fund_context: dict[str, Any] | None = None,
+    broker_flow_context: dict[str, Any] | None = None,
 ) -> dict:
     """Convert a SignalRequest into a plain dict for the AI provider."""
     payload = {
@@ -108,6 +111,8 @@ def _build_payload(
         payload["newsContext"] = news_context
     if fund_context:
         payload["fundContext"] = fund_context
+    if broker_flow_context:
+        payload["brokerFlowContext"] = broker_flow_context
     return payload
 
 

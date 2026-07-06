@@ -17,6 +17,7 @@ from typing import Any
 import aiohttp
 
 from app.config import AIProvider, settings
+from app.core.prompts import get_trading_system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -27,28 +28,6 @@ _WAIT_FALLBACK: dict[str, Any] = {
     "confidence": 0.0,
     "reason": "Provider fallback — safe WAIT",
 }
-
-_SYSTEM_PROMPT = """\
-You are a trading signal evaluator for a stock market.
-Given market data (OHLCV + indicators), output a **JSON-only** trading decision.
-
-Output format (JSON object, no markdown, no explanation outside JSON):
-{
-  "action": "BUY" | "SELL" | "WAIT",
-  "confidence": 0-100,
-  "reason": "brief explanation",
-  "qty": optional number of lots,
-  "stop_loss": optional stop loss price,
-  "target_price": optional target price
-}
-
-Key indicators for your decision:
-- RSI < 30 → oversold (potential BUY), RSI > 70 → overbought (potential SELL)
-- Price > EMA20 → bullish momentum, Price < EMA20 → bearish
-- MACD crossover above signal line → bullish, below → bearish
-- Low volume → weaker signal
-- WAIT is the safe default when uncertain or indicators conflict
-"""
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -216,7 +195,7 @@ class DeepSeekProvider(AiProvider):
         On any error (network, timeout, parse) → WAIT fallback.
         """
         messages = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": get_trading_system_prompt()},
             {"role": "user", "content": _build_payload_str(payload)},
         ]
 

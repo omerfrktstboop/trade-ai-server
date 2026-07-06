@@ -79,6 +79,8 @@ def _build_payload(req: SignalRequest) -> dict:
         "totalAccountQty": req.total_account_qty,
         "lockedQty": req.locked_qty,
         "lockedLongTermQty": req.locked_long_term_qty,
+        "allowedSymbols": sorted(risk_config._allowed_set()),
+        "lockedSymbols": sorted(risk_config._locked_set()),
     }
 
 

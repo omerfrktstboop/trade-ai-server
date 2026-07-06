@@ -145,6 +145,14 @@ class RiskConfig(BaseSettings):
             return self.min_confidence_for_sell
         return 100.0  # unknown actions require maximum confidence
 
+    def _allowed_set(self) -> set[str]:
+        """Return the allowed symbols as a set (for injection into AI prompts)."""
+        return _to_set(self.allowed_symbols)
+
+    def _locked_set(self) -> set[str]:
+        """Return the locked long-term symbols as a set (for injection into AI prompts)."""
+        return _to_set(self.locked_long_term_symbols)
+
 
 # ---------------------------------------------------------------------------
 # Singleton

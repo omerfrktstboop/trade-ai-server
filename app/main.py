@@ -8,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers.health import router as health_router
+from app.routers.order_result import router as order_result_router
+from app.routers.signal import router as signal_router
 
 
 @asynccontextmanager
@@ -36,8 +38,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routers
+# ── Routers ────────────────────────────────────────────────────────────────
+
+# Public (no auth)
 app.include_router(health_router, prefix="/api")
+
+# Protected (Bearer token required)
+app.include_router(signal_router, prefix="/api")
+app.include_router(order_result_router, prefix="/api")
 
 
 @app.get("/")

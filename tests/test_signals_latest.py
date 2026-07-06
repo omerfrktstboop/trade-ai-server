@@ -192,7 +192,7 @@ class TestLatestSignalsSymbolFilter:
                  "order_type": "NONE", "qty": 0, "mode": "PAPER"},
                 {"request_id": "r3", "symbol": "THYAO", "action": "SELL", "confidence": 75.0,
                  "risk_score": 20.0, "allow_order": True, "reason": "sell thyao",
-                 "order_type": "MARKET", "qty": 5, "mode": "LIVE"},
+                 "order_type": "LIMIT", "qty": 5, "mode": "LIVE"},
             ],
         )
 

@@ -271,15 +271,19 @@ class RiskEngine:
             price = None
         elif show_details:
             order_type = OrderType.LIMIT
-            if decision.entry_range is not None:
-                if action == SignalAction.BUY:
-                    price = min(decision.entry_range.max, request.last_price)
-                elif action == SignalAction.SELL:
-                    price = max(decision.entry_range.min, request.last_price)
-                else:
-                    price = request.last_price
-            else:
+            if action == SignalAction.BUY:
+                price = decision.entry_range.max  # BUY pre-flight guarantees entry_range is set
+            elif action == SignalAction.SELL:
                 price = request.last_price
+            else:
+                price = None
+
+            # Safety: if price cannot be determined for BUY/SELL, block
+            if action in (SignalAction.BUY, SignalAction.SELL) and price is None:
+                return self._block(
+                    request,
+                    f"{action.value} blocked: cannot determine limit price",
+                )
         else:
             order_type = OrderType.NONE
             price = None

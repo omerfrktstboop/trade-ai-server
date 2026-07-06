@@ -551,8 +551,8 @@ class TestLimitOrderBehaviour:
         assert resp.allow_order is True
         assert resp.order_type == OrderType.LIMIT
 
-    def test_buy_price_capped_at_last_price(self):
-        """entryRange.max (110) > lastPrice (100) → price = lastPrice."""
+    def test_buy_price_uses_entry_max(self):
+        """BUY limit price = entryRange.max (110.0), cap uygulanmaz."""
         engine = RiskEngine(_cfg())
         req = _make_request(mode=SignalMode.LIVE, lastPrice=100.0)
         dec = _make_buy_decision(
@@ -561,10 +561,11 @@ class TestLimitOrderBehaviour:
         )
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
-        assert resp.price == 100.0  # min(110, 100)
+        assert resp.order_type == OrderType.LIMIT
+        assert resp.price == 110.0
 
     def test_buy_price_uses_entry_max_when_below_last(self):
-        """entryRange.max (98) < lastPrice (100) → price = 98."""
+        """entryRange.max (98) < lastPrice (100) → price = 98.0."""
         engine = RiskEngine(_cfg())
         req = _make_request(mode=SignalMode.LIVE, lastPrice=100.0)
         dec = _make_buy_decision(
@@ -573,7 +574,8 @@ class TestLimitOrderBehaviour:
         )
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
-        assert resp.price == 98.0  # min(98, 100)
+        assert resp.order_type == OrderType.LIMIT
+        assert resp.price == 98.0
 
     def test_sell_produces_limit_order(self):
         engine = RiskEngine(_cfg())
@@ -589,8 +591,8 @@ class TestLimitOrderBehaviour:
         assert resp.allow_order is True
         assert resp.order_type == OrderType.LIMIT
 
-    def test_sell_price_uses_entry_min_or_last(self):
-        """entryRange.min (97) < lastPrice (100) → price = max(97, 100) = 100."""
+    def test_sell_price_is_last_price(self):
+        """SELL limit price = request.lastPrice always."""
         engine = RiskEngine(_cfg())
         req = _make_request(mode=SignalMode.LIVE, symbol="THYAO", totalAccountQty=20, botPositionQty=10, lastPrice=100.0)
         dec = RiskDecision(
@@ -602,10 +604,11 @@ class TestLimitOrderBehaviour:
         )
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
-        assert resp.price == 100.0  # max(97, 100)
+        assert resp.order_type == OrderType.LIMIT
+        assert resp.price == 100.0
 
-    def test_sell_price_floors_at_last(self):
-        """entryRange.min (103) > lastPrice (100) → price = 103 (floor)."""
+    def test_sell_price_uses_last_price(self):
+        """SELL limit price = request.lastPrice (100.0), floor uygulanmaz."""
         engine = RiskEngine(_cfg())
         req = _make_request(mode=SignalMode.LIVE, symbol="THYAO", totalAccountQty=20, botPositionQty=10, lastPrice=100.0)
         dec = RiskDecision(
@@ -617,7 +620,61 @@ class TestLimitOrderBehaviour:
         )
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
-        assert resp.price == 103.0  # max(103, 100)
+        assert resp.order_type == OrderType.LIMIT
+        assert resp.price == 100.0  # always lastPrice for SELL
+
+    def test_market_order_never_produced(self):
+        """Hiçbir senaryoda orderType=MARKET dönmemeli."""
+        engine = RiskEngine(_cfg())
+
+        scenarios = [
+            # (name, request, decision)
+            ("LIVE BUY", _make_request(mode=SignalMode.LIVE), _make_buy_decision()),
+            ("PAPER BUY", _make_request(mode=SignalMode.PAPER), _make_buy_decision()),
+            ("WAIT decision", _make_request(mode=SignalMode.LIVE), RiskDecision(action=SignalAction.WAIT)),
+            ("_block path", _make_request(symbol="GARAN"), _make_buy_decision()),
+        ]
+
+        for name, req, dec in scenarios:
+            resp = engine.evaluate(req, dec)
+            assert resp.order_type != OrderType.MARKET, f"{name}: produced MARKET order"
+            assert resp.order_type in (OrderType.LIMIT, OrderType.NONE), f"{name}: unexpected orderType {resp.order_type}"
+
+    def test_manual_buy_produces_limit_with_price(self):
+        """MANUAL BUY → LIMIT, price=entryRange.max, requiresConfirmation=True."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(mode=SignalMode.MANUAL)
+        dec = _make_buy_decision(
+            entry_range=EntryRange(min=95.0, max=102.0),
+            stop_loss=93.0,
+            target_price=110.0,
+        )
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.requires_confirmation is True
+        assert resp.order_type == OrderType.LIMIT
+        assert resp.price == 102.0
+
+    def test_manual_sell_produces_limit_with_price(self):
+        """MANUAL SELL → LIMIT, price=lastPrice, requiresConfirmation=True."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(
+            mode=SignalMode.MANUAL, symbol="THYAO",
+            botPositionQty=10, totalAccountQty=20,
+            lastPrice=100.0,
+        )
+        dec = RiskDecision(
+            action=SignalAction.SELL,
+            confidence=85.0,
+            reason="Take profit",
+            qty=5,
+            entry_range=EntryRange(min=97.0, max=102.0),
+        )
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.requires_confirmation is True
+        assert resp.order_type == OrderType.LIMIT
+        assert resp.price == 100.0
 
 
 class TestEntryRangeParsing:

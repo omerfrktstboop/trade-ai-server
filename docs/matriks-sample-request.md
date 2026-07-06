@@ -185,7 +185,7 @@ public class SignalResponse
     public string Symbol { get; set; } = "";
     public string Action { get; set; } = "WAIT";        // BUY | SELL | WAIT
     public double Qty { get; set; }
-    public string OrderType { get; set; } = "NONE";     // MARKET | LIMIT | NONE
+    public string OrderType { get; set; } = "NONE";     // LIMIT | NONE (Matriks MARKET'i destekler ama API bunu üretmez)
     public double? Price { get; set; }
     public double ConfidenceScore { get; set; }
     public double RiskScore { get; set; }
@@ -267,7 +267,7 @@ HTTP 200 OK
   "action": "BUY",
   "qty": 42,
   "orderType": "LIMIT",
-  "price": 71.25,
+  "price": 71.50,
   "confidenceScore": 82,
   "riskScore": 15,
   "allowOrder": false,
@@ -293,7 +293,7 @@ HTTP 200 OK
   "action": "BUY",
   "qty": 42,
   "orderType": "LIMIT",
-  "price": 71.25,
+  "price": 71.50,
   "confidenceScore": 82,
   "riskScore": 15,
   "allowOrder": true,
@@ -318,8 +318,8 @@ HTTP 200 OK
 | `symbol` | string | Sembol |
 | `action` | enum | `"BUY"` / `"SELL"` / `"WAIT"` |
 | `qty` | float | Emir adedi (`WAIT` → 0) |
-| `orderType` | enum | `"MARKET"` / `"LIMIT"` / `"NONE"` |
-| `price` | float\|null | Limit emir fiyatı (MARKET → null) |
+| `orderType` | enum | `"LIMIT"` / `"NONE"` | Market order hiçbir zaman üretilmez |
+| `price` | float\|null | Limit emir fiyatı (BUY→entryRange.max, SELL→lastPrice) |
 | `confidenceScore` | float | AI güven skoru (0-100) |
 | `riskScore` | float | Risk skoru (0–100, düşük = güvenli) |
 | `allowOrder` | bool | **Risk engine emre izin verdi mi?** `true` ise emri gönder |

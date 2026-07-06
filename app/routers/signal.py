@@ -1,41 +1,43 @@
-"""Signal evaluation endpoint — protected by Bearer token."""
+"""Signal evaluation endpoint — protected by Bearer token.
+
+Flow::
+
+    SignalRequest  →  DummyStrategy  →  RiskEngine  →  SignalResponse  →  log
+"""
 
 from fastapi import APIRouter, Depends
 
 from app.core.auth import verify_token
 from app.core.logger import log_signal_evaluation
-from app.models.signal import SignalMode, SignalRequest, SignalResponse
+from app.core.risk_config import risk_config
+from app.models.signal import SignalRequest, SignalResponse
+from app.services.risk_engine import RiskEngine
+from app.services.strategy import generate_dummy_decision
 
 router = APIRouter(tags=["Signal"], dependencies=[Depends(verify_token)])
+
+# ── Engine singleton ──────────────────────────────────────────────────────────
+
+_risk_engine = RiskEngine(risk_config)
 
 
 @router.post("/signal/evaluate")
 async def evaluate_signal(body: SignalRequest) -> SignalResponse:
-    """Evaluate a trading signal.
+    """Evaluate a trading signal end-to-end.
 
-    Currently returns safe-default responses. AI evaluation will be wired
-    into this endpoint in a future iteration.
+    1. Parse ``SignalRequest`` from JSON body.
+    2. Run **dummy strategy** to produce a raw ``RiskDecision``.
+    3. Pass through ``RiskEngine`` for safety overrides.
+    4. Return the final, safety-checked ``SignalResponse``.
+    5. Log the request/response pair to ``logs/signal.log``.
     """
-    # Guard: PAPER mode never places real orders
-    allow_order = False
+    # ── 1. Generate raw decision ─────────────────────────────────────────
+    decision = generate_dummy_decision(body, risk_config)
 
-    response = SignalResponse(
-        requestId=body.request_id,
-        symbol=body.symbol,
-        action="WAIT",
-        qty=0.0,
-        orderType="NONE",
-        price=None,
-        confidenceScore=0.0,
-        riskScore=0.0,
-        allowOrder=allow_order,
-        reason="Safe default: PAPER mode or no decision.",
-        entryRange=None,
-        stopLoss=None,
-        targetPrice=None,
-    )
+    # ── 2. Apply risk engine (final safety net) ──────────────────────────
+    response = _risk_engine.evaluate(body, decision)
 
-    # Log to JSON-lines file (no sensitive data)
+    # ── 3. Persist to JSON-lines log ─────────────────────────────────────
     log_signal_evaluation(
         request_id=body.request_id,
         symbol=body.symbol,

@@ -32,8 +32,8 @@ Copy `.env.example` → `.env` and fill in the required values:
 |---------------------|----------|-------------------------|------------------------------------------|
 | `APP_ENV`           | Yes      | `development`           | `development` / `staging` / `production` |
 | `API_TOKEN`         | Prod     | `dev-token-change-me`   | API auth token                           |
-| `AI_PROVIDER`       | Yes      | `deepseek`              | `openai` / `deepseek` / `anthropic` / `mock` |
-| `DEEPSEEK_API_KEY`  | Prod     | —                       | DeepSeek API key                         |
+| `AI_PROVIDER`       | Yes      | `mock`                  | `mock` (dev) / `deepseek` / `openai` / `anthropic` |
+| `DEEPSEEK_API_KEY`  | *        | —                       | Required when `AI_PROVIDER=deepseek`     |
 | `DEEPSEEK_MODEL`    | No       | `deepseek-chat`         | Model name                               |
 | `DATABASE_URL`      | Prod     | `sqlite+aiosqlite:///./dev.db` (dev) | PostgreSQL for production, SQLite auto for dev |
 | `POSTGRES_PASSWORD`  | Prod    | —                       | PostgreSQL password (used by docker compose) |
@@ -41,9 +41,13 @@ Copy `.env.example` → `.env` and fill in the required values:
 | `TELEGRAM_CHAT_ID`  | No       | —                       | Default chat ID                          |
 | `DEFAULT_MODE`      | No       | `paper`                 | `paper` / `live`                         |
 
-**Production safety:** When `APP_ENV=production`, the server will refuse to start
-if `API_TOKEN` is empty, still set to the dev default, or if the selected AI
-provider's API key is missing.
+\* `DEEPSEEK_API_KEY` is only required in production or when `AI_PROVIDER=deepseek`.
+
+**Production safety:** When `APP_ENV=production`, the server will refuse to start if:
+- `API_TOKEN` is empty or still set to the dev default
+- `AI_PROVIDER=mock` (mock is not allowed in production)
+- `AI_PROVIDER=deepseek` but `DEEPSEEK_API_KEY` is empty
+- `DATABASE_URL` is missing or uses SQLite
 
 **Database:** In development, `DATABASE_URL` can be left empty — the server
 auto-creates a SQLite database (`dev.db`) on first request. No PostgreSQL
@@ -71,6 +75,34 @@ docker compose up --build
 | PostgreSQL | 5432 | `trade_ai` / `trade_ai` / from `.env` |
 
 The API waits for PostgreSQL to be healthy before starting (`depends_on` + healthcheck).
+
+## Running Modes
+
+### Safe local test (zero setup)
+
+Default config works out of the box with `AI_PROVIDER=mock`:
+
+```bash
+cp .env.example .env        # AI_PROVIDER=mock zaten, değişiklik gerekmez
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+- No external API calls — mock returns safe `WAIT` decisions.
+- SQLite `dev.db` auto-created on first request.
+- Perfect for integration testing and UI development.
+
+### Live trading with DeepSeek
+
+Switch to real AI by editing `.env`:
+
+```bash
+#.env
+AI_PROVIDER=deepseek
+DEEPSEEK_API_KEY=sk-your-real-key
+```
+
+> **Note:** `AI_PROVIDER=mock` is **blocked in production**. Trying to deploy with
+> mock will fail at startup. This ensures you never accidentally ship a dead AI.
 
 ## API Endpoints
 

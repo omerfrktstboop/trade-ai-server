@@ -139,6 +139,13 @@ class Settings(BaseSettings):
         if self.ai_provider == AIProvider.DEEPSEEK and not self.deepseek_api_key:
             errors.append("DEEPSEEK_API_KEY is required when AI_PROVIDER=deepseek")
 
+        # Mock provider is not allowed in production
+        if self.ai_provider == AIProvider.MOCK:
+            errors.append(
+                "AI_PROVIDER=mock is not allowed in production. "
+                "Use deepseek, openai, or anthropic for live trading."
+            )
+
         # Database: must be set and must NOT be SQLite in production
         if not self.database_url:
             errors.append(

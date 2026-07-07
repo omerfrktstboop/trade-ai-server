@@ -201,7 +201,7 @@ curl -X POST http://localhost:8000/api/signal/evaluate \
 | Field | Type | Description |
 |---|---|---|
 | `mode` | string | `"PAPER"` / `"MANUAL"` / `"LIVE"` (default: `"PAPER"`) |
-| `dailyTradeCount` | int | Günlük işlem sayısı — risk motoru limit kontrolünde kullanır |
+| `dailyTradeCount` | int | Opsiyonel günlük işlem sayısı. Gönderilmezse sunucu RiskEngine öncesinde bugünkü sayıyı `order_logs` / `risk_decisions` üzerinden hesaplar. |
 | `botPositionQty` | float | Bot'un mevcut pozisyonu — SELL clamp üst sınırı |
 | `totalAccountQty` | float | Hesaptaki toplam lot |
 | `lockedLongTermQty` | float | Uzun vade kilitli lot — asla satılmaz |
@@ -286,7 +286,7 @@ Trading safety rules live in `app/core/risk_config.py` and are loaded from
 | Allowed symbols             | `THYAO,AKBNK,SISE,...`  | `RISK_ALLOWED_SYMBOLS`         | Comma-separated tradeable symbols        |
 | Locked long-term symbols    | `ASELS,EREGL`           | `RISK_LOCKED_LONG_TERM_SYMBOLS`| Never auto-sold                          |
 | Max position per symbol     | `3000`                  | `RISK_MAX_POSITION_VALUE_PER_SYMBOL` | TL limit per symbol               |
-| Max daily trades            | `3`                     | `RISK_MAX_DAILY_TRADE_COUNT`   | Hard cap per day                         |
+| Max daily trades            | `3`                     | `RISK_MAX_DAILY_TRADE_COUNT`   | Hard cap per day using request count or DB fallback |
 | Min confidence for BUY      | `75`                    | `RISK_MIN_CONFIDENCE_FOR_BUY`  | Score threshold (0–100)                  |
 | Min confidence for SELL     | `70`                    | `RISK_MIN_CONFIDENCE_FOR_SELL` | Score threshold (0–100)                  |
 | Allow sell long-term        | `false`                 | `RISK_ALLOW_SELL_LONG_TERM`    | Override locked symbol protection        |

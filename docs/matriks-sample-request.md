@@ -63,7 +63,7 @@ kararıyla döner.
 | `botPositionQty` | float | ❌ | Bot'un şu anda tuttuğu lot (varsayılan: `0`) — SELL clamp için üst sınır |
 | `totalAccountQty` | float | ❌ | Hesaptaki toplam lot (varsayılan: `0`) — `lockedLongTermQty` ile birlikte serbest lot hesabında kullanılır |
 | `lockedLongTermQty` | float | ❌ | Uzun vade kilitli lot (varsayılan: `0`) — hiçbir koşulda satılamaz. `accountFreeQty = max(0, totalAccountQty − lockedLongTermQty)` |
-| `dailyTradeCount` | int | ❌ | Günlük işlem sayısı (varsayılan: `0`) — `maxDailyTradeCount` ile sınırlı |
+| `dailyTradeCount` | int | ❌ | Opsiyonel günlük işlem sayısı. Gönderilmezse sunucu bugünkü sayıyı `order_logs` / `risk_decisions` üzerinden hesaplar. |
 | `mode` | string | ❌ | `"PAPER"` / `"MANUAL"` / `"LIVE"` (varsayılan: `"PAPER"`) |
 
 ### Mode açıklaması
@@ -391,7 +391,7 @@ Matriks IQ                           trade-ai-server
 - **MANUAL modunda** `allowOrder` her zaman `false`'tır. AI BUY veya SELL önerirse `requiresConfirmation: true` döner — Matriks IQ kullanıcıya onay sormalı. WAIT ise `requiresConfirmation: false` döner.
 - **LIVE modunda** risk kontrolleri geçerse `allowOrder: true` dönebilir, `requiresConfirmation: false`.
 - **Cutoff kontrolü:** `disableTradingAfter` (varsayılan `17:30`) saatinden sonra BUY/SELL otomatik engellenir (`reason: "Trading blocked: after cutoff time 17:30"`). WAIT kararları etkilenmez.
-- **Günlük işlem limiti:** `maxDailyTradeCount` (varsayılan `3`) aşıldığında BUY/SELL engellenir. Matriks IQ `dailyTradeCount` alanını göndererek günlük işlem sayısını bildirmeli.
+- **Günlük işlem limiti:** `maxDailyTradeCount` (varsayılan `3`) aşıldığında BUY/SELL engellenir. Matriks IQ `dailyTradeCount` gönderebilir; göndermezse sunucu RiskEngine öncesinde bugünkü işlem sayısını `order_logs` / `risk_decisions` üzerinden hesaplar.
 - **SELL qty clamp:** `sellableQty = min(botPositionQty, max(0, totalAccountQty − lockedLongTermQty))`. Bot yalnızca kendi pozisyonu kadar ve hesaptaki serbest lot kadar satabilir. `accountFreeQty ≤ 0` ise SELL tamamen engellenir (`action=WAIT`).
 - `confidenceScore < 70` genelde `allowOrder: false` ile sonuçlanır (risk eşikleri).
 - Sunucu `requestId`'yi aynen döndürür — Matriks tarafında request/response eşleşmesi için kullanın.

@@ -24,6 +24,7 @@ from app.models.db import RiskDecision as RiskDecisionModel
 from app.models.signal import EntryRange, SignalAction, SignalRequest, SignalResponse
 from app.services.ai_provider import get_default_provider
 from app.services.broker_flow_service import get_broker_flow_context
+from app.services.daily_trade_count import get_today_trade_counts
 from app.services.fund_scanner import get_fund_context
 from app.services.news_service import get_news_context
 from app.services.risk_engine import RiskDecision, RiskEngine
@@ -62,6 +63,7 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
 
     # ── 3. Wire into RiskDecision ─────────────────────────────────────────
     decision = _dict_to_risk_decision(raw, body)
+    body = await _with_resolved_daily_trade_count(body)
 
     # ── 4. Apply risk engine ──────────────────────────────────────────────
     response = _risk_engine.evaluate(body, decision)
@@ -117,6 +119,37 @@ def _build_payload(
     if broker_flow_context:
         payload["brokerFlowContext"] = broker_flow_context
     return payload
+
+
+async def _with_resolved_daily_trade_count(req: SignalRequest) -> SignalRequest:
+    """Fill dailyTradeCount from DB only when the caller omitted it."""
+    if _has_explicit_daily_trade_count(req):
+        return req
+
+    try:
+        async with async_session_factory() as session:
+            counts = await get_today_trade_counts(session, req.symbol)
+    except Exception:
+        logger.exception(
+            "Failed to resolve daily trade count from DB request_id=%s symbol=%s",
+            req.request_id,
+            req.symbol,
+        )
+        return req
+
+    logger.info(
+        "Resolved daily trade count from DB symbol=%s symbol_count=%s bot_count=%s effective=%s",
+        counts.symbol,
+        counts.symbol_count,
+        counts.bot_count,
+        counts.effective_count,
+    )
+    return req.model_copy(update={"daily_trade_count": counts.effective_count})
+
+
+def _has_explicit_daily_trade_count(req: SignalRequest) -> bool:
+    """Return True when dailyTradeCount was present in the request payload."""
+    return bool({"daily_trade_count", "dailyTradeCount"} & req.model_fields_set)
 
 
 def _safe_action(raw_value: Any) -> SignalAction:

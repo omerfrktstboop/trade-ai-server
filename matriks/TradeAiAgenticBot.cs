@@ -332,8 +332,9 @@ namespace Matriks.Lean.Algotrader
                     requiredDataType = "DEPTH";
                 }
 
-                SafeDebug("Fetching requested data " + targetSymbol + " " + requiredDataType);
+                SafeDebug("Fetching requested data target=" + targetSymbol + " dataType=" + requiredDataType + " root=" + originalSymbol);
                 AgenticSignalRequest nextRequest = await FetchRequestedDataAsync(
+                    originalSymbol,
                     targetSymbol,
                     requiredDataType,
                     response.SessionId,
@@ -363,6 +364,7 @@ namespace Matriks.Lean.Algotrader
         // ── FETCH_DATA handler ──────────────────────────────────────
 
         private async Task<AgenticSignalRequest> FetchRequestedDataAsync(
+            string rootSymbol,
             string targetSymbol,
             string requiredDataType,
             string sessionId,
@@ -392,7 +394,7 @@ namespace Matriks.Lean.Algotrader
             {
                 RequestId = rootRequestId,
                 SessionId = sessionId,
-                Symbol = NormalizeSymbol(targetSymbol),
+                Symbol = NormalizeSymbol(rootSymbol),
                 MarketData = BuildMarketData(targetSymbol, requiredDataType),
                 ContextHistory = contextHistory,
                 Mode = NormalizeMode(Mode)

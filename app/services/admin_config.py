@@ -321,7 +321,11 @@ def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
     if key not in RISKY_CONFIG_KEYS:
         return False
     if key == "tradingMode":
-        return new_value == SignalMode.LIVE.value and old_value != new_value
+        return new_value in {
+            SignalMode.LIVE.value,
+            SignalMode.DEMO_LIVE.value,
+            SignalMode.REAL_LIVE.value,
+        } and old_value != new_value
     if key == "killSwitchEnabled":
         return _parse_bool(old_value) is True and _parse_bool(new_value) is False
     if key == "allowSellLongTerm":

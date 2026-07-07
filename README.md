@@ -145,7 +145,7 @@ Aşağıdaki adımları **LIVE** moda geçmeden önce mutlaka tamamlayın:
 - Browser login uses `ADMIN_PASSWORD`; admin API calls also accept the existing Bearer `API_TOKEN`.
 - Secrets are not exposed by admin config endpoints: `API_TOKEN`, `DEEPSEEK_API_KEY`, and `DATABASE_URL` are not returned.
 - Config edits are stored in `system_configs`; every changed value writes `config_audit_logs`.
-- Risky changes require confirmation value `CONFIRM`: switching `tradingMode` to `LIVE`, disabling `killSwitchEnabled`, and enabling `allowSellLongTerm`.
+- Risky changes require confirmation value `CONFIRM`: switching `tradingMode` to `LIVE`, `DEMO_LIVE`, or `REAL_LIVE`, disabling `killSwitchEnabled`, and enabling `allowSellLongTerm`.
 - `killSwitchEnabled=true` makes `/api/signal/evaluate` return `WAIT` with `allowOrder=false`.
 - If `tradingMode` exists in DB, it overrides the incoming request mode; otherwise request mode defaults remain unchanged.
 
@@ -214,7 +214,7 @@ curl -X POST http://localhost:8000/api/signal/evaluate \
 
 | Field | Type | Description |
 |---|---|---|
-| `mode` | string | `"PAPER"` / `"MANUAL"` / `"LIVE"` (default: `"PAPER"`) |
+| `mode` | string | `"PAPER"` / `"MANUAL"` / `"LIVE"` / `"DEMO_LIVE"` / `"REAL_LIVE"` (default: `"PAPER"`) |
 | `dailyTradeCount` | int | Opsiyonel günlük işlem sayısı. Gönderilmezse sunucu RiskEngine öncesinde bugünkü sayıyı `order_logs` / `risk_decisions` üzerinden hesaplar. |
 | `botPositionQty` | float | Bot'un mevcut pozisyonu — SELL clamp üst sınırı |
 | `totalAccountQty` | float | Hesaptaki toplam lot |
@@ -227,7 +227,7 @@ curl -X POST http://localhost:8000/api/signal/evaluate \
 | `action` | enum | `"BUY"` / `"SELL"` / `"WAIT"` |
 | `orderType` | enum | `"LIMIT"` / `"NONE"` — **MARKET order asla üretilmez** |
 | `price` | float\|null | BUY → `entryRange.max`, SELL → `lastPrice`, WAIT → `null` |
-| `allowOrder` | bool | `true` ise emri gönder (LIVE mode), `false` ise emir yok |
+| `allowOrder` | bool | `true` ise emri gönder (live modes), `false` ise emir yok |
 | `requiresConfirmation` | bool | `true` ise kullanıcıya sor (MANUAL mode), `false` ise onaysız |
 | `entryRange` | object\|null | `{"min": ..., "max": ...}` — limit emir için fiyat aralığı |
 | `stopLoss` | float\|null | Önerilen zarar-kes |

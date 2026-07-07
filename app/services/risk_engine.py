@@ -15,7 +15,7 @@ Checks applied (in order):
 7. **Locked qty** — ``lockedLongTermQty`` deducted from available SELL qty
 8. **Max position value** — BUY value > ``maxPositionValuePerSymbol`` → WAIT
 9. **Confidence floor** — below ``minConfidence`` threshold → ``allowOrder=False``
-10. **Mode-based allowOrder / requiresConfirmation** — PAPER/MANUAL/LIVE rules
+10. **Mode-based allowOrder / requiresConfirmation** — PAPER/MANUAL/LIVE/DEMO_LIVE/REAL_LIVE rules
 11. **BUY pre-flight** — missing ``entryRange`` / ``stopLoss`` / ``targetPrice`` → blocked
 """
 
@@ -102,7 +102,7 @@ class RiskEngine:
         7.  SELL qty clamp — sellableQty = min(botPositionQty, max(0, totalAccountQty − lockedLongTermQty))
         8.  Max position value (BUY)
         9.  Confidence threshold
-        10. Mode gates (PAPER / MANUAL / LIVE)
+        10. Mode gates (PAPER / MANUAL / LIVE / DEMO_LIVE / REAL_LIVE)
         11. BUY pre-flight (entryRange, stopLoss, targetPrice required)
         """
         if decision is None:
@@ -228,14 +228,20 @@ class RiskEngine:
                 reasons.append("MANUAL mode — requires user confirmation")
             else:
                 reasons.append("MANUAL mode — allowOrder forced to false")
-        else:  # LIVE
+        else:  # LIVE / DEMO_LIVE / REAL_LIVE
             requires_confirmation = False
             allow_order = confidence_ok and action != SignalAction.WAIT
+            if request.mode == SignalMode.DEMO_LIVE and allow_order:
+                reasons.append("DEMO_LIVE mode — demo order may be sent by client")
+            elif request.mode == SignalMode.REAL_LIVE and allow_order:
+                reasons.append("REAL_LIVE mode — client-side real order gate required")
 
         # ── 9. BUY pre-flight: entryRange / stopLoss / targetPrice ──
         if action == SignalAction.BUY and request.mode in (
             SignalMode.MANUAL,
             SignalMode.LIVE,
+            SignalMode.DEMO_LIVE,
+            SignalMode.REAL_LIVE,
         ):
             missing: list[str] = []
             if decision.entry_range is None:

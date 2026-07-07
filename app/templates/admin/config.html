@@ -22,7 +22,7 @@
               </select>
             {% elif item.value_type == "mode" %}
               <select class="form-select" name="{{ item.key }}" style="width:auto;min-width:120px">
-                {% for mode in ["PAPER", "MANUAL", "LIVE"] %}
+                {% for mode in ["PAPER", "MANUAL", "LIVE", "DEMO_LIVE", "REAL_LIVE"] %}
                 <option value="{{ mode }}" {% if item.value == mode %}selected{% endif %}>{{ mode }}</option>
                 {% endfor %}
               </select>
@@ -48,7 +48,7 @@
       <div class="form-group" style="margin-bottom:0">
         <label class="form-label" for="confirmation">Risk confirmation</label>
         <input class="form-input" id="confirmation" name="confirmation" placeholder="{{ confirmation }}">
-        <div class="form-hint">Required for LIVE mode, disabling kill switch, and allowSellLongTerm=true</div>
+        <div class="form-hint">Required for live modes, disabling kill switch, and allowSellLongTerm=true</div>
       </div>
       <button class="btn btn-primary" type="submit">💾 Save Changes</button>
     </div>

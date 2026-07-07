@@ -77,6 +77,8 @@ class SignalMode(str, Enum):
     PAPER = "PAPER"
     MANUAL = "MANUAL"
     LIVE = "LIVE"
+    DEMO_LIVE = "DEMO_LIVE"
+    REAL_LIVE = "REAL_LIVE"
 
 
 # ── Nested models ──────────────────────────────────────────────────────────

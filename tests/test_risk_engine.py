@@ -375,6 +375,35 @@ class TestLiveMode:
         assert resp.requires_confirmation is False
         assert resp.action == SignalAction.WAIT
 
+    def test_demo_live_mode_allows_order_after_risk_checks(self):
+        engine = RiskEngine(_cfg())
+        req = _make_request(symbol="THYAO", mode=SignalMode.DEMO_LIVE)
+        dec = _make_buy_decision()
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is True
+        assert resp.requires_confirmation is False
+        assert resp.order_type == OrderType.LIMIT
+        assert "DEMO_LIVE mode" in resp.reason
+
+    def test_demo_live_low_confidence_blocked(self):
+        engine = RiskEngine(_cfg(min_confidence_for_buy=90))
+        req = _make_request(symbol="THYAO", mode=SignalMode.DEMO_LIVE)
+        dec = _make_buy_decision(confidence=80.0)
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.requires_confirmation is False
+        assert resp.order_type == OrderType.NONE
+        assert "Confidence" in resp.reason
+
+    def test_real_live_mode_is_explicit_and_requires_client_gate(self):
+        engine = RiskEngine(_cfg())
+        req = _make_request(symbol="THYAO", mode=SignalMode.REAL_LIVE)
+        dec = _make_buy_decision()
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is True
+        assert resp.requires_confirmation is False
+        assert "client-side real order gate required" in resp.reason
+
 
 class TestConfidenceThreshold:
     """Check 7: Confidence below threshold → allowOrder=False."""

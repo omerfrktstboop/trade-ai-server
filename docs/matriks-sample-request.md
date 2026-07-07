@@ -64,7 +64,7 @@ kararıyla döner.
 | `totalAccountQty` | float | ❌ | Hesaptaki toplam lot (varsayılan: `0`) — `lockedLongTermQty` ile birlikte serbest lot hesabında kullanılır |
 | `lockedLongTermQty` | float | ❌ | Uzun vade kilitli lot (varsayılan: `0`) — hiçbir koşulda satılamaz. `accountFreeQty = max(0, totalAccountQty − lockedLongTermQty)` |
 | `dailyTradeCount` | int | ❌ | Opsiyonel günlük işlem sayısı. Gönderilmezse sunucu bugünkü sayıyı `order_logs` / `risk_decisions` üzerinden hesaplar. |
-| `mode` | string | ❌ | `"PAPER"` / `"MANUAL"` / `"LIVE"` (varsayılan: `"PAPER"`) |
+| `mode` | string | ❌ | `"PAPER"` / `"MANUAL"` / `"LIVE"` / `"DEMO_LIVE"` / `"REAL_LIVE"` (varsayılan: `"PAPER"`) |
 
 ### Mode açıklaması
 
@@ -73,6 +73,8 @@ kararıyla döner.
 | `PAPER` | ❌ Asla emir göndermez | ❌ | Geliştirme / test |
 | `MANUAL` | ❌ Otomatik emir göndermez | ✅ `requiresConfirmation=true` | Onaylı yarı-otonom |
 | `LIVE` | ✅ Risk geçerse izin verir | ❌ | Tam otonom |
+| `DEMO_LIVE` | ✅ Risk geçerse izin verir | ❌ | Matriks demo/sanal hesap |
+| `REAL_LIVE` | ✅ Risk geçerse izin verir | ❌ | Gerçek hesap için ek client gate gerekir |
 
 ---
 

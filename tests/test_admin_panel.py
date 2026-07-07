@@ -112,13 +112,14 @@ class TestAdminConfig:
         assert audit.new_value == "7"
         assert audit.reason == "raise test limit"
 
-    def test_live_mode_requires_confirmation(
-        self, client: TestClient, auth_headers: dict[str, str]
+    @pytest.mark.parametrize("mode", ["LIVE", "DEMO_LIVE", "REAL_LIVE"])
+    def test_live_modes_require_confirmation(
+        self, client: TestClient, auth_headers: dict[str, str], mode: str
     ):
         resp = client.put(
             "/api/admin/config/tradingMode",
             headers=auth_headers,
-            json={"value": "LIVE", "reason": "test live"},
+            json={"value": mode, "reason": "test live"},
         )
 
         assert resp.status_code == 400

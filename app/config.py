@@ -36,6 +36,8 @@ class Mode(str, Enum):
 
     PAPER = "paper"
     LIVE = "live"
+    DEMO_LIVE = "demo_live"
+    REAL_LIVE = "real_live"
 
 
 # ---------------------------------------------------------------------------

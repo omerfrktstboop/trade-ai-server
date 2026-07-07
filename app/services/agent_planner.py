@@ -127,7 +127,18 @@ def plan_next(session: SessionState) -> PlanResult:
         if related_plan is not None:
             return related_plan
 
-        # 2) Next missing data type for root symbol
+        # If root symbol has a related mapping and all related data is collected,
+        # skip same-symbol requests — proceed to AI directly.
+        root_upper = session.root_symbol.upper()
+        if root_upper in RELATED_SYMBOLS:
+            # Related data has been collected (otherwise we'd have returned above)
+            return PlanResult(
+                action=AgenticAction.WAIT,
+                reason="İlişkili hisse verisi toplandı — AI kararına geçiliyor",
+                proceed_to_ai=True,
+            )
+
+        # 2) Next missing data type for root symbol (no related mapping)
         same_plan = _request_next_same_symbol(session, collected)
         if same_plan is not None:
             return same_plan

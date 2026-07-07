@@ -60,7 +60,7 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
                 price=body.price,
                 status=body.status,
                 order_id=body.order_id,
-                matrix_message=body.matrix_message,
+                matrix_message=body.matriks_message,
             )
             session.add(entry)
             await session.commit()

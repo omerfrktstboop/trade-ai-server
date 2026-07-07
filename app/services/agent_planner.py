@@ -1,8 +1,6 @@
-"""Agent planner — decides next action in a multi-turn session.
+"""Agent planner — decides next action for agentic multi-turn sessions.
 
-The planner looks at accumulated context and determines whether
-the agent has enough data to produce a BUY/SELL/WAIT decision,
-or if it should request more data via FETCH_DATA.
+Uses SessionState (v2) and AgenticDataType (v2).
 """
 
 from __future__ import annotations
@@ -10,75 +8,80 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.core.risk_config import risk_config
-from app.models.signal import AgentAction, DataRequestType, FetchData
-from app.services.agent_session import MAX_TOOL_CALLS_PER_SESSION, AgentSession
+from app.models.signal import (
+    AgentAction,
+    AgenticDataType,
+    FetchData,
+)
+from app.services.session_store import MAX_TOOL_CALLS_PER_SESSION, SessionState
 
-# ── Required data checks per symbol ──────────────────────────────────────────
+# ── Required data checks ────────────────────────────────────────────────────
 
-# The planner requests data types in order. The tool_calls counter acts as
-# an index into this list: call 1 gets first type, call 2 gets second, etc.
-_CHECK_ORDER: list[tuple[DataRequestType, str]] = [
-    (DataRequestType.INTRADAY_OHLC, "Detailed intraday OHLC needed"),
-    (DataRequestType.VOLUME_DISTRIBUTION, "Volume distribution profile needed"),
-    (DataRequestType.ORDER_FLOW, "Order flow / order book needed"),
-    (DataRequestType.FUND_FLOW, "Fund flow context needed"),
-    (DataRequestType.NEWS_DETAIL, "News detail context needed"),
+# The planner requests data types in order. tool_call_count acts as an index.
+_CHECK_ORDER: list[tuple[AgenticDataType, str]] = [
+    (AgenticDataType.DEPTH, "Derinlik verisi gerekli"),
+    (AgenticDataType.AKD, "AKD (Açığa Kısa Dönüşüm) verisi gerekli"),
+    (AgenticDataType.OHLCV, "OHLCV fiyat verisi gerekli"),
+    (AgenticDataType.TECHNICAL, "Teknik indikatör verisi gerekli"),
+    (AgenticDataType.NEWS, "Haber/KAP verisi gerekli"),
+    (AgenticDataType.FUND, "Fon dağılımı gerekli"),
+    (AgenticDataType.BROKER_FLOW, "Broker işlem akışı gerekli"),
 ]
 
 
-# ── Plan result ───────────────────────────────────────────────────────────────
+# ── Plan result ──────────────────────────────────────────────────────────────
 
 
 @dataclass
 class PlanResult:
-    """Outcome of the planner — either final or a data request."""
+    """Outcome of the planner — either PROCEED (final) or a data request."""
 
     action: AgentAction
     fetch_data: FetchData | None = None
     reason: str = ""
+    required_data_type: AgenticDataType | None = None
 
 
-# ── Planner ───────────────────────────────────────────────────────────────────
+# ── Planner: v2 (SessionState-based) ─────────────────────────────────────────
 
 
-def plan_next_action(session: AgentSession) -> PlanResult:
-    """Determine the next step for the given agent session.
+def plan_next(session: SessionState) -> PlanResult:
+    """Determine the next step for the given session.
 
     Logic:
     1. Symbol not allowed → WAIT
-    2. Can still request data (tool_calls < MAX) → FETCH_DATA
-    3. Budget exhausted → final (delegate to AI/RiskEngine)
+    2. Can still request data (tool_call_count < MAX) → FETCH_DATA
+    3. Budget exhausted → PROCEED (delegate to AI/RiskEngine)
     """
-    # Safety: check symbol is allowed
-    if not risk_config.is_symbol_allowed(session.symbol):
+    # ── Symbol check ──────────────────────────────────────────────────
+    if not risk_config.is_symbol_allowed(session.root_symbol):
         return PlanResult(
             action=AgentAction.WAIT,
-            reason=f"Symbol {session.symbol} is not in the allowed list",
+            reason=f"Symbol {session.root_symbol} is not in the allowed list",
         )
 
-    # ── Can we still request more data? ─────────────────────────
+    # ── Can we still request more data? ───────────────────────────────
     if session.can_tool_call:
-        # tool_calls tracks how many FETCH_DATA responses have been issued.
-        # Use it as an index into the check order.
-        idx = session.tool_calls
+        idx = session.tool_call_count
         if idx < len(_CHECK_ORDER):
             data_type, reason = _CHECK_ORDER[idx]
             return PlanResult(
                 action=AgentAction.FETCH_DATA,
                 fetch_data=FetchData(
-                    targetSymbol=session.symbol,
+                    targetSymbol=session.root_symbol,
                     dataType=data_type,
                     reason=reason,
                 ),
                 reason=reason,
+                required_data_type=data_type,
             )
-        # All data types exhausted but budget remains → go to final
+        # All data types exhausted but budget remains → proceed to final
         return PlanResult(
             action=AgentAction.WAIT,
             reason="All data checks complete — delegating to AI for final decision",
         )
 
-    # ── Budget exhausted → final ─────────────────────────────────
+    # ── Budget exhausted → final ──────────────────────────────────────
     return PlanResult(
         action=AgentAction.WAIT,
         reason="Tool call budget exhausted — delegating to AI for final decision",

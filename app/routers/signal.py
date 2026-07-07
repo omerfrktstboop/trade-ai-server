@@ -23,8 +23,9 @@ from app.models.db import MarketSnapshot
 from app.models.db import RiskDecision as RiskDecisionModel
 from app.models.signal import (
     AgentAction,
+    AgenticDataType,
     AgentSignalResponse,
-    DataRequestType,
+    ContextStep,
     EntryRange,
     FetchData,
     OrderType,
@@ -32,8 +33,11 @@ from app.models.signal import (
     SignalRequest,
     SignalResponse,
 )
-from app.services.agent_planner import plan_next_action
+from app.services.agent_planner import plan_next
 from app.services.agent_session import agent_session_store
+from app.services.session_store import (
+    session_store,  # v2 session store singleton
+)
 from app.services.ai_provider import get_default_provider
 from app.services.broker_flow_service import get_broker_flow_context
 from app.services.daily_trade_count import get_today_trade_counts
@@ -342,113 +346,131 @@ async def _persist_to_db(
         )
 
 
-# ── Agent endpoint ────────────────────────────────────────────────────────────
+# ── Agent endpoint (v2 — SessionState + session_store) ──────────────────────
 
 
 @router.post("/signal/evaluate-agent")
 async def evaluate_signal_agent(body: SignalRequest) -> AgentSignalResponse:
-    """Evaluate a trading signal with agentic multi-turn data gathering.
+    """Evaluate a trading signal with agentic multi-turn data gathering (v2).
+
+    Uses SessionState (Pydantic) + SessionStore (in-memory RLock) for
+    session management instead of the v1 AgentSession.
 
     Flow:
-    1. Create or resume session
-    ...[truncated]
-    If not provided, a new session is created.
-
-    Flow:
-    1. Create or resume session
-    2. If session expired → WAIT
-    3. Planner decides: FETCH_DATA or final
-    4. FETCH_DATA → return AgentSignalResponse with fetchData
-    5. Final → AI.decide() → RiskEngine → AgentSignalResponse
+    1. Request al - parse SignalRequest
+    2. sessionId yoksa yeni session olustur (session_store.create_session)
+    3. sessionId varsa session_store'dan bul - expired/missing -> WAIT
+    4. Gelen marketData'yi ContextStep olarak session'a ekle
+    5. Planner calistir (rule-based -> FETCH_DATA or PROCEED)
+    6. FETCH_DATA -> validate targetSymbol, requiredDataType, toolCallCount
+    7. PROCEED -> AI.decide() -> RiskEngine -> close_session -> final response
     """
     request_id = body.request_id
-    raw_session_id = body.session_id  # from the SignalRequest model (alias="sessionId")
+    raw_session_id = body.session_id
     extra = body.model_extra or {}
+    symbol = body.symbol
 
-    # ── 1. Session management ────────────────────────────────────────
-    session, was_expired_or_missing = agent_session_store.get_or_create(
-        session_id=raw_session_id or "",
-        symbol=body.symbol,
-        mode=body.mode.value,
+    # ── 1-2-3: Session management ────────────────────────────────────
+    session_store.cleanup_expired_sessions()
+
+    if raw_session_id:
+        session = session_store.get_session(raw_session_id)
+        if session is None:
+            return AgentSignalResponse(
+                requestId=request_id,
+                symbol=symbol,
+                sessionId=raw_session_id,
+                action=AgentAction.WAIT,
+                reason="Session expired or not found",
+            )
+    else:
+        session = session_store.create_session(symbol)
+
+    # ── 4: Append marketData as ContextStep ──────────────────────────
+    market_data = body.model_dump(by_alias=True)
+    step_no = len(session.steps) + 1
+    step = ContextStep(
+        stepNo=step_no,
+        symbol=symbol,
+        dataType=AgenticDataType.OHLCV,
+        payload=market_data,
+        reason="Market data snapshot",
     )
+    session_store.append_step(session.session_id, step)
 
-    # If the caller sent a sessionId but it was expired/missing → WAIT
-    if raw_session_id and was_expired_or_missing:
-        return AgentSignalResponse(
-            requestId=request_id,
-            symbol=body.symbol,
-            sessionId=raw_session_id,
-            action=AgentAction.WAIT,
-            reason="Session expired or not found",
-        )
+    # ── 5: Planner decides next action ────────────────────────────────
+    plan = plan_next(session)
 
-    # ── 2. Accumulate context for existing sessions ──────────────────
-    if not was_expired_or_missing:
-        # This is an existing session — stash incoming data before planning
-        session.add_context("market_data", extra)
-        agent_session_store.update(session)
-
-    # ── 3. Planner decides next action ─────────────────────────────────
-    plan = plan_next_action(session)
-
-    # ── 4. FETCH_DATA path ────────────────────────────────────────────
+    # ── 6: FETCH_DATA path (data request) ─────────────────────────────
     if plan.action == AgentAction.FETCH_DATA and plan.fetch_data is not None:
-        session.tool_calls += 1
+        fd = plan.fetch_data
+        # Validate targetSymbol ∈ allowedSymbols
+        if not risk_config.is_symbol_allowed(fd.target_symbol):
+            return AgentSignalResponse(
+                requestId=request_id,
+                symbol=symbol,
+                sessionId=session.session_id,
+                action=AgentAction.WAIT,
+                reason=f"Target symbol {fd.target_symbol} is not in the allowed list",
+            )
+        # Check toolCallCount < maxToolCallsPerSession
+        if not session.can_tool_call:
+            return AgentSignalResponse(
+                requestId=request_id,
+                symbol=symbol,
+                sessionId=session.session_id,
+                action=AgentAction.WAIT,
+                reason="Tool call limit reached — cannot FETCH_DATA",
+            )
+        session_store.increment_tool_call(session.session_id)
         return AgentSignalResponse(
             requestId=request_id,
-            symbol=body.symbol,
+            symbol=symbol,
             sessionId=session.session_id,
             action=AgentAction.FETCH_DATA,
-            fetchData=plan.fetch_data,
+            fetchData=fd,
             allowOrder=False,
             reason=plan.reason,
         )
 
-    # ── 5. WAIT from planner (invalid symbol etc.) ───────────────────
+    # ── 7: WAIT from planner (invalid symbol etc.) ────────────────────
     if plan.action == AgentAction.WAIT and plan.fetch_data is None:
+        session_store.close_session(session.session_id)
         return AgentSignalResponse(
             requestId=request_id,
-            symbol=body.symbol,
+            symbol=symbol,
             sessionId=session.session_id,
             action=AgentAction.WAIT,
             allowOrder=False,
             reason=plan.reason,
         )
 
-    # ── 6. Final decision: run through AI + RiskEngine ────────────────
-    # Build full payload including accumulated context
+    # ── 8: PROCEED — AI + RiskEngine ──────────────────────────────────
     news_context = extra.get("newsContext")
     fund_context = extra.get("fundContext")
     broker_flow_context = extra.get("brokerFlowContext")
     payload = _build_payload(
         body,
-        news_context=news_context,  # type: ignore[arg-type]
-        fund_context=fund_context,  # type: ignore[arg-type]
-        broker_flow_context=broker_flow_context,  # type: ignore[arg-type]
+        news_context=news_context,
+        fund_context=fund_context,
+        broker_flow_context=broker_flow_context,
     )
+    # Inject accumulated session steps into payload as context
+    payload["agenticSteps"] = [s.model_dump(by_alias=True) for s in session.steps]
 
-    # Inject fetched context into payload
-    for key, value in session.context_data.items():
-        if key not in payload:
-            payload[key] = value
-
-    # ── Ask AI provider ─────────────────────────────────────────────
     raw = await _provider.decide(payload)
     decision = _dict_to_risk_decision(raw, body)
-
-    # Resolve daily trade count
     body_enriched = await _with_resolved_daily_trade_count(body)
 
-    # ── Risk engine ─────────────────────────────────────────────────
     response = _risk_engine.evaluate(body_enriched, decision)
 
-    # ── Clean up session (final decision made) ──────────────────────
-    agent_session_store.remove(session.session_id)
+    # ── Close session (final decision) ───────────────────────────────
+    session_store.close_session(session.session_id)
 
-    # ── Log + persist ───────────────────────────────────────────────
+    # ── Log + persist ─────────────────────────────────────────────────
     log_signal_evaluation(
         request_id=request_id,
-        symbol=body.symbol,
+        symbol=symbol,
         mode=body.mode.value,
         request=body.model_dump(by_alias=True, exclude={"mode"}),
         response=response.model_dump(by_alias=True),

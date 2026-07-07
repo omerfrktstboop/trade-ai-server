@@ -12,10 +12,16 @@ from app.config import settings
 from app.main import app
 from app.models.signal import AgentAction
 from app.services.agent_session import (
-    MAX_TOOL_CALLS_PER_SESSION,
-    SESSION_TTL_SECONDS,
+    MAX_TOOL_CALLS_PER_SESSION as AGENT_MAX_TOOLS,
+    SESSION_TTL_SECONDS as AGENT_TTL,
     AgentSession,
     agent_session_store,
+)
+from app.services.session_store import (
+    MAX_TOOL_CALLS_PER_SESSION,
+    SESSION_TTL_SECONDS,
+    SessionState,
+    session_store,
 )
 
 
@@ -33,10 +39,12 @@ def auth_headers() -> dict[str, str]:
 
 @pytest.fixture(autouse=True)
 def _clean_sessions() -> None:
-    """Clean session store before each test."""
+    """Clean both old (v1) and new (v2) session stores before each test."""
     agent_session_store._store.clear()
+    session_store._store.clear()
     yield
     agent_session_store._store.clear()
+    session_store._store.clear()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -148,10 +156,12 @@ def test_session_ttl_expiry(
     body1 = _post(client, _make_payload(), auth_headers)
     sid = body1["sessionId"]
 
-    # Force-expire the session
-    session = agent_session_store.get(sid, "THYAO")
-    assert session is not None
-    session.created_at = time.monotonic() - SESSION_TTL_SECONDS - 10
+    # Force-expire the session in v2 store (SessionState.created_at uses time.monotonic)
+    session: SessionState | None = session_store.get_session(sid)
+    assert session is not None, f"Session {sid} not found in v2 store"
+    object.__setattr__(session, "created_at", time.monotonic() - SESSION_TTL_SECONDS - 10)
+    # Re-insert expired session so get_session can find and reject it
+    session_store._store[sid] = session
 
     body2 = _post(client, _make_payload(session_id=sid), auth_headers)
     assert body2["action"] == "WAIT"

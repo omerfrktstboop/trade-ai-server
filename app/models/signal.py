@@ -137,7 +137,7 @@ class FetchData(BaseModel):
     """Data request sent back to the client when more context is needed."""
 
     target_symbol: str = Field(..., alias="targetSymbol")
-    data_type: DataRequestType = Field(..., alias="dataType")
+    data_type: AgenticDataType = Field(..., alias="dataType")
     reason: str
 
 

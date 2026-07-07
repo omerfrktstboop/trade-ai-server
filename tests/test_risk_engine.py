@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 
 from app.core.risk_config import RiskConfig
 from app.models.signal import (
@@ -911,6 +912,42 @@ class TestDailyTradeCount:
 
 class TestCutoffTime:
     """Check 3: cutoff sonrası BUY/SELL engellenir, WAIT etkilenmez."""
+
+    def test_can_trade_now_converts_to_configured_timezone(self):
+        """UTC timestamp is evaluated against the configured trading timezone."""
+        cfg = _cfg(disable_trading_after="17:30", timezone="Europe/Istanbul")
+
+        before_cutoff_utc = datetime(2026, 7, 7, 14, 29, tzinfo=timezone.utc)
+        after_cutoff_utc = datetime(2026, 7, 7, 14, 31, tzinfo=timezone.utc)
+
+        assert cfg.can_trade_now(before_cutoff_utc) is True
+        assert cfg.can_trade_now(after_cutoff_utc) is False
+
+    def test_can_trade_now_uses_zoneinfo_when_now_omitted(self, monkeypatch):
+        """No explicit now => datetime.now(ZoneInfo(RISK_TIMEZONE))."""
+        import app.core.risk_config as risk_config_module
+
+        class FakeDateTime(datetime):
+            seen_tz = None
+
+            @classmethod
+            def now(cls, tz=None):
+                cls.seen_tz = tz
+                return datetime(2026, 7, 7, 12, 0, tzinfo=tz)
+
+        monkeypatch.setattr(risk_config_module, "datetime", FakeDateTime)
+        cfg = _cfg(disable_trading_after="17:30", timezone="Europe/Istanbul")
+
+        assert cfg.can_trade_now() is True
+        assert str(FakeDateTime.seen_tz) == "Europe/Istanbul"
+
+    def test_risk_timezone_env_var(self, monkeypatch):
+        """RISK_TIMEZONE overrides the default timezone."""
+        monkeypatch.setenv("RISK_TIMEZONE", "UTC")
+
+        cfg = RiskConfig(_env_file="")
+
+        assert cfg.timezone == "UTC"
 
     def test_buy_blocked_after_cutoff(self, monkeypatch):
         """can_trade_now() returns False → BUY blocked."""

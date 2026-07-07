@@ -14,6 +14,7 @@ Override via ``.env``::
 
     RISK_ALLOWED_SYMBOLS=THYAO,AKBNK,GARAN
     RISK_MAX_DAILY_TRADE_COUNT=5
+    RISK_TIMEZONE=Europe/Istanbul
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -96,6 +98,10 @@ class RiskConfig(BaseSettings):
         default="17:30",
         description="Local time (HH:MM) after which trading is paused",
     )
+    timezone: str = Field(
+        default="Europe/Istanbul",
+        description="IANA timezone used for trading cutoff checks",
+    )
 
     # ── Normalisation ──────────────────────────────────────────────────────
 
@@ -130,8 +136,13 @@ class RiskConfig(BaseSettings):
 
     def can_trade_now(self, now: datetime | None = None) -> bool:
         """Return True if trading is allowed at the current time."""
+        timezone = ZoneInfo(self.timezone)
         if now is None:
-            now = datetime.now()
+            now = datetime.now(timezone)
+        elif now.tzinfo is None:
+            now = now.replace(tzinfo=timezone)
+        else:
+            now = now.astimezone(timezone)
         h, m = map(int, self.disable_trading_after.split(":"))
         cutoff = time(h, m)
         return now.time() < cutoff

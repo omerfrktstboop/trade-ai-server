@@ -117,7 +117,7 @@ Aşağıdaki adımları **LIVE** moda geçmeden önce mutlaka tamamlayın:
 | 5 | **LIVE test (gerçek AI)** | `mode=LIVE` test istekleri | `allowOrder=true` olabilir, emirler gerçek gönderilir |
 | 6 | **Uzun vade lotlar** | `RISK_LOCKED_LONG_TERM_SYMBOLS=ASELS,EREGL` ayarlandı mı? | Kilitli semboller asla satılmaz |
 | 7 | **Günlük limit** | `RISK_MAX_DAILY_TRADE_COUNT=3` doğru mu? | Aşılınca BUY/SELL bloklanır |
-| 8 | **Cutoff saati** | `RISK_DISABLE_TRADING_AFTER=17:30` doğru mu? | Sonrası sadece WAIT |
+| 8 | **Cutoff saati** | `RISK_DISABLE_TRADING_AFTER=17:30`, `RISK_TIMEZONE=Europe/Istanbul` doğru mu? | Sonrası sadece WAIT |
 | 9 | **PostgreSQL** | `DATABASE_URL=postgresql+asyncpg://...` ayarlandı mı? | Production'da SQLite çalışmaz |
 | 10 | **Docker healtcheck** | `docker compose up --build` + `/api/health` → 200 | Tüm servisler ayakta |
 
@@ -292,11 +292,12 @@ Trading safety rules live in `app/core/risk_config.py` and are loaded from
 | Allow sell long-term        | `false`                 | `RISK_ALLOW_SELL_LONG_TERM`    | Override locked symbol protection        |
 | Allow short selling         | `false`                 | `RISK_ALLOW_SHORT_SELLING`     | Enable short positions                   |
 | Trading cutoff time         | `17:30`                 | `RISK_DISABLE_TRADING_AFTER`  | HH:MM — no trades past this time         |
+| Trading timezone            | `Europe/Istanbul`       | `RISK_TIMEZONE`                | IANA timezone used for cutoff checks     |
 
 **How it works:**
 - `risk_config.is_symbol_allowed("THYAO")` → `True` / `False`
 - `risk_config.is_long_term_locked("ASELS")` → `True` / `False`
-- `risk_config.can_trade_now()` → `True` before 17:30, `False` after
+- `risk_config.can_trade_now()` → `True` before 17:30 in `RISK_TIMEZONE`, `False` after
 - `risk_config.get_min_confidence("BUY")` → `75.0`
 
 Override any rule via `.env`:
@@ -304,6 +305,7 @@ Override any rule via `.env`:
 RISK_ALLOWED_SYMBOLS=THYAO,AKBNK,GARAN,YKBNK
 RISK_MAX_DAILY_TRADE_COUNT=5
 RISK_DISABLE_TRADING_AFTER=18:00
+RISK_TIMEZONE=Europe/Istanbul
 ```
 
 ## Project Structure

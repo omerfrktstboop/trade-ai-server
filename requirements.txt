@@ -10,3 +10,4 @@ pytest-asyncio
 aiohttp
 httpx
 aiosqlite
+tzdata

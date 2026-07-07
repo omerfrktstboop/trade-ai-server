@@ -21,7 +21,19 @@ from app.db.session import async_session_factory
 from app.models.db import AiDecision as AiDecisionModel
 from app.models.db import MarketSnapshot
 from app.models.db import RiskDecision as RiskDecisionModel
-from app.models.signal import EntryRange, SignalAction, SignalRequest, SignalResponse
+from app.models.signal import (
+    AgentAction,
+    AgentSignalResponse,
+    DataRequestType,
+    EntryRange,
+    FetchData,
+    OrderType,
+    SignalAction,
+    SignalRequest,
+    SignalResponse,
+)
+from app.services.agent_planner import plan_next_action
+from app.services.agent_session import agent_session_store
 from app.services.ai_provider import get_default_provider
 from app.services.broker_flow_service import get_broker_flow_context
 from app.services.daily_trade_count import get_today_trade_counts
@@ -328,3 +340,135 @@ async def _persist_to_db(
             req.request_id,
             req.symbol,
         )
+
+
+# ── Agent endpoint ────────────────────────────────────────────────────────────
+
+
+@router.post("/signal/evaluate-agent")
+async def evaluate_signal_agent(body: SignalRequest) -> AgentSignalResponse:
+    """Evaluate a trading signal with agentic multi-turn data gathering.
+
+    Flow:
+    1. Create or resume session
+    ...[truncated]
+    If not provided, a new session is created.
+
+    Flow:
+    1. Create or resume session
+    2. If session expired → WAIT
+    3. Planner decides: FETCH_DATA or final
+    4. FETCH_DATA → return AgentSignalResponse with fetchData
+    5. Final → AI.decide() → RiskEngine → AgentSignalResponse
+    """
+    request_id = body.request_id
+    raw_session_id = body.session_id  # from the SignalRequest model (alias="sessionId")
+    extra = body.model_extra or {}
+
+    # ── 1. Session management ────────────────────────────────────────
+    session, was_expired_or_missing = agent_session_store.get_or_create(
+        session_id=raw_session_id or "",
+        symbol=body.symbol,
+        mode=body.mode.value,
+    )
+
+    # If the caller sent a sessionId but it was expired/missing → WAIT
+    if raw_session_id and was_expired_or_missing:
+        return AgentSignalResponse(
+            requestId=request_id,
+            symbol=body.symbol,
+            sessionId=raw_session_id,
+            action=AgentAction.WAIT,
+            reason="Session expired or not found",
+        )
+
+    # ── 2. Accumulate context for existing sessions ──────────────────
+    if not was_expired_or_missing:
+        # This is an existing session — stash incoming data before planning
+        session.add_context("market_data", extra)
+        agent_session_store.update(session)
+
+    # ── 3. Planner decides next action ─────────────────────────────────
+    plan = plan_next_action(session)
+
+    # ── 4. FETCH_DATA path ────────────────────────────────────────────
+    if plan.action == AgentAction.FETCH_DATA and plan.fetch_data is not None:
+        session.tool_calls += 1
+        return AgentSignalResponse(
+            requestId=request_id,
+            symbol=body.symbol,
+            sessionId=session.session_id,
+            action=AgentAction.FETCH_DATA,
+            fetchData=plan.fetch_data,
+            allowOrder=False,
+            reason=plan.reason,
+        )
+
+    # ── 5. WAIT from planner (invalid symbol etc.) ───────────────────
+    if plan.action == AgentAction.WAIT and plan.fetch_data is None:
+        return AgentSignalResponse(
+            requestId=request_id,
+            symbol=body.symbol,
+            sessionId=session.session_id,
+            action=AgentAction.WAIT,
+            allowOrder=False,
+            reason=plan.reason,
+        )
+
+    # ── 6. Final decision: run through AI + RiskEngine ────────────────
+    # Build full payload including accumulated context
+    news_context = extra.get("newsContext")
+    fund_context = extra.get("fundContext")
+    broker_flow_context = extra.get("brokerFlowContext")
+    payload = _build_payload(
+        body,
+        news_context=news_context,  # type: ignore[arg-type]
+        fund_context=fund_context,  # type: ignore[arg-type]
+        broker_flow_context=broker_flow_context,  # type: ignore[arg-type]
+    )
+
+    # Inject fetched context into payload
+    for key, value in session.context_data.items():
+        if key not in payload:
+            payload[key] = value
+
+    # ── Ask AI provider ─────────────────────────────────────────────
+    raw = await _provider.decide(payload)
+    decision = _dict_to_risk_decision(raw, body)
+
+    # Resolve daily trade count
+    body_enriched = await _with_resolved_daily_trade_count(body)
+
+    # ── Risk engine ─────────────────────────────────────────────────
+    response = _risk_engine.evaluate(body_enriched, decision)
+
+    # ── Clean up session (final decision made) ──────────────────────
+    agent_session_store.remove(session.session_id)
+
+    # ── Log + persist ───────────────────────────────────────────────
+    log_signal_evaluation(
+        request_id=request_id,
+        symbol=body.symbol,
+        mode=body.mode.value,
+        request=body.model_dump(by_alias=True, exclude={"mode"}),
+        response=response.model_dump(by_alias=True),
+    )
+    await _persist_to_db(body, payload, raw, response)
+
+    return AgentSignalResponse(
+        requestId=response.request_id,
+        symbol=response.symbol,
+        sessionId=session.session_id,
+        action=AgentAction(response.action.value),
+        qty=response.qty,
+        orderType=response.order_type,
+        price=response.price,
+        confidenceScore=response.confidence_score,
+        riskScore=response.risk_score,
+        allowOrder=response.allow_order,
+        requiresConfirmation=response.requires_confirmation,
+        reason=response.reason,
+        entryRange=response.entry_range,
+        stopLoss=response.stop_loss,
+        targetPrice=response.target_price,
+    )

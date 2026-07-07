@@ -1665,8 +1665,8 @@ namespace Matriks.Lean.Algotrader
         {
             string value = NormalizeTimeInForce(OrderTimeInForce);
             if (value == "GOOD_TILL_CANCEL")
-                return TimeInForce.GoodTillCancel;
-            return TimeInForce.Day;
+                return new TimeInForce(TimeInForce.GoodTillCancel);
+            return new TimeInForce(TimeInForce.Day);
         }
 
         private static decimal ToDecimal(double value)

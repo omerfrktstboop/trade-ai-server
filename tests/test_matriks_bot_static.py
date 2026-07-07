@@ -24,8 +24,8 @@ def test_send_limit_order_uses_documented_signature():
     assert "RoundPriceStepBistViop(symbol, limitPrice)" in source
     assert "ChartIcon.Buy" in source
     assert "ChartIcon.Sell" in source
-    assert "TimeInForce.Day" in source
-    assert "TimeInForce.GoodTillCancel" in source
+    assert "new TimeInForce(TimeInForce.Day)" in source
+    assert "new TimeInForce(TimeInForce.GoodTillCancel)" in source
     assert "SendLimitOrder(symbol, qty, orderSide, limitPrice)" not in source
 
 

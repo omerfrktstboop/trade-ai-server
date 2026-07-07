@@ -133,3 +133,37 @@ class TestNewsInPayload:
         payload = _build_payload(req, news_context=None)
 
         assert "newsContext" not in payload
+
+    def test_build_payload_includes_technical_features_when_present(self):
+        from app.models.signal import SignalMode, SignalRequest
+        from app.routers.signal import _build_payload
+
+        req = SignalRequest(
+            requestId="test-technical-1",
+            symbol="THYAO",
+            timeframe="1h",
+            lastPrice=100.0,
+            open=99.0,
+            high=102.0,
+            low=98.0,
+            volume=1000.0,
+            rsi=50.0,
+            ema20=98.0,
+            ema50=95.0,
+            alphaTrendSignal="BUY",
+            indicatorBuyCount=4,
+            indicatorSellCount=1,
+            indicatorConsensus="BUY",
+            natr=2.4,
+            depthQueueDropPct=12.0,
+            mode=SignalMode.MANUAL,
+        )
+
+        payload = _build_payload(req)
+
+        assert payload["alphaTrendSignal"] == "BUY"
+        assert payload["indicatorConsensus"] == "BUY"
+        assert payload["natr"] == 2.4
+        assert payload["depthQueueDropPct"] == 12.0
+        assert payload["technicalFeatures"]["schemaVersion"] == "technical-features-v1"
+        assert payload["technicalFeatures"]["indicatorBuyCount"] == 4

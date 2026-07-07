@@ -89,3 +89,21 @@ def test_demo_account_gate_logs_trade_user_permissions():
     assert "tradeUser.AutoOrder" in source
     assert "tradeUser.TestAutoOrder" in source
     assert "_testAutoOrderEnabled.Value" in source
+
+
+def test_matriks_payload_includes_ai_server_technical_features():
+    source = _bot_source()
+
+    for field in (
+        'payload["technicalFeatures"]',
+        'features["alphaTrendSignal"]',
+        'features["alphaTrendMode"] = "PROXY_EMA_MACD_RSI"',
+        'features["indicatorBuyCount"]',
+        'features["indicatorSellCount"]',
+        'features["indicatorConsensus"]',
+        'features["depthQueueDropPct"]',
+        "CalculateAtrFromClose(symbol, 14)",
+        "CalculateNatrPct(symbol, 14)",
+        "_maxBid1SizeBySymbol",
+    ):
+        assert field in source

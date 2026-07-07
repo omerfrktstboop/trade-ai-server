@@ -35,6 +35,18 @@ kararıyla döner.
   "ema50": 68.90,
   "macd": 0.45,
   "macdSignal": 0.30,
+  "technicalFeatures": {
+    "schemaVersion": "technical-features-v1",
+    "alphaTrendSignal": "BUY",
+    "alphaTrendMode": "PROXY_EMA_MACD_RSI",
+    "indicatorBuyCount": 4,
+    "indicatorSellCount": 1,
+    "indicatorConsensus": "BUY",
+    "atr": 1.25,
+    "natr": 1.75,
+    "depthQueueDropPct": 8.5,
+    "marketRegime": "TRENDING"
+  },
   "botPositionQty": 0,
   "totalAccountQty": 120,
   "lockedLongTermQty": 50,
@@ -60,6 +72,7 @@ kararıyla döner.
 | `ema50` | float | ❌ | 50 periyot EMA |
 | `macd` | float | ❌ | MACD çizgisi |
 | `macdSignal` | float | ❌ | MACD sinyal çizgisi |
+| `technicalFeatures` | object | ❌ | Matriks tarafında hesaplanan opsiyonel teknik feature bloğu. `alphaTrendSignal`, `indicatorConsensus`, `atr`, `natr`, `depthQueueDropPct`, `marketRegime` gibi alanlar AI payload'una girer; RiskEngine bu alanları yalnızca mevcutsa koruyucu filtre olarak kullanır. |
 | `botPositionQty` | float | ❌ | Bot'un şu anda tuttuğu lot (varsayılan: `0`) — SELL clamp için üst sınır |
 | `totalAccountQty` | float | ❌ | Hesaptaki toplam lot (varsayılan: `0`) — `lockedLongTermQty` ile birlikte serbest lot hesabında kullanılır |
 | `lockedLongTermQty` | float | ❌ | Uzun vade kilitli lot (varsayılan: `0`) — hiçbir koşulda satılamaz. `accountFreeQty = max(0, totalAccountQty − lockedLongTermQty)` |
@@ -394,6 +407,7 @@ Matriks IQ                           trade-ai-server
 - **LIVE modunda** risk kontrolleri geçerse `allowOrder: true` dönebilir, `requiresConfirmation: false`.
 - **Cutoff kontrolü:** `disableTradingAfter` (varsayılan `17:30`) saatinden sonra BUY/SELL otomatik engellenir (`reason: "Trading blocked: after cutoff time 17:30"`). WAIT kararları etkilenmez.
 - **Günlük işlem limiti:** `maxDailyTradeCount` (varsayılan `3`) aşıldığında BUY/SELL engellenir. Matriks IQ `dailyTradeCount` gönderebilir; göndermezse sunucu RiskEngine öncesinde bugünkü işlem sayısını `order_logs` / `risk_decisions` üzerinden hesaplar.
+- **Teknik feature filtreleri:** Matriks `alphaTrendSignal`, `indicatorConsensus`, `natr` ve `depthQueueDropPct` gönderebilir. BUY, yüksek `natr`, sert bid queue düşüşü veya güçlü karşı teknik consensus varsa engellenebilir. Alanlar gönderilmezse eski davranış korunur.
 - **SELL qty clamp:** `sellableQty = min(botPositionQty, max(0, totalAccountQty − lockedLongTermQty))`. Bot yalnızca kendi pozisyonu kadar ve hesaptaki serbest lot kadar satabilir. `accountFreeQty ≤ 0` ise SELL tamamen engellenir (`action=WAIT`).
 - `confidenceScore < 70` genelde `allowOrder: false` ile sonuçlanır (risk eşikleri).
 - Sunucu `requestId`'yi aynen döndürür — Matriks tarafında request/response eşleşmesi için kullanın.

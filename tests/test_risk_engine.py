@@ -67,6 +67,7 @@ def _cfg(**kwargs) -> RiskConfig:
         allow_sell_long_term=False,
         allow_short_selling=False,
         disable_trading_after="23:59",
+        timezone="Etc/GMT+12",
     )
     defaults.update(kwargs)
     return RiskConfig(**defaults, _env_file="")
@@ -1044,3 +1045,69 @@ class TestMaxPositionValue:
         dec = _make_buy_decision(confidence=85.0, qty=5)  # 5*100 = 500
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
+
+
+class TestTechnicalFeatureGuards:
+    """Optional Matriks-derived features can veto unsafe directional trades."""
+
+    def test_alpha_trend_sell_blocks_buy(self):
+        engine = RiskEngine(_cfg())
+        req = _make_request(
+            symbol="THYAO",
+            mode=SignalMode.LIVE,
+            alphaTrendSignal="SELL",
+        )
+        resp = engine.evaluate(req, _make_buy_decision())
+
+        assert resp.action == SignalAction.WAIT
+        assert resp.allow_order is False
+        assert "alphaTrendSignal=SELL" in resp.reason
+
+    def test_strong_indicator_sell_consensus_blocks_buy(self):
+        engine = RiskEngine(_cfg())
+        req = _make_request(
+            symbol="THYAO",
+            mode=SignalMode.LIVE,
+            indicatorConsensus="SELL",
+            indicatorSellCount=4,
+        )
+        resp = engine.evaluate(req, _make_buy_decision())
+
+        assert resp.action == SignalAction.WAIT
+        assert resp.allow_order is False
+        assert "indicatorConsensus=SELL" in resp.reason
+
+    def test_weak_opposing_consensus_does_not_block_by_itself(self):
+        engine = RiskEngine(_cfg())
+        req = _make_request(
+            symbol="THYAO",
+            mode=SignalMode.LIVE,
+            indicatorConsensus="SELL",
+            indicatorSellCount=2,
+        )
+        resp = engine.evaluate(req, _make_buy_decision())
+
+        assert resp.action == SignalAction.BUY
+        assert resp.allow_order is True
+
+    def test_high_natr_blocks_new_buy(self):
+        engine = RiskEngine(_cfg(max_natr_for_buy=8.0))
+        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE, natr=12.5)
+        resp = engine.evaluate(req, _make_buy_decision())
+
+        assert resp.action == SignalAction.WAIT
+        assert resp.allow_order is False
+        assert "nATR" in resp.reason
+
+    def test_depth_queue_drop_blocks_new_buy(self):
+        engine = RiskEngine(_cfg(max_depth_queue_drop_pct_for_buy=35.0))
+        req = _make_request(
+            symbol="THYAO",
+            mode=SignalMode.LIVE,
+            depthQueueDropPct=42.0,
+        )
+        resp = engine.evaluate(req, _make_buy_decision())
+
+        assert resp.action == SignalAction.WAIT
+        assert resp.allow_order is False
+        assert "bid queue dropped" in resp.reason

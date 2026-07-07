@@ -47,6 +47,7 @@ def _cfg(**kwargs) -> RiskConfig:
         min_confidence_for_sell=70,
         allow_sell_long_term=False,
         disable_trading_after="23:59",
+        timezone="Etc/GMT+12",
     )
     defaults.update(kwargs)
     return RiskConfig(**defaults, _env_file=None)

@@ -122,6 +122,29 @@ class SignalRequest(BaseModel):
     macd: Optional[float] = None
     macd_signal: Optional[float] = Field(None, alias="macdSignal")
 
+    # Optional Matriks-derived technical feature layer. These fields are
+    # signal inputs only; RiskEngine treats them as guards when present.
+    alpha_trend_signal: Optional[str] = Field(None, alias="alphaTrendSignal")
+    alpha_trend_mode: Optional[str] = Field(None, alias="alphaTrendMode")
+    indicator_buy_count: Optional[int] = Field(None, alias="indicatorBuyCount", ge=0)
+    indicator_sell_count: Optional[int] = Field(None, alias="indicatorSellCount", ge=0)
+    indicator_neutral_count: Optional[int] = Field(
+        None, alias="indicatorNeutralCount", ge=0
+    )
+    indicator_consensus: Optional[str] = Field(None, alias="indicatorConsensus")
+    indicator_consensus_ratio: Optional[float] = Field(
+        None, alias="indicatorConsensusRatio", ge=0, le=1
+    )
+    atr: Optional[float] = None
+    natr: Optional[float] = None
+    adx: Optional[float] = None
+    obv_slope: Optional[float] = Field(None, alias="obvSlope")
+    vwap_distance_pct: Optional[float] = Field(None, alias="vwapDistancePct")
+    depth_bid1_size: Optional[float] = Field(None, alias="depthBid1Size")
+    depth_bid1_max_size: Optional[float] = Field(None, alias="depthBid1MaxSize")
+    depth_queue_drop_pct: Optional[float] = Field(None, alias="depthQueueDropPct")
+    market_regime: Optional[str] = Field(None, alias="marketRegime")
+
     # Position context
     bot_position_qty: float = Field(0.0, alias="botPositionQty")
     total_account_qty: float = Field(0.0, alias="totalAccountQty")

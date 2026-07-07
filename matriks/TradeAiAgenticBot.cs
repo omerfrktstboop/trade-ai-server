@@ -121,6 +121,7 @@ namespace Matriks.Lean.Algotrader
         private readonly ConcurrentDictionary<string, int> _dailyTradeCountBySymbol = new ConcurrentDictionary<string, int>();
         private readonly ConcurrentDictionary<string, decimal> _botPositionQtyBySymbol = new ConcurrentDictionary<string, decimal>();
         private readonly ConcurrentDictionary<string, List<decimal>> _closeHistoryBySymbol = new ConcurrentDictionary<string, List<decimal>>();
+        private readonly ConcurrentDictionary<string, decimal> _maxBid1SizeBySymbol = new ConcurrentDictionary<string, decimal>();
         private readonly ConcurrentDictionary<string, PendingOrderContext> _pendingOrdersBySymbolSide = new ConcurrentDictionary<string, PendingOrderContext>();
         private readonly ConcurrentDictionary<string, PendingOrderContext> _pendingOrdersByOrderId = new ConcurrentDictionary<string, PendingOrderContext>();
 
@@ -536,22 +537,69 @@ namespace Matriks.Lean.Algotrader
             decimal bestBid = 0m;
             decimal secondBid = 0m;
             decimal thirdBid = 0m;
+            decimal bid1Size = 0m;
+            decimal ask1Size = 0m;
+            decimal maxBid1Size = 0m;
+            decimal depthQueueDropPct = 0m;
             string depthSummary = "";
             try
             {
                 var depth = GetMarketDepth(symbol);
-                if (depth != null && depth.BidRows != null && depth.BidRows.Count >= 3)
+                if (depth != null && depth.BidRows != null && depth.BidRows.Count >= 1)
                 {
                     bestBid = depth.BidRows[0].Price;
-                    secondBid = depth.BidRows[1].Price;
-                    thirdBid = depth.BidRows[2].Price;
-                    depthSummary = "bestBid=" + bestBid + ";secondBid=" + secondBid + ";thirdBid=" + thirdBid;
+                    bid1Size = depth.BidRows[0].Size;
+                    maxBid1Size = _maxBid1SizeBySymbol.AddOrUpdate(
+                        symbol,
+                        bid1Size,
+                        (_, existing) => bid1Size > existing ? bid1Size : existing);
+
+                    if (maxBid1Size > 0m)
+                    {
+                        depthQueueDropPct = Math.Max(0m, (maxBid1Size - bid1Size) / maxBid1Size * 100m);
+                    }
                 }
+                if (depth != null && depth.BidRows != null && depth.BidRows.Count >= 2)
+                {
+                    secondBid = depth.BidRows[1].Price;
+                }
+                if (depth != null && depth.BidRows != null && depth.BidRows.Count >= 3)
+                {
+                    thirdBid = depth.BidRows[2].Price;
+                }
+                if (depth != null && depth.AskRows != null && depth.AskRows.Count >= 1)
+                {
+                    ask1Size = depth.AskRows[0].Size;
+                }
+
+                depthSummary = "bestBid=" + bestBid
+                    + ";secondBid=" + secondBid
+                    + ";thirdBid=" + thirdBid
+                    + ";bid1Size=" + bid1Size
+                    + ";maxBid1Size=" + maxBid1Size
+                    + ";depthQueueDropPct=" + depthQueueDropPct;
             }
             catch (Exception ex)
             {
                 depthSummary = "depth unavailable: " + ex.Message;
             }
+
+            double? rsi = CalculateRsi(symbol, 14);
+            double? ema20 = CalculateEma(symbol, 20);
+            double? ema50 = CalculateEma(symbol, 50);
+            double? macd = CalculateMacdLine(symbol);
+            double? macdSignal = CalculateMacdSignal(symbol);
+            var technicalFeatures = BuildTechnicalFeaturePayload(
+                symbol,
+                lastPrice,
+                rsi,
+                ema20,
+                ema50,
+                macd,
+                macdSignal,
+                bid1Size,
+                maxBid1Size,
+                depthQueueDropPct);
 
             var payload = new Dictionary<string, object>();
             payload["lastPrice"] = ToDouble(lastPrice);
@@ -560,15 +608,15 @@ namespace Matriks.Lean.Algotrader
             payload["low"] = ToDouble(low);
             payload["ohlcReliable"] = ohlcReliable;
             payload["volume"] = ToDouble(volume);
-            payload["rsi"] = CalculateRsi(symbol, 14);
-            payload["ema20"] = CalculateEma(symbol, 20);
-            payload["ema50"] = CalculateEma(symbol, 50);
-            payload["macd"] = CalculateMacdLine(symbol);
-            payload["macdSignal"] = CalculateMacdSignal(symbol);
+            payload["rsi"] = rsi;
+            payload["ema20"] = ema20;
+            payload["ema50"] = ema50;
+            payload["macd"] = macd;
+            payload["macdSignal"] = macdSignal;
             payload["bidPrice"] = ToDouble(bidPrice);
             payload["askPrice"] = ToDouble(askPrice);
-            payload["bidVolume"] = 0;
-            payload["askVolume"] = 0;
+            payload["bidVolume"] = ToDouble(bid1Size);
+            payload["askVolume"] = ToDouble(ask1Size);
             payload["bestBid"] = ToDouble(bestBid);
             payload["secondBid"] = ToDouble(secondBid);
             payload["thirdBid"] = ToDouble(thirdBid);
@@ -577,6 +625,11 @@ namespace Matriks.Lean.Algotrader
             payload["totalAccountQty"] = ToDouble(GetTotalAccountQty(symbol));
             payload["lockedLongTermQty"] = ToDouble(GetLockedLongTermQty(symbol));
             payload["dailyTradeCount"] = GetDailyTradeCount(symbol);
+            foreach (var item in technicalFeatures)
+            {
+                payload[item.Key] = item.Value;
+            }
+            payload["technicalFeatures"] = technicalFeatures;
 
             return new MarketDataPayload
             {
@@ -1108,6 +1161,19 @@ namespace Matriks.Lean.Algotrader
             request.Ema50 = GetPayloadNullableDouble(payload, "ema50");
             request.Macd = GetPayloadNullableDouble(payload, "macd");
             request.MacdSignal = GetPayloadNullableDouble(payload, "macdSignal");
+            request.AlphaTrendSignal = GetPayloadString(payload, "alphaTrendSignal");
+            request.AlphaTrendMode = GetPayloadString(payload, "alphaTrendMode");
+            request.IndicatorBuyCount = Convert.ToInt32(GetPayloadDouble(payload, "indicatorBuyCount"));
+            request.IndicatorSellCount = Convert.ToInt32(GetPayloadDouble(payload, "indicatorSellCount"));
+            request.IndicatorNeutralCount = Convert.ToInt32(GetPayloadDouble(payload, "indicatorNeutralCount"));
+            request.IndicatorConsensus = GetPayloadString(payload, "indicatorConsensus");
+            request.IndicatorConsensusRatio = GetPayloadNullableDouble(payload, "indicatorConsensusRatio");
+            request.Atr = GetPayloadNullableDouble(payload, "atr");
+            request.Natr = GetPayloadNullableDouble(payload, "natr");
+            request.DepthBid1Size = GetPayloadNullableDouble(payload, "depthBid1Size");
+            request.DepthBid1MaxSize = GetPayloadNullableDouble(payload, "depthBid1MaxSize");
+            request.DepthQueueDropPct = GetPayloadNullableDouble(payload, "depthQueueDropPct");
+            request.MarketRegime = GetPayloadString(payload, "marketRegime");
             request.BotPositionQty = GetPayloadDouble(payload, "botPositionQty");
             request.TotalAccountQty = GetPayloadDouble(payload, "totalAccountQty");
             request.LockedLongTermQty = GetPayloadDouble(payload, "lockedLongTermQty");
@@ -1245,6 +1311,160 @@ namespace Matriks.Lean.Algotrader
             return CalculateEma(macdValues, 9);
         }
 
+        private Dictionary<string, object> BuildTechnicalFeaturePayload(
+            string symbol,
+            decimal lastPrice,
+            double? rsi,
+            double? ema20,
+            double? ema50,
+            double? macd,
+            double? macdSignal,
+            decimal bid1Size,
+            decimal maxBid1Size,
+            decimal depthQueueDropPct)
+        {
+            var features = new Dictionary<string, object>();
+            var consensus = CalculateIndicatorConsensus(lastPrice, rsi, ema20, ema50, macd, macdSignal);
+            double? atr = CalculateAtrFromClose(symbol, 14);
+            double? natr = CalculateNatrPct(symbol, 14);
+
+            features["schemaVersion"] = "technical-features-v1";
+            features["alphaTrendSignal"] = CalculateAlphaTrendProxySignal(rsi, ema20, ema50, macd, macdSignal);
+            features["alphaTrendMode"] = "PROXY_EMA_MACD_RSI";
+            features["indicatorBuyCount"] = consensus.BuyCount;
+            features["indicatorSellCount"] = consensus.SellCount;
+            features["indicatorNeutralCount"] = consensus.NeutralCount;
+            features["indicatorConsensus"] = consensus.Signal;
+            features["indicatorConsensusRatio"] = consensus.Ratio;
+            AddIfNotNull(features, "atr", atr);
+            AddIfNotNull(features, "natr", natr);
+            features["depthBid1Size"] = ToDouble(bid1Size);
+            features["depthBid1MaxSize"] = ToDouble(maxBid1Size);
+            features["depthQueueDropPct"] = ToDouble(depthQueueDropPct);
+            features["marketRegime"] = ClassifyMarketRegime(natr, consensus);
+
+            return features;
+        }
+
+        private IndicatorConsensus CalculateIndicatorConsensus(
+            decimal lastPrice,
+            double? rsi,
+            double? ema20,
+            double? ema50,
+            double? macd,
+            double? macdSignal)
+        {
+            int buy = 0;
+            int sell = 0;
+            int neutral = 0;
+
+            AddVote(ref buy, ref sell, ref neutral, rsi.HasValue && rsi.Value < 35, rsi.HasValue && rsi.Value > 70);
+            AddVote(ref buy, ref sell, ref neutral, ema20.HasValue && lastPrice > ToDecimal(ema20.Value), ema20.HasValue && lastPrice < ToDecimal(ema20.Value));
+            AddVote(ref buy, ref sell, ref neutral, ema20.HasValue && ema50.HasValue && ema20.Value > ema50.Value, ema20.HasValue && ema50.HasValue && ema20.Value < ema50.Value);
+            AddVote(ref buy, ref sell, ref neutral, macd.HasValue && macdSignal.HasValue && macd.Value > macdSignal.Value, macd.HasValue && macdSignal.HasValue && macd.Value < macdSignal.Value);
+            AddVote(ref buy, ref sell, ref neutral, ema50.HasValue && lastPrice > ToDecimal(ema50.Value), ema50.HasValue && lastPrice < ToDecimal(ema50.Value));
+
+            int total = buy + sell + neutral;
+            string signal = "NEUTRAL";
+            int maxDirectional = Math.Max(buy, sell);
+            if (buy >= 4)
+                signal = "BUY";
+            else if (sell >= 4)
+                signal = "SELL";
+
+            return new IndicatorConsensus
+            {
+                BuyCount = buy,
+                SellCount = sell,
+                NeutralCount = neutral,
+                Signal = signal,
+                Ratio = total > 0 ? ToDouble((decimal)maxDirectional / total) : 0
+            };
+        }
+
+        private static void AddVote(ref int buy, ref int sell, ref int neutral, bool buyCondition, bool sellCondition)
+        {
+            if (buyCondition && !sellCondition)
+                buy++;
+            else if (sellCondition && !buyCondition)
+                sell++;
+            else
+                neutral++;
+        }
+
+        private string CalculateAlphaTrendProxySignal(
+            double? rsi,
+            double? ema20,
+            double? ema50,
+            double? macd,
+            double? macdSignal)
+        {
+            if (!rsi.HasValue || !ema20.HasValue || !ema50.HasValue || !macd.HasValue || !macdSignal.HasValue)
+                return "NEUTRAL";
+
+            bool trendUp = ema20.Value > ema50.Value;
+            bool trendDown = ema20.Value < ema50.Value;
+            bool momentumUp = macd.Value > macdSignal.Value && rsi.Value >= 40 && rsi.Value <= 75;
+            bool momentumDown = macd.Value < macdSignal.Value && rsi.Value >= 25;
+
+            if (trendUp && momentumUp)
+                return "BUY";
+            if (trendDown && momentumDown)
+                return "SELL";
+            return "NEUTRAL";
+        }
+
+        private double? CalculateAtrFromClose(string symbol, int period)
+        {
+            var closes = new List<decimal>();
+            lock (_closeLock)
+            {
+                closes = new List<decimal>(GetCloseHistory(symbol));
+            }
+
+            if (closes.Count <= period)
+                return null;
+
+            decimal totalRange = 0m;
+            for (int i = closes.Count - period; i < closes.Count; i++)
+            {
+                totalRange += Math.Abs(closes[i] - closes[i - 1]);
+            }
+
+            return ToDouble(totalRange / period);
+        }
+
+        private double? CalculateNatrPct(string symbol, int period)
+        {
+            double? atr = CalculateAtrFromClose(symbol, period);
+            if (!atr.HasValue)
+                return null;
+
+            decimal lastClose = 0m;
+            lock (_closeLock)
+            {
+                var closes = GetCloseHistory(symbol);
+                if (closes.Count > 0)
+                    lastClose = closes[closes.Count - 1];
+            }
+
+            if (lastClose <= 0m)
+                return null;
+
+            return ToDouble(ToDecimal(atr.Value) / lastClose * 100m);
+        }
+
+        private string ClassifyMarketRegime(double? natr, IndicatorConsensus consensus)
+        {
+            if (natr.HasValue && natr.Value >= 8)
+                return "HIGH_VOLATILITY";
+            if (consensus.Signal == "BUY" || consensus.Signal == "SELL")
+                return "TRENDING";
+            if (natr.HasValue && natr.Value <= 2)
+                return "RANGE_LOW_VOLATILITY";
+            return "NEUTRAL";
+        }
+
         // ── Daily counter management ─────────────────────────────────
 
         private void IncrementDailyTradeCount(string symbol)
@@ -1265,6 +1485,7 @@ namespace Matriks.Lean.Algotrader
 
                 _dailyCounterDate = DateTime.Today;
                 _dailyTradeCountBySymbol.Clear();
+                _maxBid1SizeBySymbol.Clear();
                 foreach (string symbol in AllowedSymbols)
                 {
                     _dailyTradeCountBySymbol[NormalizeSymbol(symbol)] = 0;
@@ -1404,6 +1625,14 @@ namespace Matriks.Lean.Algotrader
             return Convert.ToDouble(value);
         }
 
+        private static void AddIfNotNull(Dictionary<string, object> payload, string key, double? value)
+        {
+            if (value.HasValue)
+            {
+                payload[key] = value.Value;
+            }
+        }
+
         private static bool TryConvertOrderQuantity(decimal qty, out int quantity, out string error)
         {
             quantity = 0;
@@ -1458,6 +1687,13 @@ namespace Matriks.Lean.Algotrader
             return Convert.ToDouble(payload[key]);
         }
 
+        private static string GetPayloadString(Dictionary<string, object> payload, string key)
+        {
+            if (payload == null || !payload.ContainsKey(key) || payload[key] == null)
+                return null;
+            return Convert.ToString(payload[key]);
+        }
+
         // ── Debug output ────────────────────────────────────────────
 
         private void SafeDebug(string message)
@@ -1470,6 +1706,15 @@ namespace Matriks.Lean.Algotrader
             {
                 // Debug should never break trading flow.
             }
+        }
+
+        private class IndicatorConsensus
+        {
+            public int BuyCount { get; set; }
+            public int SellCount { get; set; }
+            public int NeutralCount { get; set; }
+            public string Signal { get; set; }
+            public double Ratio { get; set; }
         }
     }
 
@@ -1531,6 +1776,45 @@ namespace Matriks.Lean.Algotrader
 
         [JsonProperty("macdSignal", NullValueHandling = NullValueHandling.Ignore)]
         public double? MacdSignal { get; set; }
+
+        [JsonProperty("alphaTrendSignal", NullValueHandling = NullValueHandling.Ignore)]
+        public string AlphaTrendSignal { get; set; }
+
+        [JsonProperty("alphaTrendMode", NullValueHandling = NullValueHandling.Ignore)]
+        public string AlphaTrendMode { get; set; }
+
+        [JsonProperty("indicatorBuyCount")]
+        public int IndicatorBuyCount { get; set; }
+
+        [JsonProperty("indicatorSellCount")]
+        public int IndicatorSellCount { get; set; }
+
+        [JsonProperty("indicatorNeutralCount")]
+        public int IndicatorNeutralCount { get; set; }
+
+        [JsonProperty("indicatorConsensus", NullValueHandling = NullValueHandling.Ignore)]
+        public string IndicatorConsensus { get; set; }
+
+        [JsonProperty("indicatorConsensusRatio", NullValueHandling = NullValueHandling.Ignore)]
+        public double? IndicatorConsensusRatio { get; set; }
+
+        [JsonProperty("atr", NullValueHandling = NullValueHandling.Ignore)]
+        public double? Atr { get; set; }
+
+        [JsonProperty("natr", NullValueHandling = NullValueHandling.Ignore)]
+        public double? Natr { get; set; }
+
+        [JsonProperty("depthBid1Size", NullValueHandling = NullValueHandling.Ignore)]
+        public double? DepthBid1Size { get; set; }
+
+        [JsonProperty("depthBid1MaxSize", NullValueHandling = NullValueHandling.Ignore)]
+        public double? DepthBid1MaxSize { get; set; }
+
+        [JsonProperty("depthQueueDropPct", NullValueHandling = NullValueHandling.Ignore)]
+        public double? DepthQueueDropPct { get; set; }
+
+        [JsonProperty("marketRegime", NullValueHandling = NullValueHandling.Ignore)]
+        public string MarketRegime { get; set; }
 
         [JsonProperty("botPositionQty")]
         public double BotPositionQty { get; set; }

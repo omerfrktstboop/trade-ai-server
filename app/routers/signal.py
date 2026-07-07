@@ -157,9 +157,14 @@ def _build_payload(
         "botPositionQty": req.bot_position_qty,
         "totalAccountQty": req.total_account_qty,
         "lockedLongTermQty": req.locked_long_term_qty,
+        "dailyTradeCount": req.daily_trade_count,
         "allowedSymbols": sorted(config._allowed_set()),
         "lockedSymbols": sorted(config._locked_set()),
     }
+    technical_features = _build_technical_feature_payload(req)
+    if technical_features:
+        payload.update(technical_features)
+        payload["technicalFeatures"] = technical_features
     if news_context:
         payload["newsContext"] = news_context
     if fund_context:
@@ -167,6 +172,32 @@ def _build_payload(
     if broker_flow_context:
         payload["brokerFlowContext"] = broker_flow_context
     return payload
+
+
+def _build_technical_feature_payload(req: SignalRequest) -> dict[str, Any]:
+    """Return optional Matriks-derived technical features for AI payloads."""
+    fields = {
+        "alphaTrendSignal": req.alpha_trend_signal,
+        "alphaTrendMode": req.alpha_trend_mode,
+        "indicatorBuyCount": req.indicator_buy_count,
+        "indicatorSellCount": req.indicator_sell_count,
+        "indicatorNeutralCount": req.indicator_neutral_count,
+        "indicatorConsensus": req.indicator_consensus,
+        "indicatorConsensusRatio": req.indicator_consensus_ratio,
+        "atr": req.atr,
+        "natr": req.natr,
+        "adx": req.adx,
+        "obvSlope": req.obv_slope,
+        "vwapDistancePct": req.vwap_distance_pct,
+        "depthBid1Size": req.depth_bid1_size,
+        "depthBid1MaxSize": req.depth_bid1_max_size,
+        "depthQueueDropPct": req.depth_queue_drop_pct,
+        "marketRegime": req.market_regime,
+    }
+    result = {key: value for key, value in fields.items() if value is not None}
+    if result:
+        result["schemaVersion"] = "technical-features-v1"
+    return result
 
 
 async def _with_runtime_controls(
@@ -422,6 +453,15 @@ async def _persist_to_db(
 # ── Agent endpoint (v2 — AgenticSignalRequest → AgenticSignalResponse) ─────
 
 
+def _payload_get(payload: dict[str, Any], key: str, default: Any = None) -> Any:
+    if key in payload:
+        return payload.get(key)
+    nested = payload.get("technicalFeatures")
+    if isinstance(nested, dict):
+        return nested.get(key, default)
+    return default
+
+
 def _agentic_to_signal_request(
     agentic: AgenticSignalRequest,
     session_id: str = "",
@@ -446,6 +486,22 @@ def _agentic_to_signal_request(
         ema50=p.get("ema50"),
         macd=p.get("macd"),
         macdSignal=p.get("macdSignal"),
+        alphaTrendSignal=_payload_get(p, "alphaTrendSignal"),
+        alphaTrendMode=_payload_get(p, "alphaTrendMode"),
+        indicatorBuyCount=_payload_get(p, "indicatorBuyCount"),
+        indicatorSellCount=_payload_get(p, "indicatorSellCount"),
+        indicatorNeutralCount=_payload_get(p, "indicatorNeutralCount"),
+        indicatorConsensus=_payload_get(p, "indicatorConsensus"),
+        indicatorConsensusRatio=_payload_get(p, "indicatorConsensusRatio"),
+        atr=_payload_get(p, "atr"),
+        natr=_payload_get(p, "natr"),
+        adx=_payload_get(p, "adx"),
+        obvSlope=_payload_get(p, "obvSlope"),
+        vwapDistancePct=_payload_get(p, "vwapDistancePct"),
+        depthBid1Size=_payload_get(p, "depthBid1Size"),
+        depthBid1MaxSize=_payload_get(p, "depthBid1MaxSize"),
+        depthQueueDropPct=_payload_get(p, "depthQueueDropPct"),
+        marketRegime=_payload_get(p, "marketRegime"),
         botPositionQty=p.get("botPositionQty", 0),
         totalAccountQty=p.get("totalAccountQty", 0),
         lockedLongTermQty=p.get("lockedLongTermQty", 0),

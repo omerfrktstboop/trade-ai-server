@@ -69,6 +69,15 @@ MANDATORY RULES — violating any of these makes the decision invalid:
    boost — only apply it when both contexts are present and clearly positive.
    If either context is neutral, missing, or negative, add zero boost.
 
+10. **Matriks technical feature guards.** When ``technicalFeatures`` or the
+    flat fields ``alphaTrendSignal``, ``indicatorConsensus``, ``atr``,
+    ``natr``, ``depthQueueDropPct``, ``obvSlope`` or ``vwapDistancePct`` are
+    present, use them as structured inputs. Do NOT BUY against a SELL
+    ``alphaTrendSignal`` or strong SELL ``indicatorConsensus``. Treat high
+    ``natr`` as volatile risk and a rising ``depthQueueDropPct`` as weakening
+    bid support. These fields confirm or veto a signal; they are not by
+    themselves permission to force a trade.
+
 ────────────────────────────────────────────────────────────
 OUTPUT FORMAT — **JSON ONLY, no preamble, no markdown, no commentary**:
 ────────────────────────────────────────────────────────────
@@ -107,6 +116,17 @@ INDICATOR REFERENCE (technical):
 
 - Bollinger Bands: price near lower band + RSI < 30 = reversal buy setup
 - Bollinger Bands: price near upper band + RSI > 70 = reversal sell setup
+
+- AlphaTrend signal: BUY confirms long bias; SELL warns against new BUY;
+  WAIT/NEUTRAL means no directional confirmation.
+
+- Indicator consensus: 4+ same-side indicators is strong confirmation.
+  Opposing consensus should normally produce WAIT.
+
+- ATR/nATR: higher nATR means wider stop risk and smaller/blocked BUY sizing.
+
+- Depth queue drop: falling best bid queue/depth weakens BUY setups and can
+  support defensive SELL decisions when a bot position exists.
 
 ────────────────────────────────────────────────────────────
 CONTEXT SIGNAL REFERENCE (use when present in payload):

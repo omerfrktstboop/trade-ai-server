@@ -208,6 +208,10 @@ class RiskEngine:
                 )
 
         # ── 7. Confidence threshold ──────────────────────────────────
+        technical_block_reason = self._technical_feature_block_reason(request, action)
+        if technical_block_reason:
+            return self._block(request, technical_block_reason)
+
         threshold = self.config.get_min_confidence(action.value)
         confidence_ok = decision.confidence >= threshold
 
@@ -336,6 +340,76 @@ class RiskEngine:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _technical_feature_block_reason(
+        self, request: SignalRequest, action: SignalAction
+    ) -> str | None:
+        """Return a block reason when optional Matriks features flag danger."""
+        if action not in (SignalAction.BUY, SignalAction.SELL):
+            return None
+
+        if action == SignalAction.BUY:
+            natr = request.natr
+            if natr is not None and natr > self.config.max_natr_for_buy:
+                return (
+                    f"BUY blocked: nATR {natr:.2f}% exceeds max "
+                    f"{self.config.max_natr_for_buy:.2f}%"
+                )
+
+            depth_drop = request.depth_queue_drop_pct
+            if (
+                depth_drop is not None
+                and depth_drop > self.config.max_depth_queue_drop_pct_for_buy
+            ):
+                return (
+                    f"BUY blocked: bid queue dropped {depth_drop:.1f}% "
+                    f"(max {self.config.max_depth_queue_drop_pct_for_buy:.1f}%)"
+                )
+
+        if self.config.require_alpha_trend_alignment:
+            alpha_signal = self._normalise_signal(request.alpha_trend_signal)
+            if self._opposes_action(alpha_signal, action):
+                return (
+                    f"{action.value} blocked: alphaTrendSignal={alpha_signal} "
+                    f"opposes action"
+                )
+
+        if self.config.require_indicator_consensus_alignment:
+            consensus = self._normalise_signal(request.indicator_consensus)
+            if self._opposes_action(consensus, action):
+                count = (
+                    request.indicator_sell_count
+                    if consensus == SignalAction.SELL.value
+                    else request.indicator_buy_count
+                )
+                if count is None or count >= self.config.min_indicator_consensus_count:
+                    return (
+                        f"{action.value} blocked: indicatorConsensus={consensus} "
+                        f"opposes action"
+                    )
+
+        return None
+
+    @staticmethod
+    def _normalise_signal(raw_value: str | None) -> str | None:
+        if not raw_value:
+            return None
+        value = str(raw_value).strip().upper()
+        if value in {"BUY", "LONG", "AL"}:
+            return SignalAction.BUY.value
+        if value in {"SELL", "SHORT", "SAT"}:
+            return SignalAction.SELL.value
+        if value in {"WAIT", "NEUTRAL", "HOLD", "NONE"}:
+            return SignalAction.WAIT.value
+        return None
+
+    @staticmethod
+    def _opposes_action(signal: str | None, action: SignalAction) -> bool:
+        return (
+            signal == SignalAction.BUY.value and action == SignalAction.SELL
+        ) or (
+            signal == SignalAction.SELL.value and action == SignalAction.BUY
+        )
 
     def _block(self, request: SignalRequest, reason: str) -> SignalResponse:
         """Return a WAIT / allowOrder=False response with the given reason."""

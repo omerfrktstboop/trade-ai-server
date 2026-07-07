@@ -457,3 +457,36 @@ def test_fetch_data_response_structure(
         assert body["confidenceScore"] == 0.0
         assert body["riskScore"] == 0.0
         assert body["qty"] == 0.0
+
+
+def test_agentic_bridge_maps_nested_technical_features() -> None:
+    """Matriks marketData.payload technicalFeatures reach SignalRequest."""
+    from app.models.signal import AgenticSignalRequest
+    from app.routers.signal import _agentic_to_signal_request
+
+    payload = _make_agentic_payload(
+        symbol="THYAO",
+        payload={
+            **dict(_DEFAULT_OHLCV),
+            "technicalFeatures": {
+                "alphaTrendSignal": "BUY",
+                "indicatorConsensus": "BUY",
+                "indicatorBuyCount": 4,
+                "indicatorSellCount": 1,
+                "natr": 2.8,
+                "depthQueueDropPct": 10.5,
+                "marketRegime": "TRENDING",
+            },
+        },
+    )
+
+    request = AgenticSignalRequest(**payload)
+    signal_request = _agentic_to_signal_request(request, "sess-tech")
+
+    assert signal_request.alpha_trend_signal == "BUY"
+    assert signal_request.indicator_consensus == "BUY"
+    assert signal_request.indicator_buy_count == 4
+    assert signal_request.indicator_sell_count == 1
+    assert signal_request.natr == 2.8
+    assert signal_request.depth_queue_drop_pct == 10.5
+    assert signal_request.market_regime == "TRENDING"

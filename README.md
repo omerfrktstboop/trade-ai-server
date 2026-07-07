@@ -219,6 +219,7 @@ curl -X POST http://localhost:8000/api/signal/evaluate \
 | `botPositionQty` | float | Bot'un mevcut pozisyonu — SELL clamp üst sınırı |
 | `totalAccountQty` | float | Hesaptaki toplam lot |
 | `lockedLongTermQty` | float | Uzun vade kilitli lot — asla satılmaz |
+| `technicalFeatures` | object | Opsiyonel Matriks teknik feature bloğu. `alphaTrendSignal`, `indicatorConsensus`, `natr`, `depthQueueDropPct` gibi alanlar AI payload'una eklenir ve RiskEngine tarafında sadece geldiğinde koruyucu filtre olarak kullanılır. |
 
 **Key response fields:**
 
@@ -303,6 +304,11 @@ Trading safety rules live in `app/core/risk_config.py` and are loaded from
 | Max daily trades            | `3`                     | `RISK_MAX_DAILY_TRADE_COUNT`   | Hard cap per day using request count or DB fallback |
 | Min confidence for BUY      | `75`                    | `RISK_MIN_CONFIDENCE_FOR_BUY`  | Score threshold (0–100)                  |
 | Min confidence for SELL     | `70`                    | `RISK_MIN_CONFIDENCE_FOR_SELL` | Score threshold (0–100)                  |
+| AlphaTrend alignment        | `true`                  | `RISK_REQUIRE_ALPHA_TREND_ALIGNMENT` | Opposing `alphaTrendSignal` blocks BUY/SELL |
+| Indicator consensus alignment | `true`                | `RISK_REQUIRE_INDICATOR_CONSENSUS_ALIGNMENT` | Strong opposing `indicatorConsensus` blocks BUY/SELL |
+| Min consensus count         | `4`                     | `RISK_MIN_INDICATOR_CONSENSUS_COUNT` | Same-side count needed for strong consensus |
+| Max nATR for BUY            | `8.0`                   | `RISK_MAX_NATR_FOR_BUY`        | Blocks new BUY above this normalized ATR percent |
+| Max depth queue drop for BUY | `35.0`                 | `RISK_MAX_DEPTH_QUEUE_DROP_PCT_FOR_BUY` | Blocks new BUY when bid queue weakens too much |
 | Allow sell long-term        | `false`                 | `RISK_ALLOW_SELL_LONG_TERM`    | Override locked symbol protection        |
 | Allow short selling         | `false`                 | `RISK_ALLOW_SHORT_SELLING`     | Enable short positions                   |
 | Trading cutoff time         | `17:30`                 | `RISK_DISABLE_TRADING_AFTER`  | HH:MM — no trades past this time         |
@@ -320,6 +326,8 @@ RISK_ALLOWED_SYMBOLS=THYAO,AKBNK,GARAN,YKBNK
 RISK_MAX_DAILY_TRADE_COUNT=5
 RISK_DISABLE_TRADING_AFTER=18:00
 RISK_TIMEZONE=Europe/Istanbul
+RISK_MAX_NATR_FOR_BUY=8
+RISK_MAX_DEPTH_QUEUE_DROP_PCT_FOR_BUY=35
 ```
 
 ## Project Structure

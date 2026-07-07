@@ -245,6 +245,13 @@ async def build_runtime_risk_config(session: AsyncSession) -> RiskConfig:
         min_confidence_for_sell=float(values["minConfidenceForSell"]),
         allow_sell_long_term=_parse_bool(values["allowSellLongTerm"]),
         allow_short_selling=risk_config.allow_short_selling,
+        require_alpha_trend_alignment=risk_config.require_alpha_trend_alignment,
+        require_indicator_consensus_alignment=(
+            risk_config.require_indicator_consensus_alignment
+        ),
+        min_indicator_consensus_count=risk_config.min_indicator_consensus_count,
+        max_natr_for_buy=risk_config.max_natr_for_buy,
+        max_depth_queue_drop_pct_for_buy=risk_config.max_depth_queue_drop_pct_for_buy,
         disable_trading_after=values["disableTradingAfter"],
         timezone=values["timezone"],
         _env_file="",

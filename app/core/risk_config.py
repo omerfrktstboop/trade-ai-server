@@ -84,6 +84,33 @@ class RiskConfig(BaseSettings):
         description="Minimum AI confidence score to enter SELL",
     )
 
+    # ── Technical feature risk guards ──────────────────────────────────────
+
+    require_alpha_trend_alignment: bool = Field(
+        default=True,
+        description="Block BUY/SELL when alphaTrendSignal strongly opposes the AI action",
+    )
+    require_indicator_consensus_alignment: bool = Field(
+        default=True,
+        description="Block BUY/SELL when indicatorConsensus strongly opposes the AI action",
+    )
+    min_indicator_consensus_count: int = Field(
+        default=4,
+        ge=1,
+        description="Minimum same-side indicators needed for a strong consensus",
+    )
+    max_natr_for_buy: float = Field(
+        default=8.0,
+        ge=0,
+        description="Maximum normalized ATR percent allowed for new BUY decisions",
+    )
+    max_depth_queue_drop_pct_for_buy: float = Field(
+        default=35.0,
+        ge=0,
+        le=100,
+        description="Maximum bid queue drop percent allowed for new BUY decisions",
+    )
+
     # ── Restrictions ───────────────────────────────────────────────────────
 
     allow_sell_long_term: bool = Field(

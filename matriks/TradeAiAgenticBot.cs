@@ -82,6 +82,9 @@ namespace Matriks.Lean.Algotrader
         [Parameter(3)]
         public int MaxFetchLoopPerSession;
 
+        [Parameter("Day")]
+        public string OrderTimeInForce;
+
         // ── Symbols ──────────────────────────────────────────────────
 
         public string[] AllowedSymbols =
@@ -118,6 +121,8 @@ namespace Matriks.Lean.Algotrader
         private readonly ConcurrentDictionary<string, int> _dailyTradeCountBySymbol = new ConcurrentDictionary<string, int>();
         private readonly ConcurrentDictionary<string, decimal> _botPositionQtyBySymbol = new ConcurrentDictionary<string, decimal>();
         private readonly ConcurrentDictionary<string, List<decimal>> _closeHistoryBySymbol = new ConcurrentDictionary<string, List<decimal>>();
+        private readonly ConcurrentDictionary<string, PendingOrderContext> _pendingOrdersBySymbolSide = new ConcurrentDictionary<string, PendingOrderContext>();
+        private readonly ConcurrentDictionary<string, PendingOrderContext> _pendingOrdersByOrderId = new ConcurrentDictionary<string, PendingOrderContext>();
 
         // Atomic duplicate requestId check (ConcurrentDictionary.TryAdd = atomic)
         private readonly ConcurrentDictionary<string, object> _sentRequestIds = new ConcurrentDictionary<string, object>();
@@ -128,6 +133,9 @@ namespace Matriks.Lean.Algotrader
         private readonly object _dailyCounterLock = new object();
 
         private DateTime _dailyCounterDate = DateTime.Today;
+        private bool _realPositionsLoadedFromSnapshot;
+        private bool? _autoOrderEnabled;
+        private bool? _testAutoOrderEnabled;
 
         // ── Matriks lifecycle ───────────────────────────────────────
 
@@ -156,6 +164,9 @@ namespace Matriks.Lean.Algotrader
 
             SendOrderSequential(false);
             WorkWithPermanentSignal(false);
+            SetTimerInterval(60);
+            LogTradeUserInfo();
+            LoadRealPositionsSnapshot();
 
             SafeDebug("Initialized symbols=" + string.Join(",", AllowedSymbols)
                 + " mode=" + NormalizeMode(Mode)
@@ -163,13 +174,32 @@ namespace Matriks.Lean.Algotrader
                 + " enableRealOrders=" + EnableRealOrders
                 + " demoConfirmed=" + DemoAccountConfirmed
                 + " scanIntervalMinutes=" + ScanIntervalMinutes
+                + " timerSeconds=60"
+                + " timeInForce=" + NormalizeTimeInForce(OrderTimeInForce)
                 + " server=" + ServerBaseUrl);
+
+            ScanDueSymbols();
         }
 
         public override void OnDataUpdate(BarDataEventArgs barData)
         {
             ResetDailyCountersIfNeeded();
+            RefreshCloseHistoryFromMarketData();
+        }
 
+        public override void OnTimer()
+        {
+            ResetDailyCountersIfNeeded();
+            RefreshCloseHistoryFromMarketData();
+            if (!_realPositionsLoadedFromSnapshot)
+            {
+                LoadRealPositionsSnapshot();
+            }
+            ScanDueSymbols();
+        }
+
+        private void ScanDueSymbols()
+        {
             foreach (string symbolRaw in AllowedSymbols)
             {
                 string symbol = NormalizeSymbol(symbolRaw);
@@ -219,6 +249,75 @@ namespace Matriks.Lean.Algotrader
                     }
                 });
             }
+        }
+
+        public override void OnOrderUpdate(IOrder order)
+        {
+            if (order == null)
+            {
+                SafeDebug("OnOrderUpdate ignored: order is null");
+                return;
+            }
+
+            string orderId = order.OrderID;
+            string symbol = NormalizeSymbol(order.Symbol);
+            decimal orderQty = order.OrderQty;
+            decimal filledQty = order.FilledQty;
+            decimal avgPx = order.AvgPx;
+            string status = NormalizeOrderStatus(order.OrdStatus.Obj);
+            string side = NormalizeOrderSide(order.Side.ToString());
+
+            SafeDebug("OnOrderUpdate status=" + status
+                + " orderId=" + orderId
+                + " symbol=" + symbol
+                + " orderQty=" + orderQty
+                + " filledQty=" + filledQty
+                + " avgPx=" + avgPx
+                + " ordStatus=" + order.OrdStatus);
+
+            PendingOrderContext context = ResolvePendingOrderContext(orderId, symbol, side);
+            if (context == null)
+            {
+                context = new PendingOrderContext
+                {
+                    RequestId = "MATRiKS-" + (string.IsNullOrWhiteSpace(orderId) ? BuildRequestId(symbol) : orderId),
+                    Symbol = symbol,
+                    Action = side,
+                    Qty = orderQty > 0 ? orderQty : filledQty,
+                    Price = avgPx > 0 ? avgPx : order.Price
+                };
+            }
+
+            if (!string.IsNullOrWhiteSpace(orderId))
+            {
+                _pendingOrdersByOrderId[orderId] = context;
+            }
+
+            decimal reportQty = filledQty > 0 ? filledQty : (orderQty > 0 ? orderQty : context.Qty);
+            decimal reportPrice = avgPx > 0 ? avgPx : (order.Price > 0 ? order.Price : context.Price);
+            string message = "Matriks order update status=" + status
+                + " orderQty=" + orderQty
+                + " filledQty=" + filledQty
+                + " avgPx=" + avgPx;
+
+            Task.Run(async () =>
+            {
+                await ReportOrderResultAsync(context, status, message, orderId, reportQty, reportPrice);
+            });
+
+            if (IsFinalOrderStatus(status))
+            {
+                if (!string.IsNullOrWhiteSpace(orderId))
+                {
+                    _pendingOrdersByOrderId.TryRemove(orderId, out _);
+                }
+                _pendingOrdersBySymbolSide.TryRemove(BuildSymbolSideKey(symbol, context.Action), out _);
+            }
+        }
+
+        public override void OnRealPositionUpdate(AlgoTraderPosition position)
+        {
+            UpdatePositionCache(position, "OnRealPositionUpdate");
         }
 
         public override void OnStopped()
@@ -518,6 +617,92 @@ namespace Matriks.Lean.Algotrader
             return _dailyTradeCountBySymbol.Values.Sum();
         }
 
+        private void RefreshCloseHistoryFromMarketData()
+        {
+            foreach (string symbolRaw in AllowedSymbols)
+            {
+                string symbol = NormalizeSymbol(symbolRaw);
+                if (!IsAllowedSymbol(symbol))
+                    continue;
+
+                decimal lastPrice = SafeMarketData(symbol, SymbolUpdateField.Last);
+                UpdateCloseHistory(symbol, lastPrice);
+            }
+        }
+
+        private void LoadRealPositionsSnapshot()
+        {
+            try
+            {
+                if (!PositionReceiveComplated)
+                {
+                    SafeDebug("Real position snapshot not ready yet; waiting for OnRealPositionUpdate.");
+                    return;
+                }
+
+                var positions = GetRealPositions();
+                if (positions == null)
+                {
+                    SafeDebug("GetRealPositions returned null.");
+                    return;
+                }
+
+                foreach (var item in positions)
+                {
+                    UpdatePositionCache(item.Value, "GetRealPositions");
+                }
+
+                _realPositionsLoadedFromSnapshot = true;
+                SafeDebug("Real positions snapshot loaded count=" + positions.Count);
+            }
+            catch (Exception ex)
+            {
+                SafeDebug("GetRealPositions failed: " + ex.Message);
+            }
+        }
+
+        private void UpdatePositionCache(AlgoTraderPosition position, string source)
+        {
+            if (position == null)
+                return;
+
+            string symbol = NormalizeSymbol(position.Symbol);
+            if (string.IsNullOrWhiteSpace(symbol))
+                return;
+
+            decimal qty = position.QtyAvailable != 0m ? position.QtyAvailable : position.QtyNet;
+            _botPositionQtyBySymbol[symbol] = qty;
+            SafeDebug(source + " position symbol=" + symbol
+                + " qtyAvailable=" + position.QtyAvailable
+                + " qtyNet=" + position.QtyNet
+                + " cachedQty=" + qty);
+        }
+
+        private void LogTradeUserInfo()
+        {
+            try
+            {
+                var tradeUser = GetTradeUser();
+                if (tradeUser == null)
+                {
+                    SafeDebug("GetTradeUser returned null.");
+                    return;
+                }
+
+                _autoOrderEnabled = tradeUser.AutoOrder;
+                _testAutoOrderEnabled = tradeUser.TestAutoOrder;
+                SafeDebug("TradeUser accountId=" + tradeUser.AccountId
+                    + " autoOrder=" + tradeUser.AutoOrder
+                    + " testAutoOrder=" + tradeUser.TestAutoOrder);
+            }
+            catch (Exception ex)
+            {
+                _autoOrderEnabled = null;
+                _testAutoOrderEnabled = null;
+                SafeDebug("GetTradeUser failed; DemoAccountConfirmed gate remains authoritative. error=" + ex.Message);
+            }
+        }
+
         // ── Order sending ────────────────────────────────────────────
 
         private async Task TrySendOrderAsync(AgenticSignalResponse response)
@@ -693,24 +878,19 @@ namespace Matriks.Lean.Algotrader
 
             try
             {
-                OrderExecutionResult execution = await SendLimitOrderAsync(symbol, action, qty, price);
-                string status = execution.Success
-                    ? (execution.IsSimulated ? "SIMULATED" : "SENT")
-                    : "REJECTED";
-
+                OrderExecutionResult execution = await SendLimitOrderAsync(response.RequestId, symbol, action, qty, price);
                 if (execution.Success)
                 {
                     IncrementDailyTradeCount(symbol);
-                    UpdateSimulatedPosition(symbol, action, qty);
-                    SafeDebug("Order sent symbol=" + symbol
+                    SafeDebug("Order SENT_PENDING symbol=" + symbol
                         + " side=" + action
                         + " qty=" + qty
                         + " price=" + price
-                        + " orderId=" + execution.OrderId
-                        + " status=" + status);
+                        + " message=" + execution.Message);
+                    return;
                 }
 
-                await ReportOrderResultAsync(response, status, execution.Message, execution.OrderId);
+                await ReportOrderResultAsync(response, "REJECTED", execution.Message, execution.OrderId);
             }
             catch (Exception ex)
             {
@@ -721,30 +901,81 @@ namespace Matriks.Lean.Algotrader
 
         /// <summary>
         /// Send a real limit order via Matriks IQ demo/sandbox account.
-        /// Uses MatriksAlgo.SendLimitOrder(string symbol, decimal qty, OrderSide side, decimal price).
-        /// 
-        /// TODO: Verify the exact SendLimitOrder method signature against your Matriks SDK version.
-        /// If the SDK uses a different overload (e.g., with OrderType enum, or returns a different type),
-        /// adjust the call accordingly. The order IS sent to the Matriks demo infrastructure;
-        /// it is NOT simulated/faked.
+        /// Uses MatriksAlgo.SendLimitOrder(string, int, OrderSide, decimal, TimeInForce, ChartIcon).
         /// </summary>
-        private async Task<OrderExecutionResult> SendLimitOrderAsync(string symbol, string side, decimal qty, decimal limitPrice)
+        private async Task<OrderExecutionResult> SendLimitOrderAsync(string requestId, string symbol, string side, decimal qty, decimal limitPrice)
         {
-            SafeDebug("Sending real limit order: " + side + " " + symbol + " qty=" + qty + " price=" + limitPrice);
+            if (!TryConvertOrderQuantity(qty, out int quantity, out string quantityError))
+            {
+                return new OrderExecutionResult
+                {
+                    Success = false,
+                    IsSimulated = false,
+                    OrderId = null,
+                    Message = quantityError
+                };
+            }
+
+            if (quantity != qty)
+            {
+                SafeDebug("Qty converted to int symbol=" + symbol + " original=" + qty + " quantity=" + quantity);
+            }
 
             OrderSide orderSide = NormalizeAction(side) == "BUY" ? OrderSide.Buy : OrderSide.Sell;
+            ChartIcon chartIcon = orderSide == OrderSide.Buy ? ChartIcon.Buy : ChartIcon.Sell;
+            TimeInForce timeInForce = ResolveTimeInForce();
+            decimal roundedPrice = RoundPriceStepBistViop(symbol, limitPrice);
+            if (roundedPrice <= 0m)
+            {
+                return new OrderExecutionResult
+                {
+                    Success = false,
+                    IsSimulated = false,
+                    OrderId = null,
+                    Message = "rounded limit price <= 0"
+                };
+            }
+
+            if (roundedPrice != limitPrice)
+            {
+                SafeDebug("Limit price rounded symbol=" + symbol + " original=" + limitPrice + " rounded=" + roundedPrice);
+            }
+
+            var pending = new PendingOrderContext
+            {
+                RequestId = requestId,
+                Symbol = symbol,
+                Action = NormalizeAction(side),
+                Qty = quantity,
+                Price = roundedPrice
+            };
+            _pendingOrdersBySymbolSide[BuildSymbolSideKey(symbol, pending.Action)] = pending;
+
+            SafeDebug("Sending real limit order: " + pending.Action
+                + " " + symbol
+                + " qty=" + quantity
+                + " price=" + roundedPrice
+                + " timeInForce=" + NormalizeTimeInForce(OrderTimeInForce)
+                + " chartIcon=" + chartIcon);
 
             // Real Matriks IQ SDK call — sends to demo/sandbox account in DEMO_LIVE mode
-            // Returns the order ID assigned by Matriks
-            string orderId = SendLimitOrder(symbol, qty, orderSide, limitPrice);
+            try
+            {
+                SendLimitOrder(symbol, quantity, orderSide, roundedPrice, timeInForce, chartIcon);
+            }
+            catch
+            {
+                _pendingOrdersBySymbolSide.TryRemove(BuildSymbolSideKey(symbol, pending.Action), out _);
+                throw;
+            }
 
             await Task.CompletedTask; // explicit async yield
             return new OrderExecutionResult
             {
                 Success = true,
                 IsSimulated = false,
-                OrderId = orderId,
-                Message = "Limit order sent to Matriks demo account"
+                OrderId = null,
+                Message = "Limit order SENT_PENDING; final status will be reported by OnOrderUpdate"
             };
         }
 
@@ -797,11 +1028,65 @@ namespace Matriks.Lean.Algotrader
             }
         }
 
+        private async Task ReportOrderResultAsync(
+            PendingOrderContext context,
+            string status,
+            string matriksMessage,
+            string orderId,
+            decimal qty,
+            decimal price)
+        {
+            if (context == null)
+                return;
+
+            var payload = new OrderResultRequest
+            {
+                RequestId = context.RequestId,
+                Symbol = NormalizeSymbol(context.Symbol),
+                Action = NormalizeAction(context.Action),
+                Qty = ToDouble(qty),
+                Price = ToDouble(price),
+                Status = status,
+                MatriksMessage = matriksMessage,
+                OrderId = orderId
+            };
+
+            try
+            {
+                string json = JsonConvert.SerializeObject(payload, _jsonSettings);
+                using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
+                using (var result = await _http.PostAsync("api/order-result", content))
+                {
+                    string body = await result.Content.ReadAsStringAsync();
+                    if (!result.IsSuccessStatusCode)
+                    {
+                        SafeDebug("Order update post failed HTTP " + (int)result.StatusCode + " body=" + body);
+                        return;
+                    }
+                }
+
+                SafeDebug("Order update posted to server status=" + status
+                    + " requestId=" + context.RequestId
+                    + " orderId=" + orderId);
+            }
+            catch (Exception ex)
+            {
+                SafeDebug("Order update post exception requestId=" + context.RequestId + " error=" + ex.Message);
+            }
+        }
+
         private bool IsDemoAccount()
         {
             if (!RequireDemoAccount)
                 return true;
-            return DemoAccountConfirmed;
+
+            if (!DemoAccountConfirmed)
+                return false;
+
+            if (_testAutoOrderEnabled.HasValue)
+                return _testAutoOrderEnabled.Value;
+
+            return true;
         }
 
         // ── Compatibility layer (flat fields for legacy clients) ────
@@ -968,19 +1253,6 @@ namespace Matriks.Lean.Algotrader
             _dailyTradeCountBySymbol.AddOrUpdate(symbol, 1, (_, existing) => existing + 1);
         }
 
-        private void UpdateSimulatedPosition(string symbol, string action, decimal qty)
-        {
-            symbol = NormalizeSymbol(symbol);
-            if (NormalizeAction(action) == "BUY")
-            {
-                _botPositionQtyBySymbol.AddOrUpdate(symbol, qty, (_, existing) => existing + qty);
-            }
-            else if (NormalizeAction(action) == "SELL")
-            {
-                _botPositionQtyBySymbol.AddOrUpdate(symbol, 0m, (_, existing) => Math.Max(0m, existing - qty));
-            }
-        }
-
         private void ResetDailyCountersIfNeeded()
         {
             if (_dailyCounterDate == DateTime.Today)
@@ -1014,6 +1286,39 @@ namespace Matriks.Lean.Algotrader
             return NormalizeSymbol(symbol) + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
         }
 
+        private PendingOrderContext ResolvePendingOrderContext(string orderId, string symbol, string side)
+        {
+            if (!string.IsNullOrWhiteSpace(orderId)
+                && _pendingOrdersByOrderId.TryGetValue(orderId, out var byOrderId))
+            {
+                return byOrderId;
+            }
+
+            string normalizedSide = NormalizeAction(side);
+            string symbolSideKey = BuildSymbolSideKey(symbol, normalizedSide);
+            if (_pendingOrdersBySymbolSide.TryGetValue(symbolSideKey, out var bySymbolSide))
+            {
+                if (!string.IsNullOrWhiteSpace(orderId))
+                {
+                    _pendingOrdersByOrderId[orderId] = bySymbolSide;
+                }
+                return bySymbolSide;
+            }
+
+            return null;
+        }
+
+        private static string BuildSymbolSideKey(string symbol, string side)
+        {
+            return NormalizeSymbol(symbol) + "|" + NormalizeAction(side);
+        }
+
+        private static bool IsFinalOrderStatus(string status)
+        {
+            string value = (status ?? "").Trim().ToUpperInvariant();
+            return value == "FILLED" || value == "CANCELED" || value == "CANCELLED" || value == "REJECTED";
+        }
+
         // ── Normalization helpers ────────────────────────────────────
 
         private static string NormalizeSymbol(string symbol)
@@ -1040,9 +1345,46 @@ namespace Matriks.Lean.Algotrader
             return (action ?? "WAIT").Trim().ToUpperInvariant();
         }
 
+        private static string NormalizeOrderSide(string side)
+        {
+            string value = (side ?? "").Trim().ToUpperInvariant();
+            if (value.Contains("SELL"))
+                return "SELL";
+            if (value.Contains("BUY"))
+                return "BUY";
+            return value == "" ? "BUY" : value;
+        }
+
         private static string NormalizeOrderType(string orderType)
         {
             return (orderType ?? "NONE").Trim().ToUpperInvariant();
+        }
+
+        private static string NormalizeOrderStatus(object ordStatus)
+        {
+            if (ordStatus == null)
+                return "UNKNOWN";
+
+            if (ordStatus.Equals(OrdStatus.New))
+                return "NEW";
+            if (ordStatus.Equals(OrdStatus.PartiallyFilled))
+                return "PARTIALLY_FILLED";
+            if (ordStatus.Equals(OrdStatus.Filled))
+                return "FILLED";
+            if (ordStatus.Equals(OrdStatus.Canceled))
+                return "CANCELED";
+            if (ordStatus.Equals(OrdStatus.Rejected))
+                return "REJECTED";
+
+            return ordStatus.ToString().Trim().ToUpperInvariant();
+        }
+
+        private static string NormalizeTimeInForce(string value)
+        {
+            string normalized = (value ?? "Day").Trim().ToUpperInvariant();
+            if (normalized == "GTC" || normalized == "GOODTILLCANCEL" || normalized == "GOOD_TILL_CANCEL")
+                return "GOOD_TILL_CANCEL";
+            return "DAY";
         }
 
         private static string NormalizeDataType(string dataType)
@@ -1060,6 +1402,42 @@ namespace Matriks.Lean.Algotrader
         private static double ToDouble(decimal value)
         {
             return Convert.ToDouble(value);
+        }
+
+        private static bool TryConvertOrderQuantity(decimal qty, out int quantity, out string error)
+        {
+            quantity = 0;
+            error = null;
+
+            if (qty <= 0m)
+            {
+                error = "qty <= 0";
+                return false;
+            }
+
+            if (qty > int.MaxValue)
+            {
+                error = "qty exceeds Int32 max: " + qty;
+                return false;
+            }
+
+            decimal truncated = decimal.Truncate(qty);
+            if (truncated <= 0m)
+            {
+                error = "qty becomes <= 0 after integer conversion: " + qty;
+                return false;
+            }
+
+            quantity = Convert.ToInt32(truncated);
+            return true;
+        }
+
+        private TimeInForce ResolveTimeInForce()
+        {
+            string value = NormalizeTimeInForce(OrderTimeInForce);
+            if (value == "GOOD_TILL_CANCEL")
+                return TimeInForce.GoodTillCancel;
+            return TimeInForce.Day;
         }
 
         private static decimal ToDecimal(double value)
@@ -1335,6 +1713,15 @@ namespace Matriks.Lean.Algotrader
 
         [JsonProperty("orderId", NullValueHandling = NullValueHandling.Ignore)]
         public string OrderId { get; set; }
+    }
+
+    public class PendingOrderContext
+    {
+        public string RequestId { get; set; }
+        public string Symbol { get; set; }
+        public string Action { get; set; }
+        public decimal Qty { get; set; }
+        public decimal Price { get; set; }
     }
 
     public class OrderExecutionResult

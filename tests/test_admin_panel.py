@@ -86,6 +86,10 @@ class TestAdminConfig:
         assert "API_TOKEN" not in keys
         assert "DEEPSEEK_API_KEY" not in keys
         assert "DATABASE_URL" not in keys
+        descriptions = {item["key"]: item["description"] for item in resp.json()}
+        assert "İşlem yapılmasına izin verilen semboller" in descriptions[
+            "allowedSymbols"
+        ]
 
     def test_config_update_writes_audit_log(
         self, client: TestClient, auth_headers: dict[str, str]
@@ -133,6 +137,8 @@ class TestAdminConfig:
         assert resp.status_code == 200
         assert "allowedSymbols" in resp.text
         assert "killSwitchEnabled" in resp.text
+        assert "Açıklama" in resp.text
+        assert "İşlem yapılmasına izin verilen semboller" in resp.text
 
 
 class TestKillSwitchIntegration:

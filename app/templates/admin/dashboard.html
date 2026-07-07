@@ -5,37 +5,37 @@
 
 <div class="stat-grid">
   <div class="card">
-    <div class="card-header">Trading Mode</div>
+    <div class="card-header">İşlem Modu</div>
     <div class="card-value">
       {% set mode = configs.tradingMode.display_value %}
       <span class="badge {% if mode == 'LIVE' %}badge-live{% elif mode == 'PAPER' %}badge-paper{% else %}badge-manual{% endif %}">{{ mode }}</span>
     </div>
-    <div class="mt-16" style="font-size:12px;color:var(--text-muted)">Current operational mode</div>
+    <div class="mt-16" style="font-size:12px;color:var(--text-muted)">Aktif çalışma modu</div>
   </div>
 
   <div class="card">
-    <div class="card-header">Kill Switch</div>
+    <div class="card-header">Acil Durdurma</div>
     <div class="card-value" style="color:{% if configs.killSwitchEnabled.display_value == 'true' %}var(--danger){% else %}var(--success){% endif %}">
       {% if configs.killSwitchEnabled.display_value == 'true' %}⚠️ ON{% else %}✅ OFF{% endif %}
     </div>
-    <div class="mt-16" style="font-size:12px;color:var(--text-muted)">Trading is {{ 'blocked' if configs.killSwitchEnabled.display_value == 'true' else 'active' }}</div>
+    <div class="mt-16" style="font-size:12px;color:var(--text-muted)">İşlem durumu: {{ 'kapalı' if configs.killSwitchEnabled.display_value == 'true' else 'aktif' }}</div>
   </div>
 
   <div class="card">
-    <div class="card-header">Today Trade Count</div>
+    <div class="card-header">Bugünkü İşlem Sayısı</div>
     <div class="card-value">{{ today_trade_count }}</div>
-    <div class="mt-16" style="font-size:12px;color:var(--text-muted)">Trades executed today</div>
+    <div class="mt-16" style="font-size:12px;color:var(--text-muted)">Bugün kaydedilen işlem adedi</div>
   </div>
 </div>
 
 <div class="mb-24">
   <div class="flex-between mb-16">
-    <h2 class="section-title">Latest Risk Decisions</h2>
-    <span class="text-sm text-muted">{{ latest_risk|length }} entries</span>
+    <h2 class="section-title">Son Risk Kararları</h2>
+    <span class="text-sm text-muted">{{ latest_risk|length }} kayıt</span>
   </div>
   <div class="table-container">
     <table>
-      <thead><tr><th>Request</th><th>Symbol</th><th>Action</th><th>Allow</th><th>Mode</th><th>Reason</th><th>Created</th></tr></thead>
+      <thead><tr><th>İstek</th><th>Sembol</th><th>Karar</th><th>İzin</th><th>Mod</th><th>Neden</th><th>Zaman</th></tr></thead>
       <tbody>
         {% for row in latest_risk %}
         <tr>
@@ -44,13 +44,13 @@
           <td>
             <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
           </td>
-          <td>{% if row.allow_order %}<span class="status status-ok">Yes</span>{% else %}<span class="status status-danger">No</span>{% endif %}</td>
+          <td>{% if row.allow_order %}<span class="status status-ok">Evet</span>{% else %}<span class="status status-danger">Hayır</span>{% endif %}</td>
           <td><span class="badge {% if row.mode == 'LIVE' %}badge-live{% elif row.mode == 'PAPER' %}badge-paper{% else %}badge-manual{% endif %}">{{ row.mode }}</span></td>
           <td class="text-muted" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;">{{ row.reason }}</td>
           <td class="mono text-muted">{{ row.created_at }}</td>
         </tr>
         {% else %}
-        <tr class="empty-row"><td colspan="7">No risk decisions yet</td></tr>
+        <tr class="empty-row"><td colspan="7">Henüz risk kararı yok</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -59,12 +59,12 @@
 
 <div>
   <div class="flex-between mb-16">
-    <h2 class="section-title">Latest Order Logs</h2>
-    <span class="text-sm text-muted">{{ latest_orders|length }} entries</span>
+    <h2 class="section-title">Son Emir Logları</h2>
+    <span class="text-sm text-muted">{{ latest_orders|length }} kayıt</span>
   </div>
   <div class="table-container">
     <table>
-      <thead><tr><th>Request</th><th>Symbol</th><th>Action</th><th>Qty</th><th>Status</th><th>Mode</th><th>Created</th></tr></thead>
+      <thead><tr><th>İstek</th><th>Sembol</th><th>Karar</th><th>Adet</th><th>Durum</th><th>Mod</th><th>Zaman</th></tr></thead>
       <tbody>
         {% for row in latest_orders %}
         <tr>
@@ -79,7 +79,7 @@
           <td class="mono text-muted">{{ row.created_at }}</td>
         </tr>
         {% else %}
-        <tr class="empty-row"><td colspan="7">No order logs yet</td></tr>
+        <tr class="empty-row"><td colspan="7">Henüz emir logu yok</td></tr>
         {% endfor %}
       </tbody>
     </table>

@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Annotated
+from typing import Any
 
-from pydantic import BeforeValidator, Field, model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,13 +36,6 @@ class Mode(str, Enum):
 
     PAPER = "paper"
     LIVE = "live"
-
-
-def parse_cors(v: str | list[str]) -> list[str]:
-    """Parse comma-separated CORS origins into a list."""
-    if isinstance(v, list):
-        return v
-    return [origin.strip() for origin in v.split(",") if origin.strip()]
 
 
 # ---------------------------------------------------------------------------
@@ -79,10 +72,16 @@ class Settings(BaseSettings):
 
     # ── CORS ──────────────────────────────────────────────────────────────
 
-    cors_origins: Annotated[list[str], BeforeValidator(parse_cors)] = Field(
-        default=["*"],
+    cors_origins_raw: str = Field(
+        default="*",
+        alias="CORS_ORIGINS",
         description="Comma-separated list of allowed origins",
     )
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Parse comma-separated CORS origins into a list."""
+        return [o.strip() for o in self.cors_origins_raw.split(",") if o.strip()]
 
     # ── Security ──────────────────────────────────────────────────────────
 

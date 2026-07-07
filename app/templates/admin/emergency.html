@@ -1,46 +1,67 @@
 {% extends "admin/base.html" %}
-{% block title %}Admin Emergency{% endblock %}
+{% block title %}Emergency{% endblock %}
+{% block page_title %}Emergency Controls{% endblock %}
 {% block content %}
-<h1 class="h3 mb-3">Emergency Controls</h1>
-{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
 
-<div class="row g-3 mb-4">
-  <div class="col-md-6">
-    <div class="metric">
-      <div class="text-secondary small">Trading Mode</div>
-      <div class="fs-4 fw-semibold">{{ configs.tradingMode.display_value }}</div>
-    </div>
+{% if error %}<div class="alert alert-danger">⚠️ {{ error }}</div>{% endif %}
+{% if message %}<div class="alert alert-success">✅ {{ message }}</div>{% endif %}
+
+<div class="emergency-card mb-24">
+  <h3>⚠️ Kill Switch</h3>
+  <p class="text-muted text-sm">
+    When enabled, ALL trading stops immediately. No new orders will be submitted.
+    Existing positions are held but not managed.
+  </p>
+  <div style="margin-top:16px">
+    <span class="status {% if kill_switch %}status-danger{% else %}status-ok{% endif %}" style="font-size:15px;font-weight:600">
+      Kill Switch: <strong>{{ 'ACTIVE (trading blocked)' if kill_switch else 'OFF (trading allowed)' }}</strong>
+    </span>
   </div>
-  <div class="col-md-6">
-    <div class="metric">
-      <div class="text-secondary small">Kill Switch</div>
-      <div class="fs-4 fw-semibold">{{ configs.killSwitchEnabled.display_value }}</div>
-    </div>
+  <div class="emergency-actions">
+    {% if not kill_switch %}
+    <form method="post" action="/admin/emergency/enable-kill-switch">
+      <div class="form-group">
+        <label class="form-label" for="ks_reason">Reason for enabling</label>
+        <input class="form-input" id="ks_reason" name="reason" placeholder="Why are you stopping all trading?" style="max-width:400px" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="ks_conf">Confirmation</label>
+        <input class="form-input" id="ks_conf" name="confirmation" placeholder="STOP-ALL-TRADING" style="max-width:400px" required>
+      </div>
+      <button class="btn btn-danger" type="submit">🔴 Enable Kill Switch</button>
+    </form>
+    {% else %}
+    <form method="post" action="/admin/emergency/disable-kill-switch">
+      <div class="form-group">
+        <label class="form-label" for="ksd_reason">Reason for disabling</label>
+        <input class="form-input" id="ksd_reason" name="reason" placeholder="Why is it safe to re-enable?" style="max-width:400px" required>
+      </div>
+      <button class="btn btn-outline" type="submit">🟢 Disable Kill Switch</button>
+    </form>
+    {% endif %}
   </div>
 </div>
 
-<div class="row g-3">
-  <div class="col-md-4">
-    <form method="post" action="/admin/emergency/force-paper" class="metric h-100">
-      <h2 class="h5">Force PAPER Mode</h2>
-      <input class="form-control mb-3" name="reason" placeholder="Reason">
-      <button class="btn btn-warning w-100" type="submit">Force PAPER</button>
-    </form>
-  </div>
-  <div class="col-md-4">
-    <form method="post" action="/admin/emergency/enable-kill-switch" class="metric h-100">
-      <h2 class="h5">Enable Kill Switch</h2>
-      <input class="form-control mb-3" name="reason" placeholder="Reason">
-      <button class="btn btn-danger w-100" type="submit">Enable Kill Switch</button>
-    </form>
-  </div>
-  <div class="col-md-4">
-    <form method="post" action="/admin/emergency/disable-kill-switch" class="metric h-100">
-      <h2 class="h5">Disable Kill Switch</h2>
-      <input class="form-control mb-2" name="reason" placeholder="Reason">
-      <input class="form-control mb-3" name="confirmation" placeholder="{{ confirmation }}" required>
-      <button class="btn btn-outline-danger w-100" type="submit">Disable Kill Switch</button>
-    </form>
-  </div>
+<div class="card mb-24">
+  <div class="section-title mb-16">Force Paper Trading Mode</div>
+  <p class="text-muted text-sm mb-16">
+    Immediately switch to PAPER (simulation) mode. Useful when you need to disable
+    live trading without fully enabling the kill switch. Current mode:
+    <span class="badge {% if current_mode == 'LIVE' %}badge-live{% elif current_mode == 'PAPER' %}badge-paper{% else %}badge-manual{% endif %}" style="margin-left:8px">{{ current_mode }}</span>
+  </p>
+  <form method="post" action="/admin/emergency/force-paper">
+    <div class="form-row">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label" for="fp_reason">Reason</label>
+        <input class="form-input" id="fp_reason" name="reason" placeholder="Why forcing paper mode?" required>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label" for="fp_conf">Confirmation</label>
+        <input class="form-input" id="fp_conf" name="confirmation" placeholder="FORCE-PAPER" required>
+      </div>
+      <button class="btn btn-outline" type="submit" style="align-self:end">Force PAPER Mode</button>
+    </div>
+  </form>
 </div>
+
 {% endblock %}

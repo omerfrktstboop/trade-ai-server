@@ -1,33 +1,60 @@
 {% extends "admin/base.html" %}
 {% block title %}Admin Positions{% endblock %}
+{% block page_title %}Positions{% endblock %}
 {% block content %}
-<h1 class="h3 mb-3">Positions</h1>
 
-<h2 class="h5">Bot Positions</h2>
-<div class="table-wrap mb-4">
-  <table class="table table-sm table-striped align-middle">
-    <thead><tr><th>ID</th><th>Symbol</th><th>Qty</th><th>Avg Price</th><th>Total Value</th><th>Updated</th></tr></thead>
-    <tbody>
-      {% for row in bot_positions %}
-      <tr><td>{{ row.id }}</td><td>{{ row.symbol }}</td><td>{{ row.qty }}</td><td>{{ row.avg_price }}</td><td>{{ row.total_value }}</td><td>{{ row.updated_at }}</td></tr>
-      {% else %}
-      <tr><td colspan="6" class="text-secondary">No bot positions yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div class="mb-24">
+  <div class="flex-between mb-16">
+    <h2 class="section-title">Bot Positions</h2>
+    <span class="text-sm text-muted">{{ bot_positions|length }} active</span>
+  </div>
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Price</th><th>Current Price</th><th>P&L</th><th>Mode</th><th>Updated</th></tr></thead>
+      <tbody>
+        {% for row in bot_positions %}
+        <tr>
+          <td><strong>{{ row.symbol }}</strong></td>
+          <td class="mono">{{ row.qty }}</td>
+          <td class="mono">{{ row.avg_price }}</td>
+          <td class="mono">{{ row.current_price if row.current_price else '—' }}</td>
+          <td class="mono" style="color:{% if row.pnl and row.pnl > 0 %}var(--success){% elif row.pnl and row.pnl < 0 %}var(--danger){% endif %}">
+            {% if row.pnl is not none %}{{ row.pnl }}{% else %}—{% endif %}
+          </td>
+          <td><span class="badge {% if row.mode == 'LIVE' %}badge-live{% elif row.mode == 'PAPER' %}badge-paper{% else %}badge-info{% endif %}">{{ row.mode }}</span></td>
+          <td class="mono text-muted">{{ row.updated_at }}</td>
+        </tr>
+        {% else %}
+        <tr class="empty-row"><td colspan="7">No active bot positions</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 
-<h2 class="h5">Locked Positions</h2>
-<div class="table-wrap">
-  <table class="table table-sm table-striped align-middle">
-    <thead><tr><th>ID</th><th>Symbol</th><th>Qty</th><th>Lock Type</th><th>Created</th></tr></thead>
-    <tbody>
-      {% for row in locked_positions %}
-      <tr><td>{{ row.id }}</td><td>{{ row.symbol }}</td><td>{{ row.qty }}</td><td>{{ row.lock_type }}</td><td>{{ row.created_at }}</td></tr>
-      {% else %}
-      <tr><td colspan="5" class="text-secondary">No locked positions yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div>
+  <div class="flex-between mb-16">
+    <h2 class="section-title">Locked Positions (Long Term)</h2>
+    <span class="text-sm text-muted">{{ locked_positions|length }} locked</span>
+  </div>
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Price</th><th>Locked By</th><th>Locked At</th></tr></thead>
+      <tbody>
+        {% for row in locked_positions %}
+        <tr>
+          <td><strong>{{ row.symbol }}</strong></td>
+          <td class="mono">{{ row.qty }}</td>
+          <td class="mono">{{ row.avg_price }}</td>
+          <td>{{ row.locked_by or '—' }}</td>
+          <td class="mono text-muted">{{ row.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr class="empty-row"><td colspan="5">No locked positions</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
+
 {% endblock %}

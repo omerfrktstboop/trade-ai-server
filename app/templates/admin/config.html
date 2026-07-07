@@ -1,55 +1,58 @@
 {% extends "admin/base.html" %}
 {% block title %}Admin Config{% endblock %}
+{% block page_title %}Config{% endblock %}
 {% block content %}
-<h1 class="h3 mb-3">Config</h1>
-{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
-{% if message %}<div class="alert alert-success">{{ message }}</div>{% endif %}
+
+{% if error %}<div class="alert alert-danger">⚠️ {{ error }}</div>{% endif %}
+{% if message %}<div class="alert alert-success">✅ {{ message }}</div>{% endif %}
 
 <form method="post" action="/admin/config">
-  <div class="table-wrap mb-3">
-    <table class="table align-middle">
-      <thead><tr><th style="width: 260px;">Key</th><th>Value</th><th>Description</th><th>Source</th></tr></thead>
+  <div class="table-container mb-16">
+    <table>
+      <thead><tr><th>Key</th><th>Value</th><th>Description</th><th>Source</th></tr></thead>
       <tbody>
         {% for item in configs %}
         <tr>
-          <td><code>{{ item.key }}</code></td>
-          <td>
+          <td><code class="mono">{{ item.key }}</code></td>
+          <td style="min-width:180px">
             {% if item.value_type == "bool" %}
-              <select class="form-select" name="{{ item.key }}">
+              <select class="form-select" name="{{ item.key }}" style="width:auto;min-width:120px">
                 <option value="true" {% if item.value == "true" %}selected{% endif %}>true</option>
                 <option value="false" {% if item.value == "false" %}selected{% endif %}>false</option>
               </select>
             {% elif item.value_type == "mode" %}
-              <select class="form-select" name="{{ item.key }}">
+              <select class="form-select" name="{{ item.key }}" style="width:auto;min-width:120px">
                 {% for mode in ["PAPER", "MANUAL", "LIVE"] %}
                 <option value="{{ mode }}" {% if item.value == mode %}selected{% endif %}>{{ mode }}</option>
                 {% endfor %}
               </select>
             {% else %}
-              <input class="form-control" name="{{ item.key }}" value="{{ item.display_value }}">
+              <input class="form-input" name="{{ item.key }}" value="{{ item.display_value }}" style="width:auto;min-width:160px">
             {% endif %}
           </td>
-          <td class="text-secondary">{{ item.description }}</td>
-          <td><span class="badge text-bg-light">{{ item.source }}</span></td>
+          <td class="text-muted text-sm">{{ item.description }}</td>
+          <td><span class="badge badge-neutral">{{ item.source }}</span></td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 
-  <div class="row g-3 align-items-end">
-    <div class="col-md-6">
-      <label class="form-label" for="reason">Change reason</label>
-      <input class="form-control" id="reason" name="reason" placeholder="Why is this changing?">
-    </div>
-    <div class="col-md-4">
-      <label class="form-label" for="confirmation">Risk confirmation</label>
-      <input class="form-control" id="confirmation" name="confirmation" placeholder="{{ confirmation }}">
-      <div class="form-text">Required for LIVE mode, disabling kill switch, and allowSellLongTerm=true.</div>
-    </div>
-    <div class="col-md-2">
-      <button class="btn btn-primary w-100" type="submit">Save</button>
+  <div class="card mb-16">
+    <div class="section-title mb-16">Change Metadata</div>
+    <div class="form-row">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label" for="reason">Change reason</label>
+        <input class="form-input" id="reason" name="reason" placeholder="Why is this changing?">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label" for="confirmation">Risk confirmation</label>
+        <input class="form-input" id="confirmation" name="confirmation" placeholder="{{ confirmation }}">
+        <div class="form-hint">Required for LIVE mode, disabling kill switch, and allowSellLongTerm=true</div>
+      </div>
+      <button class="btn btn-primary" type="submit">💾 Save Changes</button>
     </div>
   </div>
 </form>
+
 {% endblock %}

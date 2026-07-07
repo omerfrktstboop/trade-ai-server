@@ -1,63 +1,89 @@
 {% extends "admin/base.html" %}
 {% block title %}Admin Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
 {% block content %}
-<div class="d-flex align-items-center justify-content-between mb-3">
-  <h1 class="h3 mb-0">Dashboard</h1>
-  <a class="btn btn-outline-danger btn-sm" href="/admin/emergency">Emergency</a>
+
+<div class="stat-grid">
+  <div class="card">
+    <div class="card-header">Trading Mode</div>
+    <div class="card-value">
+      {% set mode = configs.tradingMode.display_value %}
+      <span class="badge {% if mode == 'LIVE' %}badge-live{% elif mode == 'PAPER' %}badge-paper{% else %}badge-manual{% endif %}">{{ mode }}</span>
+    </div>
+    <div class="mt-16" style="font-size:12px;color:var(--text-muted)">Current operational mode</div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Kill Switch</div>
+    <div class="card-value" style="color:{% if configs.killSwitchEnabled.display_value == 'true' %}var(--danger){% else %}var(--success){% endif %}">
+      {% if configs.killSwitchEnabled.display_value == 'true' %}⚠️ ON{% else %}✅ OFF{% endif %}
+    </div>
+    <div class="mt-16" style="font-size:12px;color:var(--text-muted)">Trading is {{ 'blocked' if configs.killSwitchEnabled.display_value == 'true' else 'active' }}</div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Today Trade Count</div>
+    <div class="card-value">{{ today_trade_count }}</div>
+    <div class="mt-16" style="font-size:12px;color:var(--text-muted)">Trades executed today</div>
+  </div>
 </div>
 
-<div class="row g-3 mb-4">
-  <div class="col-md-4">
-    <div class="metric">
-      <div class="text-secondary small">Trading Mode</div>
-      <div class="fs-4 fw-semibold">{{ configs.tradingMode.display_value }}</div>
-    </div>
+<div class="mb-24">
+  <div class="flex-between mb-16">
+    <h2 class="section-title">Latest Risk Decisions</h2>
+    <span class="text-sm text-muted">{{ latest_risk|length }} entries</span>
   </div>
-  <div class="col-md-4">
-    <div class="metric">
-      <div class="text-secondary small">Kill Switch</div>
-      <div class="fs-4 fw-semibold">{{ configs.killSwitchEnabled.display_value }}</div>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="metric">
-      <div class="text-secondary small">Today Trade Count</div>
-      <div class="fs-4 fw-semibold">{{ today_trade_count }}</div>
-    </div>
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Request</th><th>Symbol</th><th>Action</th><th>Allow</th><th>Mode</th><th>Reason</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for row in latest_risk %}
+        <tr>
+          <td class="mono">{{ row.request_id[:12] }}…</td>
+          <td><strong>{{ row.symbol }}</strong></td>
+          <td>
+            <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
+          </td>
+          <td>{% if row.allow_order %}<span class="status status-ok">Yes</span>{% else %}<span class="status status-danger">No</span>{% endif %}</td>
+          <td><span class="badge {% if row.mode == 'LIVE' %}badge-live{% elif row.mode == 'PAPER' %}badge-paper{% else %}badge-manual{% endif %}">{{ row.mode }}</span></td>
+          <td class="text-muted" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;">{{ row.reason }}</td>
+          <td class="mono text-muted">{{ row.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr class="empty-row"><td colspan="7">No risk decisions yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
 
-<h2 class="h5">Latest Risk Decisions</h2>
-<div class="table-wrap mb-4">
-  <table class="table table-sm table-striped align-middle">
-    <thead><tr><th>ID</th><th>Request</th><th>Symbol</th><th>Action</th><th>Allow</th><th>Mode</th><th>Reason</th><th>Created</th></tr></thead>
-    <tbody>
-      {% for row in latest_risk %}
-      <tr>
-        <td>{{ row.id }}</td><td>{{ row.request_id }}</td><td>{{ row.symbol }}</td><td>{{ row.action }}</td>
-        <td>{{ row.allow_order }}</td><td>{{ row.mode }}</td><td>{{ row.reason }}</td><td>{{ row.created_at }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="8" class="text-secondary">No risk decisions yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div>
+  <div class="flex-between mb-16">
+    <h2 class="section-title">Latest Order Logs</h2>
+    <span class="text-sm text-muted">{{ latest_orders|length }} entries</span>
+  </div>
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Request</th><th>Symbol</th><th>Action</th><th>Qty</th><th>Status</th><th>Mode</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for row in latest_orders %}
+        <tr>
+          <td class="mono">{{ row.request_id[:12] }}…</td>
+          <td><strong>{{ row.symbol }}</strong></td>
+          <td>
+            <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
+          </td>
+          <td>{{ row.qty }}</td>
+          <td><span class="status {% if row.status == 'FILLED' %}status-ok{% elif row.status == 'REJECTED' %}status-danger{% else %}status-idle{% endif %}">{{ row.status }}</span></td>
+          <td><span class="badge {% if row.mode == 'LIVE' %}badge-live{% elif row.mode == 'PAPER' %}badge-paper{% else %}badge-manual{% endif %}">{{ row.mode }}</span></td>
+          <td class="mono text-muted">{{ row.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr class="empty-row"><td colspan="7">No order logs yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 
-<h2 class="h5">Latest Order Logs</h2>
-<div class="table-wrap">
-  <table class="table table-sm table-striped align-middle">
-    <thead><tr><th>ID</th><th>Request</th><th>Symbol</th><th>Action</th><th>Qty</th><th>Status</th><th>Mode</th><th>Created</th></tr></thead>
-    <tbody>
-      {% for row in latest_orders %}
-      <tr>
-        <td>{{ row.id }}</td><td>{{ row.request_id }}</td><td>{{ row.symbol }}</td><td>{{ row.action }}</td>
-        <td>{{ row.qty }}</td><td>{{ row.status }}</td><td>{{ row.mode }}</td><td>{{ row.created_at }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="8" class="text-secondary">No order logs yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
 {% endblock %}

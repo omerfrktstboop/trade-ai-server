@@ -254,6 +254,9 @@ async def admin_emergency(request: Request) -> HTMLResponse:
     async with async_session_factory() as session:
         configs = await _config_lookup(session)
 
+    kill_switch = configs["killSwitchEnabled"].value == "true"
+    current_mode = configs["tradingMode"].value
+
     return templates.TemplateResponse(
         request,
         "admin/emergency.html",
@@ -261,8 +264,11 @@ async def admin_emergency(request: Request) -> HTMLResponse:
             "identity": identity,
             "active": "emergency",
             "configs": configs,
+            "kill_switch": kill_switch,
+            "current_mode": current_mode,
             "confirmation": RISKY_CONFIRMATION,
             "error": None,
+            "message": None,
         },
     )
 
@@ -289,6 +295,8 @@ async def admin_emergency_action(
     except ValueError as exc:
         async with async_session_factory() as session:
             configs = await _config_lookup(session)
+        kill_switch = configs["killSwitchEnabled"].value == "true"
+        current_mode = configs["tradingMode"].value
         return templates.TemplateResponse(
             request,
             "admin/emergency.html",
@@ -296,8 +304,11 @@ async def admin_emergency_action(
                 "identity": identity,
                 "active": "emergency",
                 "configs": configs,
+                "kill_switch": kill_switch,
+                "current_mode": current_mode,
                 "confirmation": RISKY_CONFIRMATION,
                 "error": str(exc),
+                "message": None,
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )

@@ -1,61 +1,116 @@
 {% extends "admin/base.html" %}
 {% block title %}Admin Logs{% endblock %}
+{% block page_title %}Logs{% endblock %}
 {% block content %}
-<h1 class="h3 mb-3">Logs</h1>
 
-<h2 class="h5">Latest AI Decisions</h2>
-<div class="table-wrap mb-4">
-  <table class="table table-sm table-striped align-middle">
-    <thead><tr><th>ID</th><th>Request</th><th>Symbol</th><th>Action</th><th>Confidence</th><th>Reason</th><th>Created</th></tr></thead>
-    <tbody>
-      {% for row in ai_decisions %}
-      <tr><td>{{ row.id }}</td><td>{{ row.request_id }}</td><td>{{ row.symbol }}</td><td>{{ row.action }}</td><td>{{ row.confidence }}</td><td>{{ row.reason }}</td><td>{{ row.created_at }}</td></tr>
-      {% else %}
-      <tr><td colspan="7" class="text-secondary">No AI decisions yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div class="mb-24">
+  <div class="flex-between mb-16">
+    <h2 class="section-title">AI Decisions</h2>
+    <span class="text-sm text-muted">{{ ai_decisions|length }} recent</span>
+  </div>
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Request</th><th>Symbol</th><th>Action</th><th>Confidence</th><th>Model</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for row in ai_decisions %}
+        <tr>
+          <td class="mono">{{ row.request_id[:12] }}…</td>
+          <td><strong>{{ row.symbol }}</strong></td>
+          <td>
+            <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
+          </td>
+          <td>{{ row.confidence_score if row.confidence_score else '—' }}</td>
+          <td class="text-muted">{{ row.model_name or '—' }}</td>
+          <td class="mono text-muted">{{ row.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr class="empty-row"><td colspan="6">No AI decisions yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 
-<h2 class="h5">Latest Risk Decisions</h2>
-<div class="table-wrap mb-4">
-  <table class="table table-sm table-striped align-middle">
-    <thead><tr><th>ID</th><th>Request</th><th>Symbol</th><th>Action</th><th>Allow</th><th>Mode</th><th>Reason</th><th>Created</th></tr></thead>
-    <tbody>
-      {% for row in risk_decisions %}
-      <tr><td>{{ row.id }}</td><td>{{ row.request_id }}</td><td>{{ row.symbol }}</td><td>{{ row.action }}</td><td>{{ row.allow_order }}</td><td>{{ row.mode }}</td><td>{{ row.reason }}</td><td>{{ row.created_at }}</td></tr>
-      {% else %}
-      <tr><td colspan="8" class="text-secondary">No risk decisions yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div class="mb-24">
+  <div class="flex-between mb-16">
+    <h2 class="section-title">Risk Decisions</h2>
+    <span class="text-sm text-muted">{{ risk_decisions|length }} recent</span>
+  </div>
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Request</th><th>Symbol</th><th>Action</th><th>Allow</th><th>Reason</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for row in risk_decisions %}
+        <tr>
+          <td class="mono">{{ row.request_id[:12] }}…</td>
+          <td><strong>{{ row.symbol }}</strong></td>
+          <td>
+            <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
+          </td>
+          <td>{% if row.allow_order %}<span class="status status-ok">Yes</span>{% else %}<span class="status status-danger">No</span>{% endif %}</td>
+          <td class="text-muted" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;">{{ row.reason }}</td>
+          <td class="mono text-muted">{{ row.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr class="empty-row"><td colspan="6">No risk decisions yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 
-<h2 class="h5">Latest Order Logs</h2>
-<div class="table-wrap mb-4">
-  <table class="table table-sm table-striped align-middle">
-    <thead><tr><th>ID</th><th>Request</th><th>Symbol</th><th>Action</th><th>Qty</th><th>Status</th><th>Message</th><th>Created</th></tr></thead>
-    <tbody>
-      {% for row in order_logs %}
-      <tr><td>{{ row.id }}</td><td>{{ row.request_id }}</td><td>{{ row.symbol }}</td><td>{{ row.action }}</td><td>{{ row.qty }}</td><td>{{ row.status }}</td><td>{{ row.matrix_message }}</td><td>{{ row.created_at }}</td></tr>
-      {% else %}
-      <tr><td colspan="8" class="text-secondary">No order logs yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div class="mb-24">
+  <div class="flex-between mb-16">
+    <h2 class="section-title">Order Logs</h2>
+    <span class="text-sm text-muted">{{ order_logs|length }} recent</span>
+  </div>
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Request</th><th>Symbol</th><th>Action</th><th>Qty</th><th>Status</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for row in order_logs %}
+        <tr>
+          <td class="mono">{{ row.request_id[:12] }}…</td>
+          <td><strong>{{ row.symbol }}</strong></td>
+          <td>
+            <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-info{% endif %}">{{ row.action }}</span>
+          </td>
+          <td class="mono">{{ row.qty }}</td>
+          <td><span class="status {% if row.status == 'FILLED' %}status-ok{% elif row.status == 'REJECTED' %}status-danger{% else %}status-idle{% endif %}">{{ row.status }}</span></td>
+          <td class="mono text-muted">{{ row.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr class="empty-row"><td colspan="6">No order logs yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 
-<h2 class="h5">Latest Config Audit Logs</h2>
-<div class="table-wrap">
-  <table class="table table-sm table-striped align-middle">
-    <thead><tr><th>ID</th><th>Key</th><th>Old</th><th>New</th><th>Changed By</th><th>Reason</th><th>Created</th></tr></thead>
-    <tbody>
-      {% for row in audit_logs %}
-      <tr><td>{{ row.id }}</td><td>{{ row.key }}</td><td>{{ row.old_value }}</td><td>{{ row.new_value }}</td><td>{{ row.changed_by }}</td><td>{{ row.reason }}</td><td>{{ row.created_at }}</td></tr>
-      {% else %}
-      <tr><td colspan="7" class="text-secondary">No config changes yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div>
+  <div class="flex-between mb-16">
+    <h2 class="section-title">Config Audit Logs</h2>
+    <span class="text-sm text-muted">{{ audit_logs|length }} recent</span>
+  </div>
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Key</th><th>From</th><th>To</th><th>By</th><th>Reason</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for row in audit_logs %}
+        <tr>
+          <td><code class="mono">{{ row.config_key }}</code></td>
+          <td class="mono text-muted">{{ row.old_value }}</td>
+          <td class="mono">{{ row.new_value }}</td>
+          <td>{{ row.changed_by or '—' }}</td>
+          <td class="text-muted" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;">{{ row.reason }}</td>
+          <td class="mono text-muted">{{ row.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr class="empty-row"><td colspan="6">No audit logs yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
+
 {% endblock %}

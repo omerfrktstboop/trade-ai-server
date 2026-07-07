@@ -390,6 +390,8 @@ namespace Matriks.Lean.Algotrader
                 }
             }
 
+            SafeDebug("Agentic fetch request rootSymbol=" + rootSymbol + " targetSymbol=" + targetSymbol + " dataType=" + requiredDataType);
+
             var request = new AgenticSignalRequest
             {
                 RequestId = rootRequestId,

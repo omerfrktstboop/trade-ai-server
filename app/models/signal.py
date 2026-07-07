@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import Optional
 
@@ -36,6 +37,30 @@ class DataRequestType(str, Enum):
     ORDER_FLOW = "ORDER_FLOW"
     NEWS_DETAIL = "NEWS_DETAIL"
     FUND_FLOW = "FUND_FLOW"
+
+
+# ── New agentic models (v2 — user-specified names) ────────────────────
+
+
+class AgenticDataType(str, Enum):
+    """Data types the agent can request from Matriks IQ client."""
+
+    DEPTH = "DEPTH"
+    AKD = "AKD"
+    OHLCV = "OHLCV"
+    TECHNICAL = "TECHNICAL"
+    NEWS = "NEWS"
+    FUND = "FUND"
+    BROKER_FLOW = "BROKER_FLOW"
+
+
+class AgenticAction(str, Enum):
+    """Actions for the agentic multi-turn evaluation."""
+
+    BUY = "BUY"
+    SELL = "SELL"
+    WAIT = "WAIT"
+    FETCH_DATA = "FETCH_DATA"
 
 
 class OrderType(str, Enum):
@@ -166,3 +191,61 @@ class AgentSignalResponse(BaseModel):
     target_price: Optional[float] = Field(None, alias="targetPrice")
 
     model_config = {"populate_by_name": True}
+
+
+# ── v2 Agentic models (user-specified names) ──────────────────────────────
+
+
+class MarketDataPayload(BaseModel):
+    """Single market data payload from Matriks IQ client."""
+
+    symbol: str
+    data_type: AgenticDataType = Field(..., alias="dataType")
+    payload: dict
+    timestamp: Optional[datetime] = None
+
+
+class ContextStep(BaseModel):
+    """A single step in the agentic multi-turn context history."""
+
+    step_no: int = Field(..., alias="stepNo")
+    symbol: str
+    data_type: AgenticDataType = Field(..., alias="dataType")
+    payload: dict
+    reason: Optional[str] = None
+
+
+class AgenticSignalRequest(BaseModel):
+    """Request for the agentic multi-turn signal evaluation endpoint."""
+
+    request_id: str = Field(..., alias="requestId")
+    session_id: Optional[str] = Field(None, alias="sessionId")
+    symbol: str
+    market_data: MarketDataPayload = Field(..., alias="marketData")
+    context_history: list[ContextStep] = Field(default_factory=list, alias="contextHistory")
+    mode: SignalMode = SignalMode.PAPER
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AgenticSignalResponse(BaseModel):
+    """Response for the agentic multi-turn signal evaluation endpoint."""
+
+    request_id: str = Field(..., alias="requestId")
+    session_id: str = Field(..., alias="sessionId")
+    action: AgenticAction
+    allow_order: bool = Field(..., alias="allowOrder")
+    requires_confirmation: bool = Field(..., alias="requiresConfirmation")
+    reason: str
+    target_symbol: Optional[str] = Field(None, alias="targetSymbol")
+    required_data_type: Optional[AgenticDataType] = Field(None, alias="requiredDataType")
+    confidence_score: float = Field(..., alias="confidenceScore")
+    risk_score: float = Field(..., alias="riskScore")
+    qty: float
+    order_type: OrderType = Field(..., alias="orderType")
+    price: Optional[float] = None
+    entry_range: Optional[EntryRange] = Field(None, alias="entryRange")
+    stop_loss: Optional[float] = Field(None, alias="stopLoss")
+    target_price: Optional[float] = Field(None, alias="targetPrice")
+
+    model_config = ConfigDict(populate_by_name=True)

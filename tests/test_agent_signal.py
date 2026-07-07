@@ -243,3 +243,273 @@ def test_unauthenticated_request(client: TestClient) -> None:
     resp = client.post("/api/signal/evaluate-agent", json=_make_payload())
     assert resp.status_code == 401
     assert "Not authenticated" in resp.json()["detail"]
+
+
+# ── v2 Pydantic model tests ──────────────────────────────────────────────────
+
+
+def test_agentic_data_type_enum() -> None:
+    """AgenticDataType must have all 7 values."""
+    from app.models.signal import AgenticDataType
+
+    expected = {"DEPTH", "AKD", "OHLCV", "TECHNICAL", "NEWS", "FUND", "BROKER_FLOW"}
+    actual = {e.value for e in AgenticDataType}
+    assert actual == expected
+
+
+def test_agentic_action_enum() -> None:
+    """AgenticAction must have BUY, SELL, WAIT, FETCH_DATA."""
+    from app.models.signal import AgenticAction
+
+    expected = {"BUY", "SELL", "WAIT", "FETCH_DATA"}
+    actual = {e.value for e in AgenticAction}
+    assert actual == expected
+
+
+def test_market_data_payload() -> None:
+    """MarketDataPayload serialization and camelCase aliases."""
+    from app.models.signal import AgenticDataType, MarketDataPayload
+
+    m = MarketDataPayload(
+        symbol="THYAO",
+        dataType="DEPTH",
+        payload={"bid": 100, "ask": 101},
+    )
+    assert m.symbol == "THYAO"
+    assert m.data_type == AgenticDataType.DEPTH
+    assert m.payload == {"bid": 100, "ask": 101}
+    assert m.timestamp is None
+
+    # Serialize → camelCase
+    j = m.model_dump(by_alias=True)
+    assert j["dataType"] == "DEPTH"
+    assert j["payload"] == {"bid": 100, "ask": 101}
+    assert j["timestamp"] is None
+
+
+def test_market_data_payload_with_timestamp() -> None:
+    """MarketDataPayload with optional timestamp."""
+    from datetime import datetime, timezone
+    from app.models.signal import MarketDataPayload
+
+    ts = datetime(2026, 7, 7, 12, 0, 0, tzinfo=timezone.utc)
+    m = MarketDataPayload(
+        symbol="THYAO",
+        dataType="OHLCV",
+        payload={"close": 100.0},
+        timestamp=ts,
+    )
+    assert m.timestamp == ts
+
+    j = m.model_dump(by_alias=True)
+    assert j["timestamp"] is not None
+
+
+def test_context_step() -> None:
+    """ContextStep model and camelCase aliases."""
+    from app.models.signal import AgenticDataType, ContextStep
+
+    c = ContextStep(
+        stepNo=1,
+        symbol="THYAO",
+        dataType="NEWS",
+        payload={"headline": "KAP bildirimi"},
+    )
+    assert c.step_no == 1
+    assert c.symbol == "THYAO"
+    assert c.data_type == AgenticDataType.NEWS
+    assert c.payload == {"headline": "KAP bildirimi"}
+    assert c.reason is None
+
+    j = c.model_dump(by_alias=True)
+    assert j["stepNo"] == 1
+    assert j["dataType"] == "NEWS"
+
+
+def test_context_step_with_reason() -> None:
+    """ContextStep with optional reason field."""
+    from app.models.signal import ContextStep
+
+    c = ContextStep(
+        stepNo=3,
+        symbol="AKBNK",
+        dataType="TECHNICAL",
+        payload={"rsi": 70},
+        reason="Overbought check",
+    )
+    assert c.reason == "Overbought check"
+
+
+def test_agentic_signal_request() -> None:
+    """AgenticSignalRequest with all required + optional fields."""
+    from app.models.signal import AgenticSignalRequest, ContextStep, MarketDataPayload
+
+    req = AgenticSignalRequest(
+        requestId="req-001",
+        sessionId="sess-abc",
+        symbol="THYAO",
+        marketData={
+            "symbol": "THYAO",
+            "dataType": "OHLCV",
+            "payload": {"close": 100},
+        },
+        contextHistory=[
+            {"stepNo": 1, "symbol": "THYAO", "dataType": "DEPTH", "payload": {}}
+        ],
+    )
+
+    assert req.request_id == "req-001"
+    assert req.session_id == "sess-abc"
+    assert req.symbol == "THYAO"
+    assert isinstance(req.market_data, MarketDataPayload)
+    assert req.market_data.data_type.value == "OHLCV"
+    assert len(req.context_history) == 1
+    assert isinstance(req.context_history[0], ContextStep)
+    assert req.context_history[0].step_no == 1
+
+    # camelCase aliases
+    j = req.model_dump(by_alias=True)
+    assert j["requestId"] == "req-001"
+    assert j["sessionId"] == "sess-abc"
+    assert j["marketData"]["dataType"] == "OHLCV"
+    assert len(j["contextHistory"]) == 1
+    assert j["contextHistory"][0]["stepNo"] == 1
+
+
+def test_agentic_signal_request_defaults() -> None:
+    """AgenticSignalRequest defaults: None session_id, empty history, PAPER mode."""
+    from app.models.signal import AgenticSignalRequest, SignalMode
+
+    req = AgenticSignalRequest(
+        requestId="req-002",
+        symbol="AKBNK",
+        marketData={
+            "symbol": "AKBNK",
+            "dataType": "AKD",
+            "payload": {},
+        },
+    )
+    assert req.session_id is None
+    assert req.context_history == []
+    assert req.mode == SignalMode.PAPER
+
+
+def test_agentic_signal_response_buy() -> None:
+    """AgenticSignalResponse for BUY action."""
+    from app.models.signal import AgenticAction, AgenticSignalResponse
+
+    resp = AgenticSignalResponse(
+        requestId="req-001",
+        sessionId="sess-abc",
+        action="BUY",
+        allowOrder=True,
+        requiresConfirmation=False,
+        reason="Strong signal with fund support",
+        confidenceScore=0.85,
+        riskScore=0.2,
+        qty=1000,
+        orderType="LIMIT",
+        price=98.5,
+        entryRange={"min": 98.0, "max": 99.0},
+        stopLoss=95.0,
+        targetPrice=110.0,
+    )
+
+    assert resp.action == AgenticAction.BUY
+    assert resp.allow_order is True
+    assert resp.requires_confirmation is False
+    assert resp.qty == 1000
+    assert resp.order_type.value == "LIMIT"
+    assert resp.entry_range.min == 98.0
+    assert resp.entry_range.max == 99.0
+    assert resp.stop_loss == 95.0
+    assert resp.target_price == 110.0
+
+
+def test_agentic_signal_response_fetch_data() -> None:
+    """AgenticSignalResponse for FETCH_DATA — no order fields."""
+    from app.models.signal import AgenticAction, AgenticDataType, AgenticSignalResponse
+
+    resp = AgenticSignalResponse(
+        requestId="req-002",
+        sessionId="sess-def",
+        action="FETCH_DATA",
+        allowOrder=False,
+        requiresConfirmation=False,
+        reason="Need broker flow data for THYAO",
+        targetSymbol="THYAO",
+        requiredDataType="BROKER_FLOW",
+        confidenceScore=0.0,
+        riskScore=0.0,
+        qty=0,
+        orderType="NONE",
+    )
+
+    assert resp.action == AgenticAction.FETCH_DATA
+    assert resp.allow_order is False
+    assert resp.target_symbol == "THYAO"
+    assert resp.required_data_type == AgenticDataType.BROKER_FLOW
+    assert resp.qty == 0
+    assert resp.order_type.value == "NONE"
+    assert resp.entry_range is None
+    assert resp.stop_loss is None
+    assert resp.target_price is None
+
+
+def test_agentic_signal_response_camelcase_serialization() -> None:
+    """AgenticSignalResponse serializes all fields to camelCase."""
+    from app.models.signal import AgenticSignalResponse
+
+    resp = AgenticSignalResponse(
+        requestId="r99", sessionId="s99", action="WAIT",
+        allowOrder=False, requiresConfirmation=True, reason="test",
+        confidenceScore=0.1, riskScore=0.9, qty=0, orderType="NONE",
+    )
+
+    j = resp.model_dump(by_alias=True)
+    assert j["requestId"] == "r99"
+    assert j["sessionId"] == "s99"
+    assert j["allowOrder"] is False
+    assert j["requiresConfirmation"] is True
+    assert j["confidenceScore"] == 0.1
+    assert j["riskScore"] == 0.9
+    assert j["orderType"] == "NONE"
+    assert "targetSymbol" in j
+    assert "requiredDataType" in j
+    assert "entryRange" in j
+    assert "stopLoss" in j
+    assert "targetPrice" in j
+
+
+def test_existing_models_unaffected() -> None:
+    """Existing SignalResponse and AgentSignalResponse still work exactly as before."""
+    from app.models.signal import (
+        AgentAction,
+        AgentSignalResponse,
+        EntryRange,
+        SignalAction,
+        SignalResponse,
+    )
+
+    # Existing signal response
+    s = SignalResponse(
+        requestId="r1", symbol="T", action="BUY",
+        qty=500, orderType="LIMIT", confidenceScore=0.8,
+        riskScore=0.3, allowOrder=True, reason="test",
+        entryRange={"min": 10, "max": 11}, stopLoss=9, targetPrice=14,
+    )
+    assert s.action == SignalAction.BUY
+    assert s.qty == 500
+
+    # Existing agent signal response
+    a = AgentSignalResponse(
+        requestId="r2", symbol="T", sessionId="s", action="FETCH_DATA",
+        reason="needs data",
+    )
+    assert a.action == AgentAction.FETCH_DATA
+    assert a.qty == 0.0
+
+    # EntryRange
+    e = EntryRange(min=5, max=6)
+    assert e.min == 5
+    assert e.max == 6

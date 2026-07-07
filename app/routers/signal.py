@@ -517,8 +517,8 @@ async def evaluate_signal_agent(body: SignalRequest) -> AgentSignalResponse:
             reason=plan.reason,
         )
 
-    # ── 7: WAIT from planner (invalid symbol etc.) ────────────────────
-    if plan.action == AgentAction.WAIT and plan.fetch_data is None:
+    # ── 7: WAIT from planner (hard stop — e.g. symbol not allowed) ────
+    if plan.action == AgentAction.WAIT and not plan.proceed_to_ai:
         session_store.close_session(session.session_id)
         return AgentSignalResponse(
             requestId=request_id,

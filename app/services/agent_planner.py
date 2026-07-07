@@ -40,6 +40,7 @@ class PlanResult:
     fetch_data: FetchData | None = None
     reason: str = ""
     required_data_type: AgenticDataType | None = None
+    proceed_to_ai: bool = False  # True → route to AI + RiskEngine
 
 
 # ── Planner: v2 (SessionState-based) ─────────────────────────────────────────
@@ -79,10 +80,12 @@ def plan_next(session: SessionState) -> PlanResult:
         return PlanResult(
             action=AgentAction.WAIT,
             reason="All data checks complete — delegating to AI for final decision",
+            proceed_to_ai=True,
         )
 
     # ── Budget exhausted → final ──────────────────────────────────────
     return PlanResult(
         action=AgentAction.WAIT,
         reason="Tool call budget exhausted — delegating to AI for final decision",
+        proceed_to_ai=True,
     )

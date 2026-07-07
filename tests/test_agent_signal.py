@@ -89,7 +89,162 @@ def _post(
     return resp.json()
 
 
-# ── Test: first turn returns FETCH_DATA ──────────────────────────────────────
+# ── 1. New session created ───────────────────────────────────────────────────
+
+
+def test_new_session_created(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """First request without sessionId returns a new sessionId in response."""
+    body = _post(client, _make_payload(), auth_headers)
+
+    assert "sessionId" in body
+    assert body["sessionId"] != ""
+    # Must be a 32-char hex UUID string
+    assert len(body["sessionId"]) == 32
+    assert all(c in "0123456789abcdef" for c in body["sessionId"])
+
+
+# ── 2. FETCH_DATA response ───────────────────────────────────────────────────
+
+
+def test_fetch_data_response_structure(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """Server can return FETCH_DATA with fetchData payload and allowOrder=False."""
+    body = _post(client, _make_payload(), auth_headers)
+
+    assert body["action"] == "FETCH_DATA"
+    assert body["fetchData"] is not None
+    assert body["fetchData"]["targetSymbol"] == "THYAO"
+    assert body["fetchData"]["dataType"] == "DEPTH"
+    assert body["allowOrder"] is False
+
+
+# ── 3. Second request same session continues ─────────────────────────────────
+
+
+def test_second_request_same_session_continues(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """Second request with same sessionId advances the planner."""
+    body1 = _post(client, _make_payload(), auth_headers)
+    sid = body1["sessionId"]
+
+    # Second turn with same session
+    body2 = _post(client, _make_payload(session_id=sid), auth_headers)
+
+    # Session ID unchanged
+    assert body2["sessionId"] == sid
+    # Different data type from first turn (DEPTH → AKD)
+    assert body2["action"] in ("FETCH_DATA", "WAIT", "BUY", "SELL")
+    if body2["action"] == "FETCH_DATA":
+        assert body2["fetchData"]["dataType"] != "DEPTH"
+
+
+# ── 4. Max tool calls exceeded ───────────────────────────────────────────────
+
+
+def test_max_tool_calls_exceeded_returns_wait(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """After MAX_TOOL_CALLS, the planner must not return FETCH_DATA."""
+    body1 = _post(client, _make_payload(), auth_headers)
+    sid = body1["sessionId"]
+
+    # Exhaust all 3 tool calls
+    for _ in range(MAX_TOOL_CALLS_PER_SESSION):
+        resp = _post(client, _make_payload(session_id=sid), auth_headers)
+        assert resp["sessionId"] == sid
+
+    # 4th call: budget exhausted → final decision (never FETCH_DATA)
+    body_final = _post(client, _make_payload(session_id=sid), auth_headers)
+    assert body_final["action"] != "FETCH_DATA", (
+        f"Cannot FETCH_DATA after {MAX_TOOL_CALLS_PER_SESSION} tool calls"
+    )
+    assert body_final["action"] in ("WAIT", "BUY", "SELL")
+
+
+# ── 5. Expired session returns WAIT ──────────────────────────────────────────
+
+
+def test_expired_session_returns_wait(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """When a session expires, the endpoint must return WAIT."""
+    body1 = _post(client, _make_payload(), auth_headers)
+    sid = body1["sessionId"]
+
+    # Force-expire the session
+    session: SessionState | None = session_store.get_session(sid)
+    assert session is not None
+    object.__setattr__(
+        session, "created_at", time.monotonic() - SESSION_TTL_SECONDS - 10
+    )
+    session_store._store[sid] = session
+
+    body2 = _post(client, _make_payload(session_id=sid), auth_headers)
+    assert body2["action"] == "WAIT"
+    assert "expired" in body2.get("reason", "").lower()
+
+
+# ── 6. Invalid targetSymbol blocked ──────────────────────────────────────────
+
+
+def test_invalid_target_symbol_blocked(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """Symbol not in allowed list returns WAIT immediately."""
+    body = _post(client, _make_payload(symbol="BTCUSDT"), auth_headers)
+    assert body["action"] == "WAIT"
+    assert "not in the allowed list" in body.get("reason", "").lower()
+
+
+# ── 7. RiskEngine integration (final decision path) ──────────────────────────
+
+
+def test_final_decision_passes_through_risk_engine(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """After max tool calls, final decision goes through AI.decide() + RiskEngine.
+
+    Verifies that the PROCEED → AI → RiskEngine path produces a properly
+    shaped response with all RiskEngine-enriched fields.
+    """
+    body1 = _post(client, _make_payload(), auth_headers)
+    sid = body1["sessionId"]
+
+    # Exhaust all tool calls
+    for _ in range(MAX_TOOL_CALLS_PER_SESSION):
+        _post(client, _make_payload(session_id=sid), auth_headers)
+
+    # Final call → PROCEED → AI.decide() → RiskEngine.evaluate()
+    body_final = _post(client, _make_payload(session_id=sid), auth_headers)
+
+    # Decision must be BUY/SELL/WAIT (never FETCH_DATA)
+    assert body_final["action"] in ("BUY", "SELL", "WAIT")
+
+    # RiskEngine-enriched fields must be present
+    for field in (
+        "allowOrder",
+        "requiresConfirmation",
+        "riskScore",
+        "confidenceScore",
+        "reason",
+        "qty",
+        "orderType",
+        "price",
+        "entryRange",
+        "stopLoss",
+        "targetPrice",
+    ):
+        assert field in body_final, f"Missing RiskEngine field: {field}"
+
+    assert isinstance(body_final["qty"], (int, float))
+    assert body_final["orderType"] in ("LIMIT", "MARKET", "NONE")
+
+
+# ── Legacy / v2 model tests ──────────────────────────────────────────────────
 
 
 def test_first_turn_returns_fetch_data(
@@ -106,26 +261,17 @@ def test_first_turn_returns_fetch_data(
     assert body["fetchData"]["targetSymbol"] == "THYAO"
 
 
-# ── Test: second turn (same session, feed data) ──────────────────────────────
-
-
 def test_second_turn_with_context(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
     """A second call with the same session should advance the planner."""
-    # First turn: get session + FETCH_DATA
     body1 = _post(client, _make_payload(), auth_headers)
     sid = body1["sessionId"]
 
-    # Second turn: same session, feed back with market data
     body2 = _post(client, _make_payload(session_id=sid), auth_headers)
 
-    # Should advance: FETCH_DATA for next data type or final
     assert body2["sessionId"] == sid
     assert body2["action"] in ("FETCH_DATA", "WAIT", "BUY", "SELL")
-
-
-# ── Test: max tool calls exhausted ───────────────────────────────────────────
 
 
 def test_max_tool_calls_to_final(
@@ -135,18 +281,13 @@ def test_max_tool_calls_to_final(
     body1 = _post(client, _make_payload(), auth_headers)
     sid = body1["sessionId"]
 
-    # Exhaust all tool calls
     for _ in range(MAX_TOOL_CALLS_PER_SESSION):
         _post(client, _make_payload(session_id=sid), auth_headers)
 
-    # Next call should trigger final decision (WAIT / BUY / SELL)
     body_final = _post(client, _make_payload(session_id=sid), auth_headers)
     assert body_final["action"] in ("WAIT", "BUY", "SELL"), (
         f"Expected final action, got {body_final['action']}"
     )
-
-
-# ── Test: session TTL expiry ─────────────────────────────────────────────────
 
 
 def test_session_ttl_expiry(
@@ -156,19 +297,16 @@ def test_session_ttl_expiry(
     body1 = _post(client, _make_payload(), auth_headers)
     sid = body1["sessionId"]
 
-    # Force-expire the session in v2 store (SessionState.created_at uses time.monotonic)
     session: SessionState | None = session_store.get_session(sid)
     assert session is not None, f"Session {sid} not found in v2 store"
-    object.__setattr__(session, "created_at", time.monotonic() - SESSION_TTL_SECONDS - 10)
-    # Re-insert expired session so get_session can find and reject it
+    object.__setattr__(
+        session, "created_at", time.monotonic() - SESSION_TTL_SECONDS - 10
+    )
     session_store._store[sid] = session
 
     body2 = _post(client, _make_payload(session_id=sid), auth_headers)
     assert body2["action"] == "WAIT"
     assert "expired" in body2.get("reason", "").lower()
-
-
-# ── Test: disallowed symbol ──────────────────────────────────────────────────
 
 
 def test_disallowed_symbol_returns_wait(
@@ -180,9 +318,6 @@ def test_disallowed_symbol_returns_wait(
     assert "not in the allowed list" in body.get("reason", "").lower()
 
 
-# ── Test: FETCH_DATA blocks order creation ───────────────────────────────────
-
-
 def test_fetch_data_blocks_order(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
@@ -190,9 +325,6 @@ def test_fetch_data_blocks_order(
     body = _post(client, _make_payload(), auth_headers)
     assert body["action"] == "FETCH_DATA"
     assert body["allowOrder"] is False
-
-
-# ── Test: independent sessions ───────────────────────────────────────────────
 
 
 def test_independent_sessions(
@@ -207,9 +339,6 @@ def test_independent_sessions(
     assert s1 != s2
 
 
-# ── Test: SessionStore cleanup ───────────────────────────────────────────────
-
-
 def test_store_cleanup_removes_expired() -> None:
     """Expired sessions should be cleaned up automatically."""
     store = agent_session_store
@@ -222,15 +351,10 @@ def test_store_cleanup_removes_expired() -> None:
     s1.created_at = time.monotonic() - SESSION_TTL_SECONDS - 1
     assert s1.is_expired
 
-    # get() on expired should return None and clean
     assert store.get(s1.session_id, s1.symbol) is None
     assert store._key(s1.session_id, s1.symbol) not in store._store
 
-    # s2 still alive
     assert store.get(s2.session_id, s2.symbol) is not None
-
-
-# ── Test: AgentSession.add_context merges dictionaries ───────────────────────
 
 
 def test_session_context_merge() -> None:
@@ -243,9 +367,6 @@ def test_session_context_merge() -> None:
     session.add_context("volume", 5000)
     session.add_context("volume", 6000)
     assert session.context_data["volume"] == 6000
-
-
-# ── Test: unauthenticated request returns 401 ────────────────────────────────
 
 
 def test_unauthenticated_request(client: TestClient) -> None:
@@ -290,7 +411,6 @@ def test_market_data_payload() -> None:
     assert m.payload == {"bid": 100, "ask": 101}
     assert m.timestamp is None
 
-    # Serialize → camelCase
     j = m.model_dump(by_alias=True)
     assert j["dataType"] == "DEPTH"
     assert j["payload"] == {"bid": 100, "ask": 101}
@@ -377,7 +497,6 @@ def test_agentic_signal_request() -> None:
     assert isinstance(req.context_history[0], ContextStep)
     assert req.context_history[0].step_no == 1
 
-    # camelCase aliases
     j = req.model_dump(by_alias=True)
     assert j["requestId"] == "req-001"
     assert j["sessionId"] == "sess-abc"
@@ -501,7 +620,6 @@ def test_existing_models_unaffected() -> None:
         SignalResponse,
     )
 
-    # Existing signal response
     s = SignalResponse(
         requestId="r1", symbol="T", action="BUY",
         qty=500, orderType="LIMIT", confidenceScore=0.8,
@@ -511,7 +629,6 @@ def test_existing_models_unaffected() -> None:
     assert s.action == SignalAction.BUY
     assert s.qty == 500
 
-    # Existing agent signal response
     a = AgentSignalResponse(
         requestId="r2", symbol="T", sessionId="s", action="FETCH_DATA",
         reason="needs data",
@@ -519,7 +636,6 @@ def test_existing_models_unaffected() -> None:
     assert a.action == AgentAction.FETCH_DATA
     assert a.qty == 0.0
 
-    # EntryRange
     e = EntryRange(min=5, max=6)
     assert e.min == 5
     assert e.max == 6

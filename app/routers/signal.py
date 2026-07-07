@@ -22,12 +22,12 @@ from app.models.db import AiDecision as AiDecisionModel
 from app.models.db import MarketSnapshot
 from app.models.db import RiskDecision as RiskDecisionModel
 from app.models.signal import (
-    AgentAction,
+    AgenticAction,
     AgenticDataType,
-    AgentSignalResponse,
+    AgenticSignalRequest,
+    AgenticSignalResponse,
     ContextStep,
     EntryRange,
-    FetchData,
     OrderType,
     SignalAction,
     SignalRequest,
@@ -419,162 +419,225 @@ async def _persist_to_db(
         )
 
 
-# ── Agent endpoint (v2 — SessionState + session_store) ──────────────────────
+# ── Agent endpoint (v2 — AgenticSignalRequest → AgenticSignalResponse) ─────
+
+
+def _agentic_to_signal_request(
+    agentic: AgenticSignalRequest,
+    session_id: str = "",
+) -> SignalRequest:
+    """Build a :class:`SignalRequest` from the agentic marketData payload.
+
+    Falls back gracefully when fields are missing — the downstream AI and
+    RiskEngine handle partial data defensively.
+    """
+    p = agentic.market_data.payload
+    return SignalRequest(
+        requestId=agentic.request_id,
+        symbol=agentic.symbol,
+        timeframe=p.get("timeframe", "1h"),
+        lastPrice=p.get("lastPrice", p.get("close", 0)),
+        open=p.get("open", 0),
+        high=p.get("high", 0),
+        low=p.get("low", 0),
+        volume=p.get("volume", 0),
+        rsi=p.get("rsi") or p.get("rsi14"),
+        ema20=p.get("ema20"),
+        ema50=p.get("ema50"),
+        macd=p.get("macd"),
+        macdSignal=p.get("macdSignal"),
+        botPositionQty=p.get("botPositionQty", 0),
+        totalAccountQty=p.get("totalAccountQty", 0),
+        lockedLongTermQty=p.get("lockedLongTermQty", 0),
+        dailyTradeCount=p.get("dailyTradeCount", 0),
+        sessionId=session_id,
+        mode=agentic.mode,
+    )
+
+
+def _agentic_waiter(
+    request_id: str,
+    session_id: str,
+    reason: str,
+    *,
+    proceed_to_ai: bool = False,
+) -> AgenticSignalResponse:
+    """Shortcut: return a WAIT response with allowOrder=False."""
+    return AgenticSignalResponse(
+        requestId=request_id,
+        sessionId=session_id,
+        action=AgenticAction.WAIT,
+        allowOrder=False,
+        requiresConfirmation=False,
+        reason=reason,
+        confidenceScore=0.0,
+        riskScore=0.0,
+        qty=0.0,
+        orderType=OrderType.NONE,
+    )
 
 
 @router.post("/signal/evaluate-agent")
-async def evaluate_signal_agent(body: SignalRequest) -> AgentSignalResponse:
+async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResponse:
     """Evaluate a trading signal with agentic multi-turn data gathering (v2).
 
-    Uses SessionState (Pydantic) + SessionStore (in-memory RLock) for
-    session management instead of the v1 AgentSession.
+    Accepts :class:`AgenticSignalRequest` and returns :class:`AgenticSignalResponse`.
+    Uses SessionState (Pydantic) + SessionStore (in-memory RLock).
 
     Flow:
-    1. Request al - parse SignalRequest
-    2. sessionId yoksa yeni session olustur (session_store.create_session)
-    3. sessionId varsa session_store'dan bul - expired/missing -> WAIT
-    4. Gelen marketData'yi ContextStep olarak session'a ekle
-    5. Planner calistir (rule-based -> FETCH_DATA or PROCEED)
-    6. FETCH_DATA -> validate targetSymbol, requiredDataType, toolCallCount
-    7. PROCEED -> AI.decide() -> RiskEngine -> close_session -> final response
+    1. Parse AgenticSignalRequest — extract marketData + contextHistory
+    2. Create or retrieve session
+    3. Append marketData as ContextStep (with actual dataType from request)
+    4. Append contextHistory steps if provided
+    5. Planner → FETCH_DATA or PROCEED
+    6. FETCH_DATA → validate targetSymbol, toolCallCount → return with top-level fields
+    7. PROCEED → build SignalRequest bridge → AI.decide() → RiskEngine → final
     """
-    body, runtime_engine, kill_switch_enabled = await _with_runtime_controls(body)
-    request_id = body.request_id
-    raw_session_id = body.session_id
-    extra = body.model_extra or {}
+    # ── Kill switch check (async, needs DB) ────────────────────────────
+    req_id = body.request_id
     symbol = body.symbol
+    raw_session_id = body.session_id
+
+    try:
+        async with async_session_factory() as session:
+            kill_switch_enabled = await is_kill_switch_enabled(session)
+    except Exception:
+        logger.exception("Failed to check kill switch for agent endpoint")
+        kill_switch_enabled = False
 
     if kill_switch_enabled:
-        return AgentSignalResponse(
-            requestId=request_id,
-            symbol=symbol,
-            sessionId=raw_session_id or "",
-            action=AgentAction.WAIT,
-            allowOrder=False,
-            reason="Kill switch enabled: trading disabled by admin",
+        return _agentic_waiter(
+            req_id, raw_session_id or "",
+            "Kill switch enabled: trading disabled by admin",
         )
 
-    # ── 1-2-3: Session management ────────────────────────────────────
+    # ── 1-2: Session management ────────────────────────────────────────
     session_store.cleanup_expired_sessions()
 
     if raw_session_id:
-        session = session_store.get_session(raw_session_id)
-        if session is None:
-            return AgentSignalResponse(
-                requestId=request_id,
-                symbol=symbol,
-                sessionId=raw_session_id,
-                action=AgentAction.WAIT,
-                reason="Session expired or not found",
+        sess = session_store.get_session(raw_session_id)
+        if sess is None:
+            return _agentic_waiter(
+                req_id, raw_session_id,
+                "Session expired or not found",
             )
     else:
-        session = session_store.create_session(symbol)
+        sess = session_store.create_session(symbol)
 
-    # ── 4: Append marketData as ContextStep ──────────────────────────
-    market_data = body.model_dump(by_alias=True)
-    step_no = len(session.steps) + 1
+    # ── 3: Append marketData as ContextStep ────────────────────────────
+    md = body.market_data
+    step_no = len(sess.steps) + 1
     step = ContextStep(
         stepNo=step_no,
-        symbol=symbol,
-        dataType=AgenticDataType.OHLCV,
-        payload=market_data,
-        reason="Market data snapshot",
+        symbol=md.symbol,
+        dataType=md.data_type,  # <-- actual dataType from request, not hardcoded
+        payload=md.payload,
+        reason=f"Market data: {md.data_type.value}",
     )
-    session_store.append_step(session.session_id, step)
+    session_store.append_step(sess.session_id, step)
 
-    # ── 5: Planner decides next action ────────────────────────────────
-    plan = plan_next(session)
+    # ── 4: Append contextHistory steps ─────────────────────────────────
+    for hist_step in body.context_history:
+        session_store.append_step(sess.session_id, hist_step)
 
-    # ── 6: FETCH_DATA path (data request) ─────────────────────────────
-    if plan.action == AgentAction.FETCH_DATA and plan.fetch_data is not None:
-        fd = plan.fetch_data
-        # Validate targetSymbol ∈ allowedSymbols
-        if not runtime_engine.config.is_symbol_allowed(fd.target_symbol):
-            return AgentSignalResponse(
-                requestId=request_id,
-                symbol=symbol,
-                sessionId=session.session_id,
-                action=AgentAction.WAIT,
-                reason=f"Target symbol {fd.target_symbol} is not in the allowed list",
+    # ── 5: Planner decides next action ──────────────────────────────────
+    plan = plan_next(sess)
+
+    # ── 6: FETCH_DATA path ──────────────────────────────────────────────
+    if plan.action == AgenticAction.FETCH_DATA and plan.target_symbol:
+        target = plan.target_symbol
+        # Build runtime risk config for allowed-symbol check
+        try:
+            async with async_session_factory() as db_sess:
+                runtime_cfg = await build_runtime_risk_config(db_sess)
+        except Exception:
+            runtime_cfg = risk_config
+
+        if not runtime_cfg.is_symbol_allowed(target):
+            return _agentic_waiter(
+                req_id, sess.session_id,
+                f"Target symbol {target} is not in the allowed list",
             )
-        # Check toolCallCount < maxToolCallsPerSession
-        if not session.can_tool_call:
-            return AgentSignalResponse(
-                requestId=request_id,
-                symbol=symbol,
-                sessionId=session.session_id,
-                action=AgentAction.WAIT,
-                reason="Tool call limit reached — cannot FETCH_DATA",
+
+        if not sess.can_tool_call:
+            return _agentic_waiter(
+                req_id, sess.session_id,
+                "Tool call limit reached — cannot FETCH_DATA",
             )
-        session_store.increment_tool_call(session.session_id)
-        return AgentSignalResponse(
-            requestId=request_id,
-            symbol=symbol,
-            sessionId=session.session_id,
-            action=AgentAction.FETCH_DATA,
-            fetchData=fd,
+
+        session_store.increment_tool_call(sess.session_id)
+        return AgenticSignalResponse(
+            requestId=req_id,
+            sessionId=sess.session_id,
+            action=AgenticAction.FETCH_DATA,
             allowOrder=False,
+            requiresConfirmation=False,
             reason=plan.reason,
+            targetSymbol=target,
+            requiredDataType=plan.required_data_type,
+            confidenceScore=0.0,
+            riskScore=0.0,
+            qty=0.0,
+            orderType=OrderType.NONE,
         )
 
     # ── 7: WAIT from planner (hard stop — e.g. symbol not allowed) ────
-    if plan.action == AgentAction.WAIT and not plan.proceed_to_ai:
-        session_store.close_session(session.session_id)
-        return AgentSignalResponse(
-            requestId=request_id,
-            symbol=symbol,
-            sessionId=session.session_id,
-            action=AgentAction.WAIT,
-            allowOrder=False,
-            reason=plan.reason,
-        )
+    if plan.action == AgenticAction.WAIT and not plan.proceed_to_ai:
+        session_store.close_session(sess.session_id)
+        return _agentic_waiter(req_id, sess.session_id, plan.reason)
 
-    # ── 8: PROCEED — AI + RiskEngine ──────────────────────────────────
-    news_context = extra.get("newsContext")
-    fund_context = extra.get("fundContext")
-    broker_flow_context = extra.get("brokerFlowContext")
+    # ── 8: PROCEED — build bridge to AI + RiskEngine ────────────────────
+    sig_req = _agentic_to_signal_request(body, sess.session_id)
+
+    # Runtime controls on the built SignalRequest
+    sig_req, runtime_engine, _ks = await _with_runtime_controls(sig_req)
+
+    # Fetch external context
+    news_context = await get_news_context([sig_req.symbol])
+    fund_context = await get_fund_context([sig_req.symbol])
+    broker_flow_context = await get_broker_flow_context([sig_req.symbol])
+
     payload = _build_payload(
-        body,
+        sig_req,
         news_context=news_context,
         fund_context=fund_context,
         broker_flow_context=broker_flow_context,
         active_config=runtime_engine.config,
     )
-    # Inject accumulated session steps into payload as context
-    payload["agenticSteps"] = [s.model_dump(by_alias=True) for s in session.steps]
+    # Inject accumulated session steps into AI payload
+    payload["agenticSteps"] = [s.model_dump(by_alias=True) for s in sess.steps]
 
     raw = await _provider.decide(payload)
-    decision = _dict_to_risk_decision(raw, body)
-    body_enriched = await _with_resolved_daily_trade_count(body)
+    decision = _dict_to_risk_decision(raw, sig_req)
+    sig_req = await _with_resolved_daily_trade_count(sig_req)
 
-    response = runtime_engine.evaluate(body_enriched, decision)
+    response = runtime_engine.evaluate(sig_req, decision)
 
-    # ── Close session (final decision) ───────────────────────────────
-    session_store.close_session(session.session_id)
+    # Close session (final decision)
+    session_store.close_session(sess.session_id)
 
-    # ── Log + persist ─────────────────────────────────────────────────
+    # Log + persist
     log_signal_evaluation(
-        request_id=request_id,
-        symbol=body_enriched.symbol,
-        mode=body_enriched.mode.value,
-        request=body_enriched.model_dump(by_alias=True, exclude={"mode"}),
+        request_id=req_id,
+        symbol=sig_req.symbol,
+        mode=sig_req.mode.value,
+        request=sig_req.model_dump(by_alias=True, exclude={"mode"}),
         response=response.model_dump(by_alias=True),
     )
-    await _persist_to_db(body_enriched, payload, raw, response)
+    await _persist_to_db(sig_req, payload, raw, response)
 
-    return AgentSignalResponse(
+    return AgenticSignalResponse(
         requestId=response.request_id,
-        symbol=response.symbol,
-        sessionId=session.session_id,
-        action=AgentAction(response.action.value),
-        qty=response.qty,
-        orderType=response.order_type,
-        price=response.price,
-        confidenceScore=response.confidence_score,
-        riskScore=response.risk_score,
+        sessionId=sess.session_id,
+        action=AgenticAction(response.action.value),
         allowOrder=response.allow_order,
         requiresConfirmation=response.requires_confirmation,
         reason=response.reason,
+        confidenceScore=response.confidence_score,
+        riskScore=response.risk_score,
+        qty=response.qty,
+        orderType=response.order_type,
+        price=response.price,
         entryRange=response.entry_range,
         stopLoss=response.stop_loss,
         targetPrice=response.target_price,

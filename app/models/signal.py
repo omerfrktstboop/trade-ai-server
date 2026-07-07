@@ -21,7 +21,11 @@ class SignalAction(str, Enum):
 
 
 class AgentAction(str, Enum):
-    """Extended action for agentic multi-turn evaluation."""
+    """.. deprecated:: 1.0
+       Use :class:`AgenticAction` instead — canonical for v2 agentic protocol.
+       Retained for backward compatibility with :class:`AgentSignalResponse`.
+    
+    Extended action for agentic multi-turn evaluation."""
 
     BUY = "BUY"
     SELL = "SELL"
@@ -30,7 +34,10 @@ class AgentAction(str, Enum):
 
 
 class DataRequestType(str, Enum):
-    """Types of additional data the agent can request from the client."""
+    """.. deprecated:: 1.0
+       Use :class:`AgenticDataType` instead - canonical for v2 agentic protocol.
+    
+    Types of additional data the agent can request from the client."""
 
     INTRADAY_OHLC = "INTRADAY_OHLC"
     VOLUME_DISTRIBUTION = "VOLUME_DISTRIBUTION"
@@ -165,10 +172,11 @@ class SignalResponse(BaseModel):
 
 
 class AgentSignalResponse(BaseModel):
-    """Agentic evaluation result — may contain FETCH_DATA instead of order info.
+    """.. deprecated:: 1.0
+       Use :class:`AgenticSignalResponse` instead — canonical for v2 protocol.
+       Retained only for backward compatibility; not used by current endpoints.
 
-    This is the response for the /api/signal/evaluate-agent endpoint.
-    When the agent needs more data, ``action=FETCH_DATA`` and ``fetchData``
+    Agentic evaluation result — may contain FETCH_DATA in...[truncated]
     is populated with the target symbol and data type.  When enough data
     is available, the fields are identical to ``SignalResponse``.
     """

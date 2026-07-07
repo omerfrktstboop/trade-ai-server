@@ -89,6 +89,10 @@ class Settings(BaseSettings):
         default="dev-token-change-me",
         description="API authentication token. Default is for local dev only.",
     )
+    admin_password: str = Field(
+        default="admin-change-me",
+        description="Admin panel password. Change for staging/production.",
+    )
 
     # ── AI Provider ───────────────────────────────────────────────────────
 
@@ -132,6 +136,11 @@ class Settings(BaseSettings):
             errors.append(
                 "API_TOKEN is empty or still set to dev default. "
                 "Set a secure token in production."
+            )
+        if not self.admin_password or self.admin_password == "admin-change-me":
+            errors.append(
+                "ADMIN_PASSWORD is empty or still set to dev default. "
+                "Set a secure admin password in production."
             )
 
         # AI provider key required

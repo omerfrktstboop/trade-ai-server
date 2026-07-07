@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends
 
 from app.core.auth import verify_token
 from app.core.logger import log_signal_evaluation
-from app.core.risk_config import risk_config
+from app.core.risk_config import RiskConfig, risk_config
 from app.db.session import async_session_factory
 from app.models.db import AiDecision as AiDecisionModel
 from app.models.db import MarketSnapshot
@@ -34,7 +34,11 @@ from app.models.signal import (
     SignalResponse,
 )
 from app.services.agent_planner import plan_next
-from app.services.agent_session import agent_session_store
+from app.services.admin_config import (
+    build_runtime_risk_config,
+    get_trading_mode_override,
+    is_kill_switch_enabled,
+)
 from app.services.session_store import (
     session_store,  # v2 session store singleton
 )
@@ -66,13 +70,39 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
     5. Log to ``logs/signal.log``.
     6. Persist to ``market_snapshots``, ``ai_decisions``, ``risk_decisions``.
     """
+    body, runtime_engine, kill_switch_enabled = await _with_runtime_controls(body)
+    if kill_switch_enabled:
+        response = _kill_switch_response(body)
+        raw = {
+            "action": "WAIT",
+            "confidence": 0.0,
+            "risk_score": 0.0,
+            "reason": response.reason,
+        }
+        payload = _build_payload(body, active_config=runtime_engine.config)
+        log_signal_evaluation(
+            request_id=body.request_id,
+            symbol=body.symbol,
+            mode=body.mode.value,
+            request=body.model_dump(by_alias=True, exclude={"mode"}),
+            response=response.model_dump(by_alias=True),
+        )
+        await _persist_to_db(body, payload, raw, response)
+        return response
+
     # ── 1. Fetch external context (news + fund + broker flows) ────────────
     news_context = await get_news_context([body.symbol])
     fund_context = await get_fund_context([body.symbol])
     broker_flow_context = await get_broker_flow_context([body.symbol])
 
     # ── 2. Build payload for the AI provider ──────────────────────────────
-    payload = _build_payload(body, news_context, fund_context, broker_flow_context)
+    payload = _build_payload(
+        body,
+        news_context,
+        fund_context,
+        broker_flow_context,
+        active_config=runtime_engine.config,
+    )
 
     # ── 3. Ask provider ───────────────────────────────────────────────────
     raw = await _provider.decide(payload)
@@ -82,7 +112,7 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
     body = await _with_resolved_daily_trade_count(body)
 
     # ── 4. Apply risk engine ──────────────────────────────────────────────
-    response = _risk_engine.evaluate(body, decision)
+    response = runtime_engine.evaluate(body, decision)
 
     # ── 5. Persist to JSON-lines log ──────────────────────────────────────
     log_signal_evaluation(
@@ -107,8 +137,10 @@ def _build_payload(
     news_context: dict[str, Any] | None = None,
     fund_context: dict[str, Any] | None = None,
     broker_flow_context: dict[str, Any] | None = None,
+    active_config: RiskConfig | None = None,
 ) -> dict:
     """Convert a SignalRequest into a plain dict for the AI provider."""
+    config = active_config or risk_config
     payload = {
         "symbol": req.symbol,
         "timeframe": req.timeframe,
@@ -125,8 +157,8 @@ def _build_payload(
         "botPositionQty": req.bot_position_qty,
         "totalAccountQty": req.total_account_qty,
         "lockedLongTermQty": req.locked_long_term_qty,
-        "allowedSymbols": sorted(risk_config._allowed_set()),
-        "lockedSymbols": sorted(risk_config._locked_set()),
+        "allowedSymbols": sorted(config._allowed_set()),
+        "lockedSymbols": sorted(config._locked_set()),
     }
     if news_context:
         payload["newsContext"] = news_context
@@ -135,6 +167,47 @@ def _build_payload(
     if broker_flow_context:
         payload["brokerFlowContext"] = broker_flow_context
     return payload
+
+
+async def _with_runtime_controls(
+    req: SignalRequest,
+) -> tuple[SignalRequest, RiskEngine, bool]:
+    """Apply DB-backed runtime config controls when available."""
+    try:
+        async with async_session_factory() as session:
+            runtime_config = await build_runtime_risk_config(session)
+            mode_override = await get_trading_mode_override(session)
+            kill_switch_enabled = await is_kill_switch_enabled(session)
+    except Exception:
+        logger.exception(
+            "Failed to load runtime admin config request_id=%s symbol=%s",
+            req.request_id,
+            req.symbol,
+        )
+        return req, _risk_engine, False
+
+    if mode_override is not None:
+        req = req.model_copy(update={"mode": mode_override})
+    return req, RiskEngine(runtime_config), kill_switch_enabled
+
+
+def _kill_switch_response(req: SignalRequest) -> SignalResponse:
+    return SignalResponse(
+        requestId=req.request_id,
+        symbol=req.symbol,
+        action=SignalAction.WAIT,
+        qty=0.0,
+        orderType=OrderType.NONE,
+        price=None,
+        confidenceScore=0.0,
+        riskScore=0.0,
+        allowOrder=False,
+        requiresConfirmation=False,
+        reason="Kill switch enabled: trading disabled by admin",
+        entryRange=None,
+        stopLoss=None,
+        targetPrice=None,
+    )
 
 
 async def _with_resolved_daily_trade_count(req: SignalRequest) -> SignalRequest:
@@ -365,10 +438,21 @@ async def evaluate_signal_agent(body: SignalRequest) -> AgentSignalResponse:
     6. FETCH_DATA -> validate targetSymbol, requiredDataType, toolCallCount
     7. PROCEED -> AI.decide() -> RiskEngine -> close_session -> final response
     """
+    body, runtime_engine, kill_switch_enabled = await _with_runtime_controls(body)
     request_id = body.request_id
     raw_session_id = body.session_id
     extra = body.model_extra or {}
     symbol = body.symbol
+
+    if kill_switch_enabled:
+        return AgentSignalResponse(
+            requestId=request_id,
+            symbol=symbol,
+            sessionId=raw_session_id or "",
+            action=AgentAction.WAIT,
+            allowOrder=False,
+            reason="Kill switch enabled: trading disabled by admin",
+        )
 
     # ── 1-2-3: Session management ────────────────────────────────────
     session_store.cleanup_expired_sessions()
@@ -405,7 +489,7 @@ async def evaluate_signal_agent(body: SignalRequest) -> AgentSignalResponse:
     if plan.action == AgentAction.FETCH_DATA and plan.fetch_data is not None:
         fd = plan.fetch_data
         # Validate targetSymbol ∈ allowedSymbols
-        if not risk_config.is_symbol_allowed(fd.target_symbol):
+        if not runtime_engine.config.is_symbol_allowed(fd.target_symbol):
             return AgentSignalResponse(
                 requestId=request_id,
                 symbol=symbol,
@@ -454,6 +538,7 @@ async def evaluate_signal_agent(body: SignalRequest) -> AgentSignalResponse:
         news_context=news_context,
         fund_context=fund_context,
         broker_flow_context=broker_flow_context,
+        active_config=runtime_engine.config,
     )
     # Inject accumulated session steps into payload as context
     payload["agenticSteps"] = [s.model_dump(by_alias=True) for s in session.steps]
@@ -462,7 +547,7 @@ async def evaluate_signal_agent(body: SignalRequest) -> AgentSignalResponse:
     decision = _dict_to_risk_decision(raw, body)
     body_enriched = await _with_resolved_daily_trade_count(body)
 
-    response = _risk_engine.evaluate(body_enriched, decision)
+    response = runtime_engine.evaluate(body_enriched, decision)
 
     # ── Close session (final decision) ───────────────────────────────
     session_store.close_session(session.session_id)
@@ -470,12 +555,12 @@ async def evaluate_signal_agent(body: SignalRequest) -> AgentSignalResponse:
     # ── Log + persist ─────────────────────────────────────────────────
     log_signal_evaluation(
         request_id=request_id,
-        symbol=symbol,
-        mode=body.mode.value,
-        request=body.model_dump(by_alias=True, exclude={"mode"}),
+        symbol=body_enriched.symbol,
+        mode=body_enriched.mode.value,
+        request=body_enriched.model_dump(by_alias=True, exclude={"mode"}),
         response=response.model_dump(by_alias=True),
     )
-    await _persist_to_db(body, payload, raw, response)
+    await _persist_to_db(body_enriched, payload, raw, response)
 
     return AgentSignalResponse(
         requestId=response.request_id,

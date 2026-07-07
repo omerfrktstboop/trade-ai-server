@@ -11,3 +11,5 @@ aiohttp
 httpx
 aiosqlite
 tzdata
+jinja2
+python-multipart

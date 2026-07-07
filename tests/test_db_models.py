@@ -7,8 +7,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.db.base import Base
-from app.models.db import AiDecision, BotPosition, LockedPosition, MarketSnapshot
+from app.models.db import AiDecision, BotPosition, ConfigAuditLog, LockedPosition, MarketSnapshot
 from app.models.db import NewsCache, OrderLog, RiskDecision
+from app.models.db import SystemConfig
 
 
 # ── Test fixtures ─────────────────────────────────────────────────────────────
@@ -47,6 +48,8 @@ async def test_all_tables_created(engine):
             "bot_positions",
             "locked_positions",
             "news_cache",
+            "system_configs",
+            "config_audit_logs",
         ]:
             result = await conn.execute(
                 text("SELECT name FROM sqlite_master WHERE type='table' AND name=:n"),
@@ -199,3 +202,40 @@ async def test_news_cache_insert_read(session: AsyncSession):
     assert row is not None
     assert row.title == "BTC breaks 70K"
     assert row.source == "CoinDesk"
+
+
+@pytest.mark.asyncio
+async def test_system_config_insert_read(session: AsyncSession):
+    cfg = SystemConfig(
+        key="killSwitchEnabled",
+        value="true",
+        value_type="bool",
+        description="Kill switch",
+        is_sensitive=False,
+    )
+    session.add(cfg)
+    await session.commit()
+
+    row = await session.get(SystemConfig, cfg.id)
+    assert row is not None
+    assert row.key == "killSwitchEnabled"
+    assert row.value == "true"
+    assert row.is_sensitive is False
+
+
+@pytest.mark.asyncio
+async def test_config_audit_log_insert_read(session: AsyncSession):
+    audit = ConfigAuditLog(
+        key="maxDailyTradeCount",
+        old_value="3",
+        new_value="5",
+        changed_by="admin",
+        reason="test change",
+    )
+    session.add(audit)
+    await session.commit()
+
+    row = await session.get(ConfigAuditLog, audit.id)
+    assert row is not None
+    assert row.key == "maxDailyTradeCount"
+    assert row.changed_by == "admin"

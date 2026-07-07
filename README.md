@@ -132,8 +132,22 @@ Aşağıdaki adımları **LIVE** moda geçmeden önce mutlaka tamamlayın:
 | GET    | `/api/health`           | —        | Health check             |
 | POST   | `/api/signal/evaluate`  | Bearer   | Evaluate trading signal  |
 | POST   | `/api/order-result`     | Bearer   | Receive order result     |
+| GET    | `/admin`                | Admin    | Admin dashboard          |
+| GET    | `/admin/config`         | Admin    | Runtime risk config UI   |
+| GET    | `/admin/emergency`      | Admin    | Kill switch controls     |
+| GET    | `/api/admin/config`     | Bearer   | Runtime config API       |
 | GET    | `/docs`                 | —        | Swagger UI               |
 | GET    | `/redoc`                | —        | ReDoc                    |
+
+### Admin Panel MVP
+
+- UI routes use `/admin`; JSON routes use `/api/admin`.
+- Browser login uses `ADMIN_PASSWORD`; admin API calls also accept the existing Bearer `API_TOKEN`.
+- Secrets are not exposed by admin config endpoints: `API_TOKEN`, `DEEPSEEK_API_KEY`, and `DATABASE_URL` are not returned.
+- Config edits are stored in `system_configs`; every changed value writes `config_audit_logs`.
+- Risky changes require confirmation value `CONFIRM`: switching `tradingMode` to `LIVE`, disabling `killSwitchEnabled`, and enabling `allowSellLongTerm`.
+- `killSwitchEnabled=true` makes `/api/signal/evaluate` return `WAIT` with `allowOrder=false`.
+- If `tradingMode` exists in DB, it overrides the incoming request mode; otherwise request mode defaults remain unchanged.
 
 ### Signal Evaluate
 

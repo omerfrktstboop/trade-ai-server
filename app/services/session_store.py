@@ -78,7 +78,10 @@ class SessionState(BaseModel):
 
     def touch(self) -> None:
         """Update the ``updated_at`` timestamp."""
-        object.__setattr__(self, "updated_at", time.monotonic())
+        now = time.monotonic()
+        if now <= self.updated_at:
+            now = self.updated_at + 1e-9
+        object.__setattr__(self, "updated_at", now)
 
     def mark_completed(self) -> None:
         """Transition status to COMPLETED."""

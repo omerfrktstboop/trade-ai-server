@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.db.init_db import init_db
+from app.routers.admin import admin_api_router, admin_router
 from app.routers.health import router as health_router
 from app.routers.order_result import router as order_result_router
 from app.routers.signal import router as signal_router
@@ -55,6 +56,8 @@ app.include_router(health_router, prefix="/api")
 app.include_router(signal_router, prefix="/api")
 app.include_router(order_result_router, prefix="/api")
 app.include_router(signals_router, prefix="/api")
+app.include_router(admin_api_router, prefix="/api/admin")
+app.include_router(admin_router, prefix="/admin")
 
 
 @app.get("/")

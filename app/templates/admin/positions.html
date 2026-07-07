@@ -1,0 +1,33 @@
+{% extends "admin/base.html" %}
+{% block title %}Admin Positions{% endblock %}
+{% block content %}
+<h1 class="h3 mb-3">Positions</h1>
+
+<h2 class="h5">Bot Positions</h2>
+<div class="table-wrap mb-4">
+  <table class="table table-sm table-striped align-middle">
+    <thead><tr><th>ID</th><th>Symbol</th><th>Qty</th><th>Avg Price</th><th>Total Value</th><th>Updated</th></tr></thead>
+    <tbody>
+      {% for row in bot_positions %}
+      <tr><td>{{ row.id }}</td><td>{{ row.symbol }}</td><td>{{ row.qty }}</td><td>{{ row.avg_price }}</td><td>{{ row.total_value }}</td><td>{{ row.updated_at }}</td></tr>
+      {% else %}
+      <tr><td colspan="6" class="text-secondary">No bot positions yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2 class="h5">Locked Positions</h2>
+<div class="table-wrap">
+  <table class="table table-sm table-striped align-middle">
+    <thead><tr><th>ID</th><th>Symbol</th><th>Qty</th><th>Lock Type</th><th>Created</th></tr></thead>
+    <tbody>
+      {% for row in locked_positions %}
+      <tr><td>{{ row.id }}</td><td>{{ row.symbol }}</td><td>{{ row.qty }}</td><td>{{ row.lock_type }}</td><td>{{ row.created_at }}</td></tr>
+      {% else %}
+      <tr><td colspan="5" class="text-secondary">No locked positions yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

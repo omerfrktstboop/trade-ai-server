@@ -597,17 +597,20 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
         session_store.append_step(sess.session_id, hist_step)
 
     # ── 5: Planner decides next action ──────────────────────────────────
-    plan = plan_next(sess)
+    # Build runtime risk config once, up front, so both the planner's initial
+    # symbol-allow check and the FETCH_DATA check below see the same
+    # admin-panel-edited allow-list (no stale static-singleton gate).
+    try:
+        async with async_session_factory() as db_sess:
+            runtime_cfg = await build_runtime_risk_config(db_sess)
+    except Exception:
+        runtime_cfg = risk_config
+
+    plan = plan_next(sess, runtime_cfg)
 
     # ── 6: FETCH_DATA path ──────────────────────────────────────────────
     if plan.action == AgenticAction.FETCH_DATA and plan.target_symbol:
         target = plan.target_symbol
-        # Build runtime risk config for allowed-symbol check
-        try:
-            async with async_session_factory() as db_sess:
-                runtime_cfg = await build_runtime_risk_config(db_sess)
-        except Exception:
-            runtime_cfg = risk_config
 
         if not runtime_cfg.is_symbol_allowed(target):
             return _agentic_waiter(

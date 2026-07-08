@@ -27,6 +27,7 @@ from app.models.db import (
 from app.services.admin_config import (
     AdminConfigItem,
     RISKY_CONFIRMATION,
+    get_admin_config_value,
     list_admin_configs,
     set_admin_config_value,
 )
@@ -41,6 +42,10 @@ templates = Jinja2Templates(
 
 ADMIN_COOKIE_NAME = "trade_ai_admin"
 ADMIN_COOKIE_TTL_SECONDS = 8 * 60 * 60
+
+
+def _split_csv_symbols(raw: str) -> set[str]:
+    return {s.strip().upper() for s in raw.split(",") if s.strip()}
 
 
 class AdminConfigUpdate(BaseModel):
@@ -216,6 +221,9 @@ async def admin_positions(request: Request) -> HTMLResponse:
         locked_positions = await _latest(
             session, LockedPosition, 100, order_field="created_at"
         )
+        allowed_raw = await get_admin_config_value(session, "allowedSymbols")
+
+    allowed_symbols = _split_csv_symbols(allowed_raw)
 
     return templates.TemplateResponse(
         request,
@@ -225,8 +233,32 @@ async def admin_positions(request: Request) -> HTMLResponse:
             "active": "positions",
             "bot_positions": bot_positions,
             "locked_positions": locked_positions,
+            "allowed_symbols": allowed_symbols,
         },
     )
+
+
+@admin_router.post("/positions/add-to-watchlist")
+async def admin_add_to_watchlist(request: Request) -> RedirectResponse:
+    identity = await require_admin(request)
+    form = await request.form()
+    symbol = str(form.get("symbol") or "").strip().upper()
+
+    if symbol:
+        async with async_session_factory() as session:
+            current = _split_csv_symbols(
+                await get_admin_config_value(session, "allowedSymbols")
+            )
+            current.add(symbol)
+            await set_admin_config_value(
+                session,
+                "allowedSymbols",
+                ",".join(sorted(current)),
+                changed_by=identity,
+                reason=f"Added {symbol} to watchlist from Positions page",
+            )
+
+    return RedirectResponse("/admin/positions", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @admin_router.get("/logs", response_class=HTMLResponse)

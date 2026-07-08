@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.core.risk_config import risk_config
+from app.core.risk_config import RiskConfig, risk_config
 from app.models.signal import (
     AgenticAction,
     AgenticDataType,
@@ -101,8 +101,15 @@ def _request_next_same_symbol(
 # ── Planner: v2 (SessionState-based) ─────────────────────────────────────────
 
 
-def plan_next(session: SessionState) -> PlanResult:
+def plan_next(
+    session: SessionState, active_risk_config: RiskConfig = risk_config
+) -> PlanResult:
     """Determine the next step for the given session.
+
+    ``active_risk_config`` defaults to the static ``.env``-backed singleton
+    but callers with DB access should pass a fresh ``build_runtime_risk_config``
+    result so admin-panel edits to the allowed-symbol list take effect
+    immediately (matching the ``/evaluate`` endpoint's behaviour).
 
     Logic:
     1. Symbol not allowed → WAIT
@@ -111,7 +118,7 @@ def plan_next(session: SessionState) -> PlanResult:
     4. All collected or budget exhausted → PROCEED (AI/RiskEngine)
     """
     # ── Symbol check ──────────────────────────────────────────────────
-    if not risk_config.is_symbol_allowed(session.root_symbol):
+    if not active_risk_config.is_symbol_allowed(session.root_symbol):
         return PlanResult(
             action=AgenticAction.WAIT,
             reason=f"Symbol {session.root_symbol} is not in the allowed list",

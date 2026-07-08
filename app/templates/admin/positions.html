@@ -12,7 +12,7 @@
   </div>
   <div class="table-container">
     <table>
-      <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Price</th><th>Current Price</th><th>P&L</th><th>Mode</th><th>Updated</th></tr></thead>
+      <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Price</th><th>Current Price</th><th>P&L</th><th>Mode</th><th>Watchlist</th><th>Updated</th></tr></thead>
       <tbody>
         {% for row in bot_positions %}
         <tr>
@@ -24,10 +24,21 @@
             {% if row.pnl is not none %}{{ row.pnl }}{% else %}—{% endif %}
           </td>
           <td><span class="badge {% if row.mode == 'LIVE' %}badge-live{% elif row.mode == 'PAPER' %}badge-paper{% else %}badge-info{% endif %}">{{ row.mode }}</span></td>
+          <td>
+            {% if row.symbol in allowed_symbols %}
+              <span class="status status-ok">İzleniyor</span>
+            {% else %}
+              <span class="status status-warn" style="margin-right:8px">İzleme listesinde değil</span>
+              <form method="post" action="/admin/positions/add-to-watchlist" style="display:inline">
+                <input type="hidden" name="symbol" value="{{ row.symbol }}">
+                <button class="btn btn-outline btn-sm" type="submit">İzleme Listesine Ekle</button>
+              </form>
+            {% endif %}
+          </td>
           <td class="mono text-muted">{{ row.updated_at }}</td>
         </tr>
         {% else %}
-        <tr class="empty-row"><td colspan="7">No active bot positions</td></tr>
+        <tr class="empty-row"><td colspan="8">No active bot positions</td></tr>
         {% endfor %}
       </tbody>
     </table>

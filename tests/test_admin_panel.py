@@ -163,3 +163,51 @@ class TestKillSwitchIntegration:
         assert data["action"] == "WAIT"
         assert data["allowOrder"] is False
         assert "Kill switch enabled" in data["reason"]
+
+
+class TestPositionsWatchlist:
+    def _login(self, client: TestClient) -> None:
+        login = client.post(
+            "/admin/login",
+            data={"password": settings.admin_password},
+            follow_redirects=False,
+        )
+        assert login.status_code == 303
+
+    def test_position_outside_allowed_symbols_shows_add_button(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        client.post(
+            "/api/bot/positions/sync",
+            headers=auth_headers,
+            json={"positions": [{"symbol": "ASELS", "qty": 10.0}]},
+        )
+        self._login(client)
+
+        resp = client.get("/admin/positions")
+        assert resp.status_code == 200
+        assert "İzleme listesinde değil" in resp.text
+        assert "add-to-watchlist" in resp.text
+
+    def test_add_to_watchlist_updates_allowed_symbols(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        client.post(
+            "/api/bot/positions/sync",
+            headers=auth_headers,
+            json={"positions": [{"symbol": "ASELS", "qty": 10.0}]},
+        )
+        self._login(client)
+
+        resp = client.post(
+            "/admin/positions/add-to-watchlist",
+            data={"symbol": "asels"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        config = client.get("/api/admin/config", headers=auth_headers)
+        allowed = next(
+            item for item in config.json() if item["key"] == "allowedSymbols"
+        )
+        assert "ASELS" in allowed["value"]

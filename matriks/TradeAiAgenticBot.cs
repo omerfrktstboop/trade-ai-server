@@ -157,6 +157,17 @@ namespace Matriks.Lean.Algotrader
             };
             _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ApiToken);
 
+            string[] serverSymbols = FetchTradeableSymbolsFromServer();
+            if (serverSymbols != null && serverSymbols.Length > 0)
+            {
+                AllowedSymbols = serverSymbols;
+                SafeDebug("Loaded tradeable symbols from server: " + string.Join(",", AllowedSymbols));
+            }
+            else
+            {
+                SafeDebug("Tradeable symbols fetch failed or empty — using fallback hardcoded AllowedSymbols: " + string.Join(",", AllowedSymbols));
+            }
+
             foreach (string symbol in AllowedSymbols)
             {
                 string normalized = NormalizeSymbol(symbol);
@@ -181,6 +192,17 @@ namespace Matriks.Lean.Algotrader
             SetTimerInterval(60);
             LogTradeUserInfo();
             LoadRealPositionsSnapshot();
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await SyncPositionsToServerAsync();
+                }
+                catch (Exception ex)
+                {
+                    SafeDebug("Initial position sync error: " + ex.Message);
+                }
+            });
 
             SafeDebug("Initialized symbols=" + string.Join(",", AllowedSymbols)
                 + " mode=" + NormalizeMode(Mode)
@@ -194,6 +216,36 @@ namespace Matriks.Lean.Algotrader
                 + " server=" + ServerBaseUrl);
 
             ScanDueSymbols();
+        }
+
+        /// <summary>
+        /// Fetch the admin-managed tradeable symbol universe from the server.
+        /// Blocking (OnInit is not async) — runs once at startup only.
+        /// Returns null on any failure so the caller can fall back to the
+        /// hardcoded AllowedSymbols default.
+        /// </summary>
+        private string[] FetchTradeableSymbolsFromServer()
+        {
+            try
+            {
+                using (var response = _http.GetAsync("api/bot/tradeable-symbols").GetAwaiter().GetResult())
+                {
+                    string body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        SafeDebug("Tradeable symbols fetch failed: HTTP " + (int)response.StatusCode + ": " + body);
+                        return null;
+                    }
+
+                    TradeableSymbolsResponse parsed = JsonConvert.DeserializeObject<TradeableSymbolsResponse>(body);
+                    return parsed.Symbols;
+                }
+            }
+            catch (Exception ex)
+            {
+                SafeDebug("Tradeable symbols fetch error: " + ex.Message);
+                return null;
+            }
         }
 
         public override void OnDataUpdate(BarDataEventArgs barData)
@@ -210,6 +262,17 @@ namespace Matriks.Lean.Algotrader
             {
                 LoadRealPositionsSnapshot();
             }
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await SyncPositionsToServerAsync();
+                }
+                catch (Exception ex)
+                {
+                    SafeDebug("Position sync error: " + ex.Message);
+                }
+            });
             ScanDueSymbols();
         }
 
@@ -1241,6 +1304,45 @@ namespace Matriks.Lean.Algotrader
             }
         }
 
+        /// <summary>
+        /// Reports the bot's full known position snapshot (not limited to
+        /// AllowedSymbols — GetRealPositions/OnRealPositionUpdate populate
+        /// _botPositionQtyBySymbol for every symbol Matriks reports) so the
+        /// admin panel's Positions page reflects the real portfolio.
+        /// </summary>
+        private async Task SyncPositionsToServerAsync()
+        {
+            var positions = _botPositionQtyBySymbol
+                .Select(kv => new PositionSyncEntry { Symbol = kv.Key, Qty = kv.Value })
+                .ToList();
+
+            if (positions.Count == 0)
+                return;
+
+            var payload = new PositionSyncRequest { Positions = positions };
+
+            try
+            {
+                string json = JsonConvert.SerializeObject(payload, _jsonSettings);
+                using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
+                using (var result = await _http.PostAsync("api/bot/positions/sync", content))
+                {
+                    string body = await result.Content.ReadAsStringAsync();
+                    if (!result.IsSuccessStatusCode)
+                    {
+                        SafeDebug("Position sync post failed HTTP " + (int)result.StatusCode + " body=" + body);
+                        return;
+                    }
+                }
+
+                SafeDebug("Position sync posted to server count=" + positions.Count);
+            }
+            catch (Exception ex)
+            {
+                SafeDebug("Position sync post exception: " + ex.Message);
+            }
+        }
+
         private bool IsDemoAccount()
         {
             if (!RequireDemoAccount)
@@ -2111,6 +2213,30 @@ namespace Matriks.Lean.Algotrader
 
         [JsonProperty("orderId", NullValueHandling = NullValueHandling.Ignore)]
         public string OrderId { get; set; }
+    }
+
+    private struct TradeableSymbolsResponse
+    {
+        [JsonProperty("symbols")]
+        public string[] Symbols { get; set; }
+
+        [JsonProperty("lockedLongTerm")]
+        public string[] LockedLongTerm { get; set; }
+    }
+
+    private struct PositionSyncEntry
+    {
+        [JsonProperty("symbol")]
+        public string Symbol { get; set; }
+
+        [JsonProperty("qty")]
+        public decimal Qty { get; set; }
+    }
+
+    private struct PositionSyncRequest
+    {
+        [JsonProperty("positions")]
+        public List<PositionSyncEntry> Positions { get; set; }
     }
 
     private struct PendingOrderContext

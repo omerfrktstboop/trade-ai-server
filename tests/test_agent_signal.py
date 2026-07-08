@@ -13,6 +13,7 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from typing import Any
@@ -20,6 +21,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db.init_db import drop_all, init_db
+from app.db.session import async_session_factory
 from app.main import app
 from app.models.signal import AgenticAction, AgenticDataType
 from app.services.session_store import (
@@ -36,17 +39,44 @@ TEST_TOKEN = "agent-test-token-42"
 # ── Safe test token (ASCII-only, avoids unicode header encoding issues) ───
 TEST_TOKEN = "agent-test-token-123"
 
+_TEST_ALLOWED_SYMBOLS = "ANELE,PGSUS,THYAO,TUPRS,KCHOL,AKBNK,SISE"
+
 
 @pytest.fixture(autouse=True)
 def _override_token(monkeypatch):
     """Override API_TOKEN with a pure ASCII value so headers work."""
     monkeypatch.setenv("API_TOKEN", TEST_TOKEN)
-    monkeypatch.setenv("ALLOWED_SYMBOLS", "ANELE,PGSUS,THYAO,TUPRS,KCHOL,AKBNK,SISE")
+    monkeypatch.setenv("ALLOWED_SYMBOLS", _TEST_ALLOWED_SYMBOLS)
     from app.config import settings
     monkeypatch.setattr(settings, "api_token", TEST_TOKEN)
     # Rebuild risk_config with the overridden env
     from app.core.risk_config import risk_config
-    monkeypatch.setattr(risk_config, "allowed_symbols", "ANELE,PGSUS,THYAO,TUPRS,KCHOL,AKBNK,SISE")
+    monkeypatch.setattr(risk_config, "allowed_symbols", _TEST_ALLOWED_SYMBOLS)
+
+
+@pytest.fixture(autouse=True)
+def _seed_db_allowed_symbols():
+    """The agentic planner's initial symbol-allow gate reads a DB-backed
+    RiskConfig (app/routers/signal.py), not just the static risk_config
+    singleton — seed the same allow-list into SystemConfig so these tests
+    exercise the real /evaluate-agent code path end-to-end."""
+    from app.services.admin_config import set_admin_config_value
+
+    async def _seed() -> None:
+        await drop_all()
+        await init_db()
+        async with async_session_factory() as session:
+            await set_admin_config_value(
+                session,
+                "allowedSymbols",
+                _TEST_ALLOWED_SYMBOLS,
+                changed_by="test-setup",
+            )
+
+    asyncio.run(_seed())
+    yield
+    asyncio.run(drop_all())
+    asyncio.run(init_db())
 
 
 @pytest.fixture

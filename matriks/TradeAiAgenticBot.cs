@@ -18,16 +18,17 @@ using Matriks.Trader.Core.Fields;
 using Matriks.Trader.Core.TraderModels;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using AgenticSignalRequest = System.Collections.Generic.Dictionary<string, object>;
-using AgenticSignalResponse = Newtonsoft.Json.Linq.JObject;
-using ContextStep = System.Collections.Generic.Dictionary<string, object>;
-using IndicatorConsensus = System.Tuple<int, int, int, string, double>;
-using MarketDataPayload = System.Collections.Generic.Dictionary<string, object>;
-using OrderExecutionResult = System.Tuple<bool, bool, string, string>;
-using PendingOrderContext = System.Tuple<string, string, string, decimal, decimal>;
 
 namespace Matriks.Lean.Algotrader
 {
+    using AgenticSignalRequest = System.Collections.Generic.Dictionary<string, object>;
+    using AgenticSignalResponse = Newtonsoft.Json.Linq.JObject;
+    using ContextStep = System.Collections.Generic.Dictionary<string, object>;
+    using IndicatorConsensus = System.Tuple<int, int, int, string, double>;
+    using MarketDataPayload = System.Collections.Generic.Dictionary<string, object>;
+    using OrderExecutionResult = System.Tuple<bool, bool, string, string>;
+    using PendingOrderContext = System.Tuple<string, string, string, decimal, decimal>;
+
     /// <summary>
     /// TradeAI Agentic Bot — Matriks IQ Algo.
     /// Agentic sinyal protokolü ile server'dan karar alır,

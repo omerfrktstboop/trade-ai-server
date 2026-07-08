@@ -16,7 +16,7 @@
       <tbody>
         {% for row in ai_decisions %}
         <tr>
-          <td class="mono" title="{{ row.request_id }}">{{ row.request_id[:12] }}…</td>
+          <td class="mono" title="{{ row.request_id }}"><a href="/admin/logs/{{ row.request_id }}" class="log-link">{{ row.request_id[:12] }}…</a></td>
           <td><strong>{{ row.symbol }}</strong></td>
           <td>
             <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
@@ -44,7 +44,7 @@
       <tbody>
         {% for row in risk_decisions %}
         <tr>
-          <td class="mono" title="{{ row.request_id }}">{{ row.request_id[:12] }}…</td>
+          <td class="mono" title="{{ row.request_id }}"><a href="/admin/logs/{{ row.request_id }}" class="log-link">{{ row.request_id[:12] }}…</a></td>
           <td><strong>{{ row.symbol }}</strong></td>
           <td>
             <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
@@ -72,7 +72,7 @@
       <tbody>
         {% for row in order_logs %}
         <tr>
-          <td class="mono" title="{{ row.request_id }}">{{ row.request_id[:12] }}…</td>
+          <td class="mono" title="{{ row.request_id }}"><a href="/admin/logs/{{ row.request_id }}" class="log-link">{{ row.request_id[:12] }}…</a></td>
           <td><strong>{{ row.symbol }}</strong></td>
           <td>
             <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-info{% endif %}">{{ row.action }}</span>

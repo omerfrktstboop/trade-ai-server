@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from app.models.db import (
     BotPosition,
     ConfigAuditLog,
     LockedPosition,
+    MarketSnapshot,
     OrderLog,
     RiskDecision,
 )
@@ -381,6 +383,58 @@ async def admin_logs(request: Request) -> HTMLResponse:
             "risk_decisions": risk_decisions,
             "order_logs": order_logs,
             "audit_logs": audit_logs,
+        },
+    )
+
+
+@admin_router.get("/logs/{request_id}", response_class=HTMLResponse)
+async def admin_log_detail(request: Request, request_id: str) -> HTMLResponse:
+    """Everything recorded for one evaluation: exact payload sent to the AI,
+    its raw response, the risk-engine's final decision, and any matching
+    order result — all joined by requestId."""
+    identity = await require_admin(request)
+    async with async_session_factory() as session:
+        snapshot = (
+            await session.execute(
+                select(MarketSnapshot).where(MarketSnapshot.request_id == request_id)
+            )
+        ).scalar_one_or_none()
+        ai_decision = (
+            await session.execute(
+                select(AiDecision).where(AiDecision.request_id == request_id)
+            )
+        ).scalar_one_or_none()
+        risk_decision = (
+            await session.execute(
+                select(RiskDecision).where(RiskDecision.request_id == request_id)
+            )
+        ).scalar_one_or_none()
+        order_logs = (
+            await session.execute(
+                select(OrderLog)
+                .where(OrderLog.request_id == request_id)
+                .order_by(OrderLog.created_at.asc())
+            )
+        ).scalars().all()
+
+    def _pretty(value: Any) -> str | None:
+        if value is None:
+            return None
+        return json.dumps(value, indent=2, ensure_ascii=False, default=str)
+
+    return templates.TemplateResponse(
+        request,
+        "admin/log_detail.html",
+        {
+            "identity": identity,
+            "active": "logs",
+            "request_id": request_id,
+            "snapshot": snapshot,
+            "ai_decision": ai_decision,
+            "risk_decision": risk_decision,
+            "order_logs": order_logs,
+            "raw_request_json": _pretty(ai_decision.raw_request) if ai_decision else None,
+            "raw_response_json": _pretty(ai_decision.raw_response) if ai_decision else None,
         },
     )
 

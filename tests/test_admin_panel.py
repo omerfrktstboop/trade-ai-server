@@ -13,7 +13,7 @@ from app.config import settings
 from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
 from app.main import app
-from app.models.db import ConfigAuditLog
+from app.models.db import AiDecision, ConfigAuditLog, MarketSnapshot, OrderLog, RiskDecision
 
 
 @pytest.fixture(autouse=True)
@@ -211,3 +211,76 @@ class TestPositionsWatchlist:
             item for item in config.json() if item["key"] == "allowedSymbols"
         )
         assert "ASELS" in allowed["value"]
+
+
+class TestLogDetailView:
+    def _login(self, client: TestClient) -> None:
+        login = client.post(
+            "/admin/login",
+            data={"password": settings.admin_password},
+            follow_redirects=False,
+        )
+        assert login.status_code == 303
+
+    async def _seed(self, request_id: str) -> None:
+        async with async_session_factory() as session:
+            session.add(MarketSnapshot(
+                request_id=request_id, symbol="THYAO", timeframe="1h",
+                open=99.0, high=102.0, low=98.0, close=100.0, volume=1000.0,
+                rsi=45.0, ema20=98.5, ema50=97.0, macd=0.1, macd_signal=0.05,
+                mode="DEMO_LIVE",
+            ))
+            session.add(AiDecision(
+                request_id=request_id, symbol="THYAO", provider="deepseek",
+                raw_request={"symbol": "THYAO", "rsi": 45.0},
+                raw_response={"action": "SELL", "confidence": 82, "reason": "bearish"},
+                action="SELL", confidence=82.0, qty=300.0, reason="bearish",
+            ))
+            session.add(RiskDecision(
+                request_id=request_id, symbol="THYAO", action="SELL",
+                confidence=82.0, risk_score=10.0, allow_order=True,
+                reason="RiskEngine approved", qty=300.0, order_type="LIMIT",
+                mode="DEMO_LIVE",
+            ))
+            session.add(OrderLog(
+                request_id=request_id, symbol="THYAO", action="SELL",
+                qty=300.0, price=41.6, status="FILLED", mode="DEMO_LIVE",
+                matrix_message="Order accepted",
+            ))
+            await session.commit()
+
+    def test_requires_auth(self, client: TestClient):
+        resp = client.get("/admin/logs/some-request-id")
+        assert resp.status_code == 401
+
+    def test_shows_full_pipeline_for_matching_request_id(self, client: TestClient):
+        asyncio.run(self._seed("req-detail-1"))
+        self._login(client)
+
+        resp = client.get("/admin/logs/req-detail-1")
+        assert resp.status_code == 200
+        assert "req-detail-1" in resp.text
+        # Market snapshot values
+        assert "45.0" in resp.text
+        # Raw AI payload/response JSON rendered
+        assert "bearish" in resp.text
+        # Risk decision
+        assert "RiskEngine approved" in resp.text
+        # Order log
+        assert "Order accepted" in resp.text
+        assert "FILLED" in resp.text
+
+    def test_missing_request_id_shows_empty_states(self, client: TestClient):
+        self._login(client)
+        resp = client.get("/admin/logs/does-not-exist")
+        assert resp.status_code == 200
+        assert "No AI decision found" in resp.text
+        assert "No risk decision found" in resp.text
+
+    def test_logs_page_links_to_detail_view(self, client: TestClient):
+        asyncio.run(self._seed("req-detail-2"))
+        self._login(client)
+
+        resp = client.get("/admin/logs")
+        assert resp.status_code == 200
+        assert "/admin/logs/req-detail-2" in resp.text

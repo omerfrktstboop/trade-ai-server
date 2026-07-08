@@ -1,0 +1,149 @@
+{% extends "admin/base.html" %}
+{% block title %}Log Detail{% endblock %}
+{% block page_title %}Log Detail{% endblock %}
+{% block content %}
+
+<div class="mb-24">
+  <a href="/admin/logs" class="btn btn-outline btn-sm">← Logs'a dön</a>
+</div>
+
+<div class="card mb-24">
+  <div class="section-title mb-16">Request</div>
+  <div class="text-sm">
+    <div><strong>Request ID:</strong> <span class="mono">{{ request_id }}</span></div>
+    {% if snapshot %}
+    <div class="mt-16"><strong>Symbol:</strong> {{ snapshot.symbol }} &nbsp; <strong>Timeframe:</strong> {{ snapshot.timeframe }} &nbsp; <strong>Mode:</strong> <span class="badge {% if snapshot.mode == 'LIVE' %}badge-live{% elif snapshot.mode == 'PAPER' %}badge-paper{% else %}badge-info{% endif %}">{{ snapshot.mode }}</span></div>
+    <div class="mt-16 text-muted">{{ snapshot.created_at }}</div>
+    {% else %}
+    <div class="mt-16 text-muted">No market snapshot found for this request_id.</div>
+    {% endif %}
+  </div>
+</div>
+
+{% if snapshot %}
+<div class="card mb-24">
+  <div class="section-title mb-16">Market Snapshot (gönderilen ham veri)</div>
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th><th>RSI</th><th>EMA20</th><th>EMA50</th><th>MACD</th><th>MACD Signal</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="mono">{{ snapshot.open }}</td>
+          <td class="mono">{{ snapshot.high }}</td>
+          <td class="mono">{{ snapshot.low }}</td>
+          <td class="mono">{{ snapshot.close }}</td>
+          <td class="mono">{{ snapshot.volume }}</td>
+          <td class="mono">{{ snapshot.rsi if snapshot.rsi is not none else '—' }}</td>
+          <td class="mono">{{ snapshot.ema20 if snapshot.ema20 is not none else '—' }}</td>
+          <td class="mono">{{ snapshot.ema50 if snapshot.ema50 is not none else '—' }}</td>
+          <td class="mono">{{ snapshot.macd if snapshot.macd is not none else '—' }}</td>
+          <td class="mono">{{ snapshot.macd_signal if snapshot.macd_signal is not none else '—' }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="text-sm text-muted mt-16">
+    Bot pozisyonu: <span class="mono">{{ snapshot.position_qty }}</span> &nbsp;
+    Hesap toplamı: <span class="mono">{{ snapshot.total_account_qty }}</span> &nbsp;
+    Kilitli uzun vade: <span class="mono">{{ snapshot.locked_long_term_qty }}</span>
+  </div>
+</div>
+{% endif %}
+
+<div class="card mb-24">
+  <div class="section-title mb-16">AI Kararı (ham)</div>
+  {% if ai_decision %}
+  <div class="stat-grid mb-16">
+    <div class="card">
+      <div class="card-header">Action</div>
+      <div class="card-value"><span class="badge {% if ai_decision.action == 'BUY' %}badge-buy{% elif ai_decision.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ ai_decision.action }}</span></div>
+    </div>
+    <div class="card">
+      <div class="card-header">Confidence</div>
+      <div class="card-value">{{ ai_decision.confidence }}</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Qty</div>
+      <div class="card-value">{{ ai_decision.qty }}</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Provider</div>
+      <div class="card-value" style="font-size:16px">{{ ai_decision.provider }}</div>
+    </div>
+  </div>
+  <div class="mb-16"><strong>Reason:</strong> {{ ai_decision.reason or '—' }}</div>
+
+  <div class="mb-16">
+    <div class="text-sm text-muted mb-16" style="font-weight:600">AI'ye gönderilen tam payload (raw_request)</div>
+    <pre class="mono" style="background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);padding:16px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;font-size:12px">{{ raw_request_json or '—' }}</pre>
+  </div>
+
+  <div>
+    <div class="text-sm text-muted mb-16" style="font-weight:600">AI'nin ham cevabı (raw_response)</div>
+    <pre class="mono" style="background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);padding:16px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;font-size:12px">{{ raw_response_json or '—' }}</pre>
+  </div>
+  {% else %}
+  <div class="text-muted">No AI decision found for this request_id.</div>
+  {% endif %}
+</div>
+
+<div class="card mb-24">
+  <div class="section-title mb-16">Risk Engine Kararı (final)</div>
+  {% if risk_decision %}
+  <div class="stat-grid mb-16">
+    <div class="card">
+      <div class="card-header">Action</div>
+      <div class="card-value"><span class="badge {% if risk_decision.action == 'BUY' %}badge-buy{% elif risk_decision.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ risk_decision.action }}</span></div>
+    </div>
+    <div class="card">
+      <div class="card-header">Allow Order</div>
+      <div class="card-value">{% if risk_decision.allow_order %}<span class="status status-ok">Evet</span>{% else %}<span class="status status-danger">Hayır</span>{% endif %}</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Confidence / Risk Score</div>
+      <div class="card-value" style="font-size:16px">{{ risk_decision.confidence }} / {{ risk_decision.risk_score }}</div>
+    </div>
+    <div class="card">
+      <div class="card-header">Qty / Order Type</div>
+      <div class="card-value" style="font-size:16px">{{ risk_decision.qty }} · {{ risk_decision.order_type }}</div>
+    </div>
+  </div>
+  <div class="mb-16"><strong>Reason:</strong> {{ risk_decision.reason or '—' }}</div>
+  <div class="text-sm text-muted">
+    Entry: <span class="mono">{{ risk_decision.entry_min if risk_decision.entry_min is not none else '—' }} – {{ risk_decision.entry_max if risk_decision.entry_max is not none else '—' }}</span> &nbsp;
+    Stop Loss: <span class="mono">{{ risk_decision.stop_loss if risk_decision.stop_loss is not none else '—' }}</span> &nbsp;
+    Target: <span class="mono">{{ risk_decision.target_price if risk_decision.target_price is not none else '—' }}</span> &nbsp;
+    Mode: <span class="badge {% if risk_decision.mode == 'LIVE' %}badge-live{% elif risk_decision.mode == 'PAPER' %}badge-paper{% else %}badge-info{% endif %}">{{ risk_decision.mode }}</span>
+  </div>
+  {% else %}
+  <div class="text-muted">No risk decision found for this request_id.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="section-title mb-16">Order Logları</div>
+  {% if order_logs %}
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Action</th><th>Qty</th><th>Price</th><th>Status</th><th>Order ID</th><th>Matriks Mesajı</th><th>Zaman</th></tr></thead>
+      <tbody>
+        {% for row in order_logs %}
+        <tr>
+          <td><span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-info{% endif %}">{{ row.action }}</span></td>
+          <td class="mono">{{ row.qty }}</td>
+          <td class="mono">{{ row.price if row.price is not none else '—' }}</td>
+          <td><span class="status {% if row.status == 'FILLED' %}status-ok{% elif row.status == 'REJECTED' %}status-danger{% else %}status-idle{% endif %}">{{ row.status }}</span></td>
+          <td class="mono text-muted">{{ row.order_id or '—' }}</td>
+          <td class="text-muted">{{ row.matrix_message or '—' }}</td>
+          <td class="mono text-muted">{{ row.created_at }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="text-muted">Bu request_id ile eşleşen order log yok (Matriks tarafında farklı bir requestId ile raporlanmış olabilir — bkz. order lifecycle notu).</div>
+  {% endif %}
+</div>
+
+{% endblock %}

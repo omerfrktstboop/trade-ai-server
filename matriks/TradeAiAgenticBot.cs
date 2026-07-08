@@ -344,7 +344,8 @@ namespace Matriks.Lean.Algotrader
         {
             if (_http != null)
             {
-                try { _http.Dispose(); } catch { }
+                try { _http.Dispose(); }
+                catch (Exception ex) { SafeDebug("Dispose error: " + ex.Message); }
             }
             SafeDebug("Stopped.");
         }

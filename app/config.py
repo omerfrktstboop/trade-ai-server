@@ -40,16 +40,6 @@ class Mode(str, Enum):
     REAL_LIVE = "real_live"
 
 
-# ---------------------------------------------------------------------------
-# Validators for production safety
-# ---------------------------------------------------------------------------
-
-
-def validate_api_token_not_empty(v: str) -> str:
-    """Reject empty API token in production."""
-    return v
-
-
 class Settings(BaseSettings):
     """Application settings loaded from environment / .env file."""
 
@@ -166,6 +156,13 @@ class Settings(BaseSettings):
             errors.append(
                 "DATABASE_URL must use PostgreSQL in production, not SQLite. "
                 f"Got: {self.database_url}"
+            )
+
+        # Wildcard CORS is not allowed once authenticated endpoints are public
+        if "*" in self.cors_origins:
+            errors.append(
+                "CORS_ORIGINS=* is not allowed in production. "
+                "Set an explicit comma-separated list of allowed origins."
             )
 
         if errors:

@@ -9,6 +9,7 @@ Returns 401 in both cases:
   - Token is present but does not match the configured value
 """
 
+import hmac
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
@@ -38,7 +39,7 @@ async def verify_token(
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if credentials.credentials != settings.api_token:
+    if not hmac.compare_digest(credentials.credentials, settings.api_token):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",

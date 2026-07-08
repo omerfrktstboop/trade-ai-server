@@ -132,6 +132,24 @@ class RiskConfig(BaseSettings):
 
     # ── Normalisation ──────────────────────────────────────────────────────
 
+    @field_validator("disable_trading_after")
+    @classmethod
+    def _validate_cutoff_time(cls, v: str) -> str:
+        """Ensure the cutoff time is a valid HH:MM string (fail fast at load time)."""
+        parts = v.split(":")
+        if len(parts) != 2:
+            raise ValueError(
+                f"RISK_DISABLE_TRADING_AFTER must be in HH:MM format, got: {v!r}"
+            )
+        try:
+            hour, minute = int(parts[0]), int(parts[1])
+            time(hour, minute)
+        except ValueError as exc:
+            raise ValueError(
+                f"RISK_DISABLE_TRADING_AFTER must be a valid HH:MM time, got: {v!r}"
+            ) from exc
+        return v
+
     @field_validator("allowed_symbols", "locked_long_term_symbols", mode="before")
     @classmethod
     def _normalise_str(cls, v: Any) -> str:

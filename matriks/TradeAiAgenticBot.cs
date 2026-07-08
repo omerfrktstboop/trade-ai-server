@@ -1716,13 +1716,12 @@ namespace Matriks.Lean.Algotrader
             public string Signal { get; set; }
             public double Ratio { get; set; }
         }
-    }
 
     // ═════════════════════════════════════════════════════════════════
     // JSON DTOs — match trade-ai-server Pydantic models (camelCase JSON)
     // ═════════════════════════════════════════════════════════════════
 
-    internal class AgenticSignalRequest
+    private class AgenticSignalRequest
     {
         [JsonProperty("requestId")]
         public string RequestId { get; set; }
@@ -1829,7 +1828,7 @@ namespace Matriks.Lean.Algotrader
         public int DailyTradeCount { get; set; }
     }
 
-    internal class MarketDataPayload
+    private class MarketDataPayload
     {
         [JsonProperty("symbol")]
         public string Symbol { get; set; }
@@ -1844,7 +1843,7 @@ namespace Matriks.Lean.Algotrader
         public string Timestamp { get; set; }
     }
 
-    internal class ContextStep
+    private class ContextStep
     {
         [JsonProperty("stepNo")]
         public int StepNo { get; set; }
@@ -1862,7 +1861,7 @@ namespace Matriks.Lean.Algotrader
         public string Reason { get; set; }
     }
 
-    internal class AgenticSignalResponse
+    private class AgenticSignalResponse
     {
         [JsonProperty("requestId")]
         public string RequestId { get; set; }
@@ -1951,7 +1950,7 @@ namespace Matriks.Lean.Algotrader
         }
     }
 
-    internal class FetchData
+    private class FetchData
     {
         [JsonProperty("targetSymbol")]
         public string TargetSymbol { get; set; }
@@ -1963,7 +1962,7 @@ namespace Matriks.Lean.Algotrader
         public string Reason { get; set; }
     }
 
-    internal class EntryRange
+    private class EntryRange
     {
         [JsonProperty("min")]
         public double Min { get; set; }
@@ -1972,7 +1971,7 @@ namespace Matriks.Lean.Algotrader
         public double Max { get; set; }
     }
 
-    internal class OrderResultRequest
+    private class OrderResultRequest
     {
         [JsonProperty("requestId")]
         public string RequestId { get; set; }
@@ -1999,7 +1998,7 @@ namespace Matriks.Lean.Algotrader
         public string OrderId { get; set; }
     }
 
-    internal class PendingOrderContext
+    private class PendingOrderContext
     {
         public string RequestId { get; set; }
         public string Symbol { get; set; }
@@ -2008,11 +2007,12 @@ namespace Matriks.Lean.Algotrader
         public decimal Price { get; set; }
     }
 
-    internal class OrderExecutionResult
+    private class OrderExecutionResult
     {
         public bool Success { get; set; }
         public bool IsSimulated { get; set; }
         public string OrderId { get; set; }
         public string Message { get; set; }
+    }
     }
 }

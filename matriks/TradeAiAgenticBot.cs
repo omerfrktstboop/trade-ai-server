@@ -124,6 +124,7 @@ namespace Matriks.Lean.Algotrader
         private readonly ConcurrentDictionary<string, bool> _inFlightBySymbol = new ConcurrentDictionary<string, bool>();
         private readonly ConcurrentDictionary<string, int> _dailyTradeCountBySymbol = new ConcurrentDictionary<string, int>();
         private readonly ConcurrentDictionary<string, decimal> _botPositionQtyBySymbol = new ConcurrentDictionary<string, decimal>();
+        private readonly ConcurrentDictionary<string, bool> _pendingOverrideSymbols = new ConcurrentDictionary<string, bool>();
         private readonly ConcurrentDictionary<string, List<decimal>> _closeHistoryBySymbol = new ConcurrentDictionary<string, List<decimal>>();
         private readonly ConcurrentDictionary<string, decimal> _maxBid1SizeBySymbol = new ConcurrentDictionary<string, decimal>();
         private readonly ConcurrentDictionary<string, PendingOrderContext> _pendingOrdersBySymbolSide = new ConcurrentDictionary<string, PendingOrderContext>();
@@ -273,7 +274,67 @@ namespace Matriks.Lean.Algotrader
                     SafeDebug("Position sync error: " + ex.Message);
                 }
             });
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await RefreshPendingOverridesAsync();
+                }
+                catch (Exception ex)
+                {
+                    SafeDebug("Pending overrides refresh error: " + ex.Message);
+                }
+            });
             ScanDueSymbols();
+        }
+
+        /// <summary>
+        /// Refreshes the cached set of symbols with a pending admin test
+        /// override. Fire-and-forget, called once per OnTimer tick — so the
+        /// cache used by ScanDueSymbols() may lag by up to one tick (~60s),
+        /// which is an acceptable tradeoff for not blocking the timer thread
+        /// on a network call every tick.
+        /// </summary>
+        private async Task RefreshPendingOverridesAsync()
+        {
+            try
+            {
+                using (var response = await _http.GetAsync("api/bot/pending-overrides"))
+                {
+                    string body = await response.Content.ReadAsStringAsync();
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        SafeDebug("Pending overrides fetch failed: HTTP " + (int)response.StatusCode + ": " + body);
+                        return;
+                    }
+
+                    PendingOverridesResponse parsed = JsonConvert.DeserializeObject<PendingOverridesResponse>(body);
+                    var fresh = new HashSet<string>();
+                    if (parsed.Symbols != null)
+                    {
+                        foreach (string s in parsed.Symbols)
+                        {
+                            fresh.Add(NormalizeSymbol(s));
+                        }
+                    }
+
+                    foreach (string existing in _pendingOverrideSymbols.Keys)
+                    {
+                        if (!fresh.Contains(existing))
+                        {
+                            _pendingOverrideSymbols.TryRemove(existing, out _);
+                        }
+                    }
+                    foreach (string s in fresh)
+                    {
+                        _pendingOverrideSymbols[s] = true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                SafeDebug("Pending overrides fetch error: " + ex.Message);
+            }
         }
 
         private void ScanDueSymbols()
@@ -299,9 +360,13 @@ namespace Matriks.Lean.Algotrader
                 if (!canProceed)
                     continue;
 
-                // Scan interval check
+                // Scan interval check — bypassed when a pending admin test
+                // override is waiting for this symbol, so Force SELL/BUY
+                // takes effect on the next tick instead of waiting out the
+                // full ScanIntervalMinutes window.
+                bool hasPendingOverride = _pendingOverrideSymbols.ContainsKey(symbol);
                 DateTime lastScanUtc = _lastScanUtcBySymbol.TryGetValue(symbol, out var dt) ? dt : DateTime.MinValue;
-                if (DateTime.UtcNow - lastScanUtc < TimeSpan.FromMinutes(Math.Max(1, ScanIntervalMinutes)))
+                if (!hasPendingOverride && DateTime.UtcNow - lastScanUtc < TimeSpan.FromMinutes(Math.Max(1, ScanIntervalMinutes)))
                 {
                     _inFlightBySymbol[symbol] = false;
                     continue;
@@ -2222,6 +2287,12 @@ namespace Matriks.Lean.Algotrader
 
         [JsonProperty("lockedLongTerm")]
         public string[] LockedLongTerm { get; set; }
+    }
+
+    private struct PendingOverridesResponse
+    {
+        [JsonProperty("symbols")]
+        public string[] Symbols { get; set; }
     }
 
     private struct PositionSyncEntry

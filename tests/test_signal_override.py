@@ -20,6 +20,7 @@ from app.services.signal_override import (
     SELL_ALL_SENTINEL_QTY,
     create_override,
     consume_override,
+    list_pending_override_symbols,
     override_to_raw_decision,
 )
 
@@ -368,3 +369,75 @@ class TestAdminForceOverrideRoutes:
 
         symbols = asyncio.run(_check())
         assert symbols == {"THYAO", "AKBNK"}
+
+
+# ── Pending-overrides fast-scan endpoint ──────────────────────────────────────
+
+
+class TestPendingOverridesEndpoint:
+    def test_requires_auth(self, client: TestClient):
+        resp = client.get("/api/bot/pending-overrides")
+        assert resp.status_code == 401
+
+    def test_returns_empty_when_no_overrides(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        resp = client.get("/api/bot/pending-overrides", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["symbols"] == []
+
+    def test_returns_symbol_with_active_override(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        async def _seed():
+            async with async_session_factory() as session:
+                await create_override(
+                    session, "THYAO", "SELL", SELL_ALL_SENTINEL_QTY,
+                    reason="fast scan test", created_by="tester",
+                )
+
+        asyncio.run(_seed())
+
+        resp = client.get("/api/bot/pending-overrides", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["symbols"] == ["THYAO"]
+
+    def test_excludes_expired_override(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        async def _seed_expired():
+            async with async_session_factory() as session:
+                session.add(SignalOverride(
+                    symbol="THYAO",
+                    action="SELL",
+                    confidence=100.0,
+                    qty=SELL_ALL_SENTINEL_QTY,
+                    reason="expired",
+                    created_by="tester",
+                    expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+                ))
+                await session.commit()
+
+        asyncio.run(_seed_expired())
+
+        resp = client.get("/api/bot/pending-overrides", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["symbols"] == []
+
+    def test_consumed_override_no_longer_pending(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        async def _seed_and_consume():
+            async with async_session_factory() as session:
+                await create_override(
+                    session, "THYAO", "SELL", SELL_ALL_SENTINEL_QTY,
+                    reason="test", created_by="tester",
+                )
+            async with async_session_factory() as session:
+                await consume_override(session, "THYAO")
+
+        asyncio.run(_seed_and_consume())
+
+        resp = client.get("/api/bot/pending-overrides", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["symbols"] == []

@@ -13,6 +13,7 @@ from app.core.risk_config import risk_config
 from app.db.session import async_session_factory
 from app.models.db import BotPosition
 from app.services.admin_config import build_runtime_risk_config
+from app.services.signal_override import list_pending_override_symbols
 
 logger = logging.getLogger(__name__)
 
@@ -96,3 +97,29 @@ async def sync_bot_positions(body: PositionSyncRequest) -> PositionSyncResponse:
         logger.exception("Failed to sync bot positions")
 
     return PositionSyncResponse(status="ok", synced=synced)
+
+
+# ── GET /bot/pending-overrides ───────────────────────────────────────────────
+
+
+class PendingOverridesResponse(BaseModel):
+    symbols: list[str]
+
+
+@router.get("/bot/pending-overrides")
+async def get_pending_overrides() -> PendingOverridesResponse:
+    """Return symbols with a pending manual override.
+
+    The bot polls this every timer tick so it can scan a symbol immediately
+    instead of waiting out the normal ScanIntervalMinutes interval — this is
+    a read-only peek, the override itself is only consumed when the bot's
+    real evaluate-agent request for that symbol arrives.
+    """
+    try:
+        async with async_session_factory() as session:
+            symbols = await list_pending_override_symbols(session)
+    except Exception:
+        logger.exception("Failed to load pending overrides")
+        symbols = []
+
+    return PendingOverridesResponse(symbols=symbols)

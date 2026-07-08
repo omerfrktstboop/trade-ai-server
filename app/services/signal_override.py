@@ -93,6 +93,25 @@ async def consume_override(session: AsyncSession, symbol: str) -> SignalOverride
     return row
 
 
+async def list_pending_override_symbols(session: AsyncSession) -> list[str]:
+    """Peek at symbols with a non-expired pending override.
+
+    Read-only — does not consume/delete anything, so the bot can poll this
+    cheaply every timer tick to know which symbols to scan immediately
+    instead of waiting out the normal ScanIntervalMinutes wait.
+    """
+    now = datetime.now(timezone.utc)
+    stmt = select(SignalOverride.symbol, SignalOverride.expires_at)
+    rows = (await session.execute(stmt)).all()
+
+    symbols: list[str] = []
+    for symbol, expires_at in rows:
+        exp = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
+        if exp > now:
+            symbols.append(symbol)
+    return symbols
+
+
 def override_to_raw_decision(override: SignalOverride) -> dict[str, Any]:
     """Build a provider-shaped ``raw`` dict from an override.
 

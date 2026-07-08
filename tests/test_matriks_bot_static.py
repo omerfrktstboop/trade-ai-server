@@ -16,6 +16,9 @@ def _bot_source() -> str:
 def test_send_limit_order_uses_documented_signature():
     source = _bot_source()
 
+    public_classes = re.findall(r"\bpublic\s+class\s+(\w+)", source)
+    assert public_classes == ["TradeAiAgenticBot"]
+    assert "public class TradeAiAgenticBot : MatriksAlgo" in source
     assert (
         "SendLimitOrder(symbol, quantity, orderSide, roundedPrice, timeInForce, chartIcon)"
         in source

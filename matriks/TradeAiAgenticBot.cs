@@ -37,7 +37,7 @@ namespace Matriks.Lean.Algotrader
     {
         // ── Parameters ──────────────────────────────────────────────
 
-        [Parameter("https://omermatriks.ddns.net")]
+        [Parameter("https://aaa.ddns.net")]
         public string ServerBaseUrl;
 
         [Parameter("BURAYA_TOKEN")]

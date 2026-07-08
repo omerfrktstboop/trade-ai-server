@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 BOT_PATH = Path("matriks/TradeAiAgenticBot.cs")
+MATRIX_ALGO_CLASS = "adnlsad"
 
 
 def _bot_source() -> str:
@@ -17,12 +18,11 @@ def test_send_limit_order_uses_documented_signature():
     source = _bot_source()
 
     public_classes = re.findall(r"\bpublic\s+class\s+(\w+)", source)
-    assert public_classes == ["TradeAiAgenticBot"]
+    assert public_classes == [MATRIX_ALGO_CLASS]
     all_classes = re.findall(r"\bclass\s+(\w+)", source)
-    assert all_classes == ["TradeAiAgenticBot"]
-    assert "namespace " not in source
-    assert re.findall(r"\bstruct\s+(\w+)", source) == []
-    assert "public class TradeAiAgenticBot : MatriksAlgo" in source
+    assert all_classes == [MATRIX_ALGO_CLASS]
+    assert "namespace Matriks.Lean.Algotrader" in source
+    assert f"public class {MATRIX_ALGO_CLASS} : MatriksAlgo" in source
     assert (
         "SendLimitOrder(symbol, quantity, orderSide, roundedPrice, timeInForce, chartIcon)"
         in source

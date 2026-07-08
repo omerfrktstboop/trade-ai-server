@@ -38,9 +38,18 @@ class TradeableSymbolsResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class ActiveTradeProfileSummary(BaseModel):
+    code: str
+    name: str
+    risk_level: str = Field(alias="riskLevel")
+
+    model_config = {"populate_by_name": True}
+
+
 class BotRuntimeConfigResponse(BaseModel):
     config_version: str = Field(alias="configVersion")
     config_hash: str = Field(alias="configHash")
+    active_trade_profile: ActiveTradeProfileSummary = Field(alias="activeTradeProfile")
     mode: str
     enable_demo_orders: bool = Field(alias="enableDemoOrders")
     enable_real_orders: bool = Field(alias="enableRealOrders")

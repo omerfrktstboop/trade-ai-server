@@ -9,6 +9,7 @@ Checks applied (in order):
 1. **Unknown symbol** — not in ``allowed_symbols`` → WAIT
 2. **Long-term lock** — locked symbol, SELL action → WAIT (protects ``ASELS``, ``EREGL``)
 3. **Trading cutoff** — past ``disable_trading_after`` → BUY/SELL blocked
+3.5. **Trade-profile mode permission** — REAL_LIVE/DEMO_LIVE not permitted by active profile → blocked
 4. **Daily trade count** — ``dailyTradeCount ≥ maxDailyTradeCount`` → BUY/SELL blocked
 5. **Short selling** — SELL when ``botPositionQty == 0`` → WAIT
 6. **Over-sell** — SELL qty > ``botPositionQty`` → cap qty
@@ -141,6 +142,23 @@ class RiskEngine:
             return self._block(
                 request,
                 f"Trading blocked: after cutoff time {self.config.disable_trading_after}",
+            )
+
+        # ── 3.55. Trade-profile mode permission ──────────────────────
+        # Second enforcement layer for allow_real_live/allow_demo_live —
+        # bot config serving (app/services/bot_runtime_config.py) already
+        # downgrades the mode it hands out, but that only protects a bot
+        # running with fresh config. This gate is authoritative regardless
+        # of what mode the caller actually sent.
+        if request.mode == SignalMode.REAL_LIVE and not self.config.real_live_mode_allowed:
+            return self._block(
+                request,
+                "REAL_LIVE blocked: not permitted by active trade profile / botEnableRealOrders",
+            )
+        if request.mode == SignalMode.DEMO_LIVE and not self.config.demo_live_mode_allowed:
+            return self._block(
+                request,
+                "DEMO_LIVE blocked: not permitted by active trade profile",
             )
 
         # ── 3.6. Daily trade count limit ─────────────────────────────

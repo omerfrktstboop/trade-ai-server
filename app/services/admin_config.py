@@ -14,6 +14,7 @@ from app.config import settings
 from app.core.risk_config import RiskConfig, risk_config
 from app.models.db import ConfigAuditLog, SystemConfig
 from app.models.signal import SignalMode
+from app.services.trade_profile import get_active_profile
 
 
 SECRET_CONFIG_KEYS = {"API_TOKEN", "DEEPSEEK_API_KEY", "DATABASE_URL"}
@@ -335,24 +336,34 @@ async def get_trading_mode_override(session: AsyncSession) -> SignalMode | None:
 
 
 async def build_runtime_risk_config(session: AsyncSession) -> RiskConfig:
-    """Build RiskConfig from DB-backed admin config with code defaults as fallback."""
+    """Build RiskConfig from the active trade profile + DB-backed admin
+    config, falling back to code defaults where neither applies.
+
+    Priority: active trade profile > per-field admin config override >
+    static env default. Symbol lists, cutoff time, and timezone are NOT
+    part of a trade profile — they stay admin-config-driven regardless.
+    """
     values = {item.key: item.value for item in await list_admin_configs(session)}
+    profile = await get_active_profile(session)
+    bot_enable_real_orders = _parse_bool(values["botEnableRealOrders"])
     return RiskConfig(
         allowed_symbols=values["allowedSymbols"],
         locked_long_term_symbols=values["lockedLongTermSymbols"],
-        max_position_value_per_symbol=float(values["maxPositionValuePerSymbol"]),
-        max_daily_trade_count=int(values["maxDailyTradeCount"]),
-        min_confidence_for_buy=float(values["minConfidenceForBuy"]),
-        min_confidence_for_sell=float(values["minConfidenceForSell"]),
-        allow_sell_long_term=_parse_bool(values["allowSellLongTerm"]),
-        allow_short_selling=risk_config.allow_short_selling,
-        require_alpha_trend_alignment=risk_config.require_alpha_trend_alignment,
+        max_position_value_per_symbol=profile.max_position_value_per_symbol,
+        max_daily_trade_count=profile.max_orders_per_day,
+        min_confidence_for_buy=profile.min_confidence_for_buy,
+        min_confidence_for_sell=profile.min_confidence_for_sell,
+        allow_sell_long_term=profile.allow_sell_long_term,
+        allow_short_selling=profile.allow_short_selling,
+        require_alpha_trend_alignment=profile.require_alpha_trend_alignment,
         require_indicator_consensus_alignment=(
-            risk_config.require_indicator_consensus_alignment
+            profile.require_indicator_consensus_alignment
         ),
         min_indicator_consensus_count=risk_config.min_indicator_consensus_count,
-        max_natr_for_buy=risk_config.max_natr_for_buy,
-        max_depth_queue_drop_pct_for_buy=risk_config.max_depth_queue_drop_pct_for_buy,
+        max_natr_for_buy=profile.max_natr_for_buy,
+        max_depth_queue_drop_pct_for_buy=profile.max_depth_queue_drop_pct_for_buy,
+        real_live_mode_allowed=profile.allow_real_live and bot_enable_real_orders,
+        demo_live_mode_allowed=profile.allow_demo_live,
         disable_trading_after=values["disableTradingAfter"],
         timezone=values["timezone"],
         _env_file="",

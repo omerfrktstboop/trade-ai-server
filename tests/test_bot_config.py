@@ -85,6 +85,7 @@ class TestBotRuntimeConfig:
         assert body["indicatorPeriod"] == "Min5"
         assert "THYAO" in body["allowedSymbols"]
         assert isinstance(body["lockedLongTermQty"], dict)
+        assert body["activeTradeProfile"]["code"] == "NORMAL"
 
     def test_reflects_admin_config_values(
         self, client: TestClient, auth_headers: dict[str, str]
@@ -103,17 +104,21 @@ class TestBotRuntimeConfig:
     def test_hash_changes_when_config_changes(
         self, client: TestClient, auth_headers: dict[str, str]
     ):
+        """scanIntervalMinutes is now trade-profile-driven (see
+        tests/test_trade_profiles.py) — botHttpTimeoutSeconds remains a
+        standalone admin config key, so it's used here to prove the hash
+        still reacts to non-profile config changes."""
         before = client.get("/api/bot/config", headers=auth_headers).json()
 
         update = client.put(
-            "/api/admin/config/botScanIntervalMinutes",
-            json={"value": 5, "reason": "test faster scan"},
+            "/api/admin/config/botHttpTimeoutSeconds",
+            json={"value": 45, "reason": "test slower timeout"},
             headers=auth_headers,
         )
         assert update.status_code == 200
 
         after = client.get("/api/bot/config", headers=auth_headers).json()
-        assert after["scanIntervalMinutes"] == 5
+        assert after["httpTimeoutSeconds"] == 45
         assert after["configHash"] != before["configHash"]
 
     def test_market_orders_cannot_be_enabled(

@@ -121,6 +121,19 @@ class RiskConfig(BaseSettings):
         default=False,
         description="Allow short-selling positions",
     )
+
+    # ── Trade-profile mode permissions ──────────────────────────────────────
+    # Defaults to True so behavior is unchanged when no trade profile system
+    # is wired in (e.g. tests building a bare RiskConfig).
+
+    real_live_mode_allowed: bool = Field(
+        default=True,
+        description="Active trade profile (+ botEnableRealOrders) permits REAL_LIVE",
+    )
+    demo_live_mode_allowed: bool = Field(
+        default=True,
+        description="Active trade profile permits DEMO_LIVE",
+    )
     disable_trading_after: str = Field(
         default="17:30",
         description="Local time (HH:MM) after which trading is paused",

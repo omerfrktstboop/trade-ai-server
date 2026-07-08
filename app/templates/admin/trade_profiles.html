@@ -1,0 +1,205 @@
+{% extends "admin/base.html" %}
+{% block title %}Trade Profiles{% endblock %}
+{% block page_title %}Trade Profiles{% endblock %}
+{% block content %}
+
+{% macro num_field(field_name, label, value) %}
+<div class="form-group" style="margin-bottom:0">
+  <label class="form-label">{{ label }}</label>
+  <input class="form-input" name="{{ field_name }}" value="{{ value }}">
+</div>
+{% endmacro %}
+
+{% macro bool_field(field_name, label, value) %}
+<div class="form-group" style="margin-bottom:0">
+  <label class="form-label">{{ label }}</label>
+  <select class="form-select" name="{{ field_name }}">
+    <option value="true" {% if value %}selected{% endif %}>true</option>
+    <option value="false" {% if not value %}selected{% endif %}>false</option>
+  </select>
+</div>
+{% endmacro %}
+
+{% macro tif_field(value) %}
+<div class="form-group" style="margin-bottom:0">
+  <label class="form-label">Order Time In Force</label>
+  <select class="form-select" name="order_time_in_force">
+    <option value="Day" {% if value == 'Day' %}selected{% endif %}>Day</option>
+    <option value="GoodTillCancel" {% if value == 'GoodTillCancel' %}selected{% endif %}>GoodTillCancel</option>
+  </select>
+</div>
+{% endmacro %}
+
+{% macro period_field(value) %}
+<div class="form-group" style="margin-bottom:0">
+  <label class="form-label">Indicator Period</label>
+  <select class="form-select" name="indicator_period">
+    {% for opt in ['Min', 'Min5', 'Min15', 'Min30', 'Hour', 'Day'] %}
+    <option value="{{ opt }}" {% if value == opt %}selected{% endif %}>{{ opt }}</option>
+    {% endfor %}
+  </select>
+</div>
+{% endmacro %}
+
+{% macro fields_grid(p) %}
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:16px">
+  {{ num_field('max_order_value_tl', 'Max Order Value TL', p.max_order_value_tl) }}
+  {{ num_field('max_qty_per_order', 'Max Qty Per Order', p.max_qty_per_order) }}
+  {{ num_field('max_position_value_per_symbol', 'Max Position Value/Symbol', p.max_position_value_per_symbol) }}
+  {{ num_field('max_orders_per_day', 'Max Orders/Day', p.max_orders_per_day) }}
+  {{ num_field('max_orders_per_symbol_per_day', 'Max Orders/Symbol/Day', p.max_orders_per_symbol_per_day) }}
+  {{ num_field('min_confidence_for_buy', 'Min Confidence BUY', p.min_confidence_for_buy) }}
+  {{ num_field('min_confidence_for_sell', 'Min Confidence SELL', p.min_confidence_for_sell) }}
+  {{ num_field('max_natr_for_buy', 'Max nATR for BUY', p.max_natr_for_buy) }}
+  {{ num_field('max_depth_queue_drop_pct_for_buy', 'Max Depth Queue Drop %', p.max_depth_queue_drop_pct_for_buy) }}
+  {{ bool_field('require_alpha_trend_alignment', 'Require AlphaTrend Alignment', p.require_alpha_trend_alignment) }}
+  {{ bool_field('require_indicator_consensus_alignment', 'Require Indicator Consensus', p.require_indicator_consensus_alignment) }}
+  {{ bool_field('allow_sell_long_term', 'Allow Sell Long Term', p.allow_sell_long_term) }}
+  {{ bool_field('allow_short_selling', 'Allow Short Selling', p.allow_short_selling) }}
+  {{ bool_field('allow_real_live', 'Allow REAL_LIVE', p.allow_real_live) }}
+  {{ bool_field('allow_demo_live', 'Allow DEMO_LIVE', p.allow_demo_live) }}
+  {{ num_field('scan_interval_minutes', 'Scan Interval (dk)', p.scan_interval_minutes) }}
+  {{ num_field('max_fetch_loop_per_session', 'Max Fetch Loop/Session', p.max_fetch_loop_per_session) }}
+  {{ tif_field(p.order_time_in_force) }}
+  {{ period_field(p.indicator_period) }}
+</div>
+{% endmacro %}
+
+{% if error %}<div class="alert alert-danger">⚠️ {{ error }}</div>{% endif %}
+{% if message %}<div class="alert alert-success">✅ {{ message }}</div>{% endif %}
+
+<div class="mb-24">
+  <div class="flex-between mb-16">
+    <h2 class="section-title">Profiller</h2>
+    <span class="text-sm text-muted">Aktif: <span class="badge badge-live">{{ active_code }}</span></span>
+  </div>
+
+  {% for p in profiles %}
+  <div class="card mb-16" style="{% if p.code == active_code %}border-color:var(--accent);box-shadow:0 0 0 1px var(--accent){% endif %}">
+    <div class="flex-between mb-16">
+      <div>
+        <strong style="font-size:16px">{{ p.name }}</strong>
+        <span class="mono text-muted" style="margin-left:8px">{{ p.code }}</span>
+        {% if p.code == active_code %}<span class="badge badge-live" style="margin-left:8px">AKTİF</span>{% endif %}
+        {% if p.is_builtin %}<span class="badge badge-neutral" style="margin-left:8px">builtin</span>{% endif %}
+        {% if not p.is_enabled %}<span class="badge badge-neutral" style="margin-left:8px">devre dışı</span>{% endif %}
+        <span class="badge {% if p.risk_level in ['HIGH', 'EXTREME'] %}badge-sell{% elif p.risk_level == 'LOW' %}badge-buy{% else %}badge-wait{% endif %}" style="margin-left:8px">{{ p.risk_level }}</span>
+      </div>
+    </div>
+    <p class="text-muted text-sm mb-16">{{ p.description }}</p>
+
+    <div class="stat-grid mb-16">
+      <div class="card">
+        <div class="card-header">Max Order TL</div>
+        <div class="card-value" style="font-size:18px">{{ p.max_order_value_tl }}</div>
+      </div>
+      <div class="card">
+        <div class="card-header">Max Qty</div>
+        <div class="card-value" style="font-size:18px">{{ p.max_qty_per_order }}</div>
+      </div>
+      <div class="card">
+        <div class="card-header">Min Conf BUY / SELL</div>
+        <div class="card-value" style="font-size:18px">{{ p.min_confidence_for_buy }} / {{ p.min_confidence_for_sell }}</div>
+      </div>
+      <div class="card">
+        <div class="card-header">Scan (dk)</div>
+        <div class="card-value" style="font-size:18px">{{ p.scan_interval_minutes }}</div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+      {% if p.code != active_code and p.is_enabled %}
+      <form method="post" action="/admin/trade-profiles/{{ p.code }}/activate" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">Neden</label>
+          <input class="form-input" name="reason" placeholder="Aktifleştirme nedeni" style="width:160px" required>
+        </div>
+        {% if p.risk_level in ['HIGH', 'EXTREME'] %}
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">Confirmation (type {{ confirmation }})</label>
+          <input class="form-input" name="confirmation" placeholder="{{ confirmation }}" style="width:120px" required>
+        </div>
+        {% endif %}
+        <button class="btn btn-primary btn-sm" type="submit">Aktifleştir</button>
+      </form>
+      {% endif %}
+
+      <form method="post" action="/admin/trade-profiles/{{ p.code }}/clone" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">Yeni kod</label>
+          <input class="form-input" name="new_code" placeholder="ör. NORMAL_V2" style="width:120px" required>
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">Yeni isim</label>
+          <input class="form-input" name="new_name" placeholder="İsim" style="width:130px" required>
+        </div>
+        <button class="btn btn-outline btn-sm" type="submit">Klonla</button>
+      </form>
+
+      {% if p.is_enabled and not p.is_default and p.code != active_code %}
+      <form method="post" action="/admin/trade-profiles/{{ p.code }}/disable">
+        <button class="btn btn-outline btn-sm" type="submit">Pasifleştir</button>
+      </form>
+      {% endif %}
+
+      {% if not p.is_builtin and p.code != active_code %}
+      <form method="post" action="/admin/trade-profiles/{{ p.code }}/delete">
+        <button class="btn btn-outline-danger btn-sm" type="submit">Sil</button>
+      </form>
+      {% endif %}
+    </div>
+
+    <details class="mt-24">
+      <summary style="cursor:pointer;color:var(--accent);font-size:13px;font-weight:600">Düzenle</summary>
+      <form method="post" action="/admin/trade-profiles/{{ p.code }}/update" class="mt-16">
+        {{ fields_grid(p) }}
+        <div class="form-row">
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Neden</label>
+            <input class="form-input" name="reason" placeholder="Değişiklik nedeni" required>
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">Confirmation</label>
+            <input class="form-input" name="confirmation" placeholder="{{ confirmation }}">
+            <div class="form-hint">Limit artırma, confidence düşürme, alignment kapatma veya allowRealLive=true için zorunlu</div>
+          </div>
+          <button class="btn btn-primary" type="submit">Kaydet</button>
+        </div>
+      </form>
+    </details>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="section-title mb-16">Yeni Profil Oluştur</div>
+  <form method="post" action="/admin/trade-profiles/create">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:16px">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Kod</label>
+        <input class="form-input" name="code" placeholder="ör. MY_CUSTOM" required>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">İsim</label>
+        <input class="form-input" name="name" placeholder="Görünen isim" required>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Risk Level</label>
+        <select class="form-select" name="risk_level">
+          <option value="LOW">LOW</option>
+          <option value="MEDIUM" selected>MEDIUM</option>
+          <option value="HIGH">HIGH</option>
+          <option value="EXTREME">EXTREME</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Açıklama</label>
+        <input class="form-input" name="description" placeholder="Kısa açıklama">
+      </div>
+    </div>
+    {{ fields_grid(active_profile) }}
+    <button class="btn btn-primary" type="submit">Oluştur</button>
+  </form>
+</div>
+
+{% endblock %}

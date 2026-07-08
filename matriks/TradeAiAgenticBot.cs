@@ -286,6 +286,11 @@ namespace Matriks.Lean.Algotrader
                 _http.Timeout = TimeSpan.FromSeconds(HttpTimeoutSeconds);
             }
 
+            string profileCode = config.ActiveTradeProfile.Code ?? "?";
+            string profileRiskLevel = config.ActiveTradeProfile.RiskLevel ?? "?";
+            SafeDebug("Config loaded profile=" + profileCode
+                + " riskLevel=" + profileRiskLevel
+                + " hash=" + (_configHash == "" ? "null" : _configHash));
             SafeDebug("Bot config loaded version=" + (_configVersion == "" ? "null" : _configVersion)
                 + " hash=" + (_configHash == "" ? "null" : _configHash)
                 + " mode=" + Mode
@@ -2288,6 +2293,9 @@ namespace Matriks.Lean.Algotrader
         [JsonProperty("configHash")]
         public string ConfigHash { get; set; }
 
+        [JsonProperty("activeTradeProfile")]
+        public ActiveTradeProfileInfo ActiveTradeProfile { get; set; }
+
         [JsonProperty("mode")]
         public string Mode { get; set; }
 
@@ -2338,6 +2346,18 @@ namespace Matriks.Lean.Algotrader
 
         [JsonProperty("lockedLongTermQty")]
         public Dictionary<string, decimal> LockedLongTermQty { get; set; }
+    }
+
+    private struct ActiveTradeProfileInfo
+    {
+        [JsonProperty("code")]
+        public string Code { get; set; }
+
+        [JsonProperty("name")]
+        public string Name { get; set; }
+
+        [JsonProperty("riskLevel")]
+        public string RiskLevel { get; set; }
     }
 
     private struct AgenticSignalResponse

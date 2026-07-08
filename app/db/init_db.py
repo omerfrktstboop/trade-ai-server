@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib
 
 from app.db.base import Base
-from app.db.session import engine
+from app.db.session import async_session_factory, engine
 
 
 async def init_db() -> None:
@@ -23,6 +23,11 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    from app.services.trade_profile import ensure_builtin_profiles_seeded
+
+    async with async_session_factory() as session:
+        await ensure_builtin_profiles_seeded(session)
 
 
 async def drop_all() -> None:

@@ -276,8 +276,13 @@ namespace Matriks.Lean.Algotrader
                 + " avgPx=" + avgPx
                 + " ordStatus=" + order.OrdStatus);
 
-            PendingOrderContext context = ResolvePendingOrderContext(orderId, symbol, side);
-            if (context == null)
+            PendingOrderContext? resolvedContext = ResolvePendingOrderContext(orderId, symbol, side);
+            PendingOrderContext context;
+            if (resolvedContext.HasValue)
+            {
+                context = resolvedContext.Value;
+            }
+            else
             {
                 context = new PendingOrderContext
                 {
@@ -344,7 +349,7 @@ namespace Matriks.Lean.Algotrader
                 ContextHistory = new List<ContextStep>(),
                 Mode = NormalizeMode(Mode)
             };
-            ApplyFlatCompatibilityFields(request);
+            ApplyFlatCompatibilityFields(ref request);
 
             SafeDebug("Sending evaluate request symbol=" + symbol + " requestId=" + requestId);
 
@@ -373,8 +378,8 @@ namespace Matriks.Lean.Algotrader
                             throw new Exception("HTTP " + (int)response.StatusCode + ": " + body);
                         }
 
-                        var parsed = JsonConvert.DeserializeObject<AgenticSignalResponse>(body);
-                        if (parsed == null)
+                        AgenticSignalResponse parsed = JsonConvert.DeserializeObject<AgenticSignalResponse>(body);
+                        if (string.IsNullOrWhiteSpace(parsed.Action))
                         {
                             throw new Exception("Empty response");
                         }
@@ -472,22 +477,21 @@ namespace Matriks.Lean.Algotrader
             AgenticSignalRequest previousRequest)
         {
             var contextHistory = new List<ContextStep>();
-            if (previousRequest != null)
+            if (previousRequest.ContextHistory != null)
             {
-                if (previousRequest.ContextHistory != null)
-                    contextHistory.AddRange(previousRequest.ContextHistory);
+                contextHistory.AddRange(previousRequest.ContextHistory);
+            }
 
-                if (previousRequest.MarketData != null)
+            if (previousRequest.MarketData.Payload != null)
+            {
+                contextHistory.Add(new ContextStep
                 {
-                    contextHistory.Add(new ContextStep
-                    {
-                        StepNo = contextHistory.Count + 1,
-                        Symbol = previousRequest.MarketData.Symbol,
-                        DataType = previousRequest.MarketData.DataType,
-                        Payload = previousRequest.MarketData.Payload,
-                        Reason = "Previous marketData"
-                    });
-                }
+                    StepNo = contextHistory.Count + 1,
+                    Symbol = previousRequest.MarketData.Symbol,
+                    DataType = previousRequest.MarketData.DataType,
+                    Payload = previousRequest.MarketData.Payload,
+                    Reason = "Previous marketData"
+                });
             }
 
             SafeDebug("Agentic fetch request rootSymbol=" + rootSymbol + " targetSymbol=" + targetSymbol + " dataType=" + requiredDataType);
@@ -501,7 +505,7 @@ namespace Matriks.Lean.Algotrader
                 ContextHistory = contextHistory,
                 Mode = NormalizeMode(Mode)
             };
-            ApplyFlatCompatibilityFields(request);
+            ApplyFlatCompatibilityFields(ref request);
 
             await Task.CompletedTask; // explicit async signal
             return request;
@@ -761,12 +765,6 @@ namespace Matriks.Lean.Algotrader
         private async Task TrySendOrderAsync(AgenticSignalResponse response)
         {
             // ── Pre-trade validation gates ──
-
-            if (response == null)
-            {
-                SafeDebug("Order blocked: response is null");
-                return;
-            }
 
             string action = NormalizeAction(response.Action);
             string symbol = NormalizeSymbol(response.Symbol);
@@ -1089,9 +1087,6 @@ namespace Matriks.Lean.Algotrader
             decimal qty,
             decimal price)
         {
-            if (context == null)
-                return;
-
             var payload = new OrderResultRequest
             {
                 RequestId = context.RequestId,
@@ -1144,9 +1139,9 @@ namespace Matriks.Lean.Algotrader
 
         // ── Compatibility layer (flat fields for legacy clients) ────
 
-        private void ApplyFlatCompatibilityFields(AgenticSignalRequest request)
+        private void ApplyFlatCompatibilityFields(ref AgenticSignalRequest request)
         {
-            if (request == null || request.MarketData == null || request.MarketData.Payload == null)
+            if (request.MarketData.Payload == null)
                 return;
 
             var payload = request.MarketData.Payload;
@@ -1507,7 +1502,7 @@ namespace Matriks.Lean.Algotrader
             return NormalizeSymbol(symbol) + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
         }
 
-        private PendingOrderContext ResolvePendingOrderContext(string orderId, string symbol, string side)
+        private PendingOrderContext? ResolvePendingOrderContext(string orderId, string symbol, string side)
         {
             if (!string.IsNullOrWhiteSpace(orderId)
                 && _pendingOrdersByOrderId.TryGetValue(orderId, out var byOrderId))
@@ -1708,7 +1703,7 @@ namespace Matriks.Lean.Algotrader
             }
         }
 
-        private class IndicatorConsensus
+        private struct IndicatorConsensus
         {
             public int BuyCount { get; set; }
             public int SellCount { get; set; }
@@ -1721,7 +1716,7 @@ namespace Matriks.Lean.Algotrader
     // JSON DTOs — match trade-ai-server Pydantic models (camelCase JSON)
     // ═════════════════════════════════════════════════════════════════
 
-    private class AgenticSignalRequest
+    private struct AgenticSignalRequest
     {
         [JsonProperty("requestId")]
         public string RequestId { get; set; }
@@ -1828,7 +1823,7 @@ namespace Matriks.Lean.Algotrader
         public int DailyTradeCount { get; set; }
     }
 
-    private class MarketDataPayload
+    private struct MarketDataPayload
     {
         [JsonProperty("symbol")]
         public string Symbol { get; set; }
@@ -1843,7 +1838,7 @@ namespace Matriks.Lean.Algotrader
         public string Timestamp { get; set; }
     }
 
-    private class ContextStep
+    private struct ContextStep
     {
         [JsonProperty("stepNo")]
         public int StepNo { get; set; }
@@ -1861,7 +1856,7 @@ namespace Matriks.Lean.Algotrader
         public string Reason { get; set; }
     }
 
-    private class AgenticSignalResponse
+    private struct AgenticSignalResponse
     {
         [JsonProperty("requestId")]
         public string RequestId { get; set; }
@@ -1891,7 +1886,7 @@ namespace Matriks.Lean.Algotrader
         public string RequiredDataType { get; set; }
 
         [JsonProperty("fetchData")]
-        public FetchData FetchData { get; set; }
+        public FetchData? FetchData { get; set; }
 
         [JsonProperty("confidenceScore")]
         public double ConfidenceScore { get; set; }
@@ -1909,7 +1904,7 @@ namespace Matriks.Lean.Algotrader
         public double? Price { get; set; }
 
         [JsonProperty("entryRange")]
-        public EntryRange EntryRange { get; set; }
+        public EntryRange? EntryRange { get; set; }
 
         [JsonProperty("stopLoss")]
         public double? StopLoss { get; set; }
@@ -1921,14 +1916,14 @@ namespace Matriks.Lean.Algotrader
         {
             if (!string.IsNullOrWhiteSpace(TargetSymbol))
                 return TargetSymbol;
-            return FetchData != null ? FetchData.TargetSymbol : null;
+            return FetchData.HasValue ? FetchData.Value.TargetSymbol : null;
         }
 
         public string GetRequiredDataType()
         {
             if (!string.IsNullOrWhiteSpace(RequiredDataType))
                 return RequiredDataType;
-            return FetchData != null ? FetchData.DataType : null;
+            return FetchData.HasValue ? FetchData.Value.DataType : null;
         }
 
         public static AgenticSignalResponse Wait(string requestId, string sessionId, string symbol, string reason)
@@ -1950,7 +1945,7 @@ namespace Matriks.Lean.Algotrader
         }
     }
 
-    private class FetchData
+    private struct FetchData
     {
         [JsonProperty("targetSymbol")]
         public string TargetSymbol { get; set; }
@@ -1962,7 +1957,7 @@ namespace Matriks.Lean.Algotrader
         public string Reason { get; set; }
     }
 
-    private class EntryRange
+    private struct EntryRange
     {
         [JsonProperty("min")]
         public double Min { get; set; }
@@ -1971,7 +1966,7 @@ namespace Matriks.Lean.Algotrader
         public double Max { get; set; }
     }
 
-    private class OrderResultRequest
+    private struct OrderResultRequest
     {
         [JsonProperty("requestId")]
         public string RequestId { get; set; }
@@ -1998,7 +1993,7 @@ namespace Matriks.Lean.Algotrader
         public string OrderId { get; set; }
     }
 
-    private class PendingOrderContext
+    private struct PendingOrderContext
     {
         public string RequestId { get; set; }
         public string Symbol { get; set; }
@@ -2007,7 +2002,7 @@ namespace Matriks.Lean.Algotrader
         public decimal Price { get; set; }
     }
 
-    private class OrderExecutionResult
+    private struct OrderExecutionResult
     {
         public bool Success { get; set; }
         public bool IsSimulated { get; set; }

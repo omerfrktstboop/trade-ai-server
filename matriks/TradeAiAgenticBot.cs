@@ -26,6 +26,8 @@ using MarketDataPayload = System.Collections.Generic.Dictionary<string, object>;
 using OrderExecutionResult = System.Tuple<bool, bool, string, string>;
 using PendingOrderContext = System.Tuple<string, string, string, decimal, decimal>;
 
+namespace Matriks.Lean.Algotrader
+{
     /// <summary>
     /// TradeAI Agentic Bot — Matriks IQ Algo.
     /// Agentic sinyal protokolü ile server'dan karar alır,
@@ -39,8 +41,8 @@ using PendingOrderContext = System.Tuple<string, string, string, decimal, decima
     /// 4. REAL_LIVE default kapalı: EnableRealOrders=false
     /// MARKET emir ASLA gönderilmez — sadece LIMIT.
     /// </summary>
-public class TradeAiAgenticBot : MatriksAlgo
-{
+    public class TradeAiAgenticBot : MatriksAlgo
+    {
         // ── Parameters ──────────────────────────────────────────────
 
         [Parameter("https://omermatriks.ddns.net")]
@@ -1911,5 +1913,5 @@ public class TradeAiAgenticBot : MatriksAlgo
                 // Debug should never break trading flow.
             }
         }
-
     }
+}

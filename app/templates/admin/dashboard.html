@@ -28,6 +28,15 @@
     <div class="card-value">{{ today_trade_count }}</div>
     <div class="mt-16" style="font-size:12px;color:var(--text-muted)">Bugün kaydedilen işlem adedi</div>
   </div>
+
+  <div class="card">
+    <div class="card-header">Aktif Trade Profile</div>
+    <div class="card-value" style="font-size:20px">
+      {{ active_profile.name }}
+      <span class="badge {% if active_profile.risk_level in ['HIGH', 'EXTREME'] %}badge-sell{% elif active_profile.risk_level == 'LOW' %}badge-buy{% else %}badge-wait{% endif %}" style="margin-left:6px">{{ active_profile.risk_level }}</span>
+    </div>
+    <div class="mt-16" style="font-size:12px;color:var(--text-muted)"><a href="/admin/trade-profiles" class="log-link">Profilleri yönet →</a></div>
+  </div>
 </div>
 
 <div class="mb-24">

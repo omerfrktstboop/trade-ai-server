@@ -94,26 +94,28 @@ class TestAdminConfig:
     def test_config_update_writes_audit_log(
         self, client: TestClient, auth_headers: dict[str, str]
     ):
+        # maxDailyTradeCount etc. moved to Trade Profiles (see test_trade_profiles.py);
+        # botHttpTimeoutSeconds remains a standalone, admin-config-driven key.
         resp = client.put(
-            "/api/admin/config/maxDailyTradeCount",
+            "/api/admin/config/botHttpTimeoutSeconds",
             headers=auth_headers,
-            json={"value": 7, "reason": "raise test limit"},
+            json={"value": 30, "reason": "raise test limit"},
         )
 
         assert resp.status_code == 200
-        assert resp.json()["value"] == "7"
+        assert resp.json()["value"] == "30"
 
         async def _load_audit() -> ConfigAuditLog | None:
             async with async_session_factory() as session:
                 stmt = select(ConfigAuditLog).where(
-                    ConfigAuditLog.key == "maxDailyTradeCount"
+                    ConfigAuditLog.key == "botHttpTimeoutSeconds"
                 )
                 return (await session.execute(stmt)).scalar_one_or_none()
 
         audit = asyncio.run(_load_audit())
         assert audit is not None
-        assert audit.old_value == "3"
-        assert audit.new_value == "7"
+        assert audit.old_value == "15"
+        assert audit.new_value == "30"
         assert audit.reason == "raise test limit"
 
     @pytest.mark.parametrize("mode", ["LIVE", "DEMO_LIVE", "REAL_LIVE"])
@@ -139,6 +141,34 @@ class TestAdminConfig:
         assert "killSwitchEnabled" in resp.text
         assert "Açıklama" in resp.text
         assert "İşlem yapılmasına izin verilen semboller" in resp.text
+
+    def test_config_page_no_longer_shows_profile_shadowed_keys(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        """These 13 keys now come from the active Trade Profile — editing
+        them here used to silently no-op. They must not appear as editable
+        rows on /admin/config anymore."""
+        resp = client.get("/admin/config", headers=auth_headers)
+
+        assert resp.status_code == 200
+        for removed_key in (
+            "maxPositionValuePerSymbol",
+            "maxDailyTradeCount",
+            "minConfidenceForBuy",
+            "minConfidenceForSell",
+            "allowSellLongTerm",
+            "botMaxOrderValueTl",
+            "botMaxQtyPerOrder",
+            "botMaxOrdersPerDay",
+            "botMaxOrdersPerSymbolPerDay",
+            "botScanIntervalMinutes",
+            "botMaxFetchLoopPerSession",
+            "botOrderTimeInForce",
+            "botIndicatorPeriod",
+        ):
+            assert removed_key not in resp.text
+        # Link to where these moved
+        assert "/admin/trade-profiles" in resp.text
 
 
 class TestKillSwitchIntegration:
@@ -284,3 +314,60 @@ class TestLogDetailView:
         resp = client.get("/admin/logs")
         assert resp.status_code == 200
         assert "/admin/logs/req-detail-2" in resp.text
+
+
+class TestAdminDashboard:
+    def test_dashboard_shows_active_trade_profile(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        resp = client.get("/admin", headers=auth_headers)
+
+        assert resp.status_code == 200
+        assert "Aktif Trade Profile" in resp.text
+        assert "NORMAL" in resp.text
+
+
+class TestLogsListBugFixes:
+    """Regression coverage for two field-name mismatches that made the
+    AI Decisions table's Confidence/Model columns and the Config Audit
+    Logs table's Key column always render blank."""
+
+    async def _seed_ai_decision(self, request_id: str) -> None:
+        async with async_session_factory() as session:
+            session.add(AiDecision(
+                request_id=request_id, symbol="THYAO", provider="deepseek",
+                raw_request={"symbol": "THYAO"}, raw_response={"action": "BUY"},
+                action="BUY", confidence=91.5, qty=100.0, reason="bullish",
+                model="deepseek-chat",
+            ))
+            await session.commit()
+
+    async def _seed_audit_log(self) -> None:
+        async with async_session_factory() as session:
+            session.add(ConfigAuditLog(
+                key="killSwitchEnabled", old_value="false", new_value="true",
+                changed_by="admin", reason="test audit key rendering",
+            ))
+            await session.commit()
+
+    def test_ai_decisions_table_shows_confidence_and_model(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        asyncio.run(self._seed_ai_decision("req-logs-list-1"))
+
+        resp = client.get("/admin/logs", headers=auth_headers)
+
+        assert resp.status_code == 200
+        assert "91.5" in resp.text
+        assert "deepseek-chat" in resp.text
+
+    def test_audit_log_table_shows_key(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        asyncio.run(self._seed_audit_log())
+
+        resp = client.get("/admin/logs", headers=auth_headers)
+
+        assert resp.status_code == 200
+        assert "killSwitchEnabled" in resp.text
+        assert "test audit key rendering" in resp.text

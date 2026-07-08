@@ -199,9 +199,11 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
     async with async_session_factory() as session:
         configs = await _config_lookup(session)
+        active_profile = await get_active_profile(session)
         today_counts = await get_today_trade_counts(session, "*")
         latest_risk = await _latest(session, RiskDecision, 20)
         latest_orders = await _latest(session, OrderLog, 20)
+        status_ctx = await _status_strip_context(session, configs=configs, profile=active_profile)
 
     return templates.TemplateResponse(
         request,
@@ -210,9 +212,11 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
             "identity": identity,
             "active": "dashboard",
             "configs": configs,
+            "active_profile": active_profile,
             "today_trade_count": today_counts.bot_count,
             "latest_risk": latest_risk,
             "latest_orders": latest_orders,
+            **status_ctx,
         },
     )
 
@@ -221,7 +225,8 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
 async def admin_config_page(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
     async with async_session_factory() as session:
-        configs = await list_admin_configs(session)
+        configs = await _config_lookup(session)
+        status_ctx = await _status_strip_context(session, configs=configs)
 
     return templates.TemplateResponse(
         request,
@@ -235,6 +240,7 @@ async def admin_config_page(request: Request) -> HTMLResponse:
             "message": None,
             "form_values": {},
             "reason": "",
+            **status_ctx,
         },
     )
 
@@ -262,7 +268,8 @@ async def admin_config_update(request: Request) -> Any:
                 )
     except ValueError as exc:
         async with async_session_factory() as session:
-            configs = await list_admin_configs(session)
+            configs = await _config_lookup(session)
+            status_ctx = await _status_strip_context(session, configs=configs)
         return templates.TemplateResponse(
             request,
             "admin/config.html",
@@ -275,6 +282,7 @@ async def admin_config_update(request: Request) -> Any:
                 "message": None,
                 "form_values": form,
                 "reason": reason,
+                **status_ctx,
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -291,6 +299,7 @@ async def admin_positions(request: Request) -> HTMLResponse:
             session, LockedPosition, 100, order_field="created_at"
         )
         allowed_raw = await get_admin_config_value(session, "allowedSymbols")
+        status_ctx = await _status_strip_context(session)
 
     allowed_symbols = _split_csv_symbols(allowed_raw)
 
@@ -306,6 +315,7 @@ async def admin_positions(request: Request) -> HTMLResponse:
             "confirmation": RISKY_CONFIRMATION,
             "error": None,
             "message": None,
+            **status_ctx,
         },
     )
 
@@ -317,6 +327,7 @@ async def _positions_page_error(request: Request, identity: str, error: str) -> 
             session, LockedPosition, 100, order_field="created_at"
         )
         allowed_raw = await get_admin_config_value(session, "allowedSymbols")
+        status_ctx = await _status_strip_context(session)
 
     return templates.TemplateResponse(
         request,
@@ -330,6 +341,7 @@ async def _positions_page_error(request: Request, identity: str, error: str) -> 
             "confirmation": RISKY_CONFIRMATION,
             "error": error,
             "message": None,
+            **status_ctx,
         },
         status_code=status.HTTP_400_BAD_REQUEST,
     )
@@ -471,6 +483,7 @@ async def _trade_profiles_page(
     async with async_session_factory() as session:
         profiles = await list_profiles(session)
         active = await get_active_profile(session)
+        status_ctx = await _status_strip_context(session, profile=active)
 
     return templates.TemplateResponse(
         request,
@@ -484,6 +497,7 @@ async def _trade_profiles_page(
             "confirmation": PROFILE_RISKY_CONFIRMATION,
             "error": error,
             "message": message,
+            **status_ctx,
         },
     )
 
@@ -613,6 +627,7 @@ async def admin_logs(request: Request) -> HTMLResponse:
         risk_decisions = await _latest(session, RiskDecision, 20)
         order_logs = await _latest(session, OrderLog, 20)
         audit_logs = await _latest(session, ConfigAuditLog, 20)
+        status_ctx = await _status_strip_context(session)
 
     return templates.TemplateResponse(
         request,
@@ -624,6 +639,7 @@ async def admin_logs(request: Request) -> HTMLResponse:
             "risk_decisions": risk_decisions,
             "order_logs": order_logs,
             "audit_logs": audit_logs,
+            **status_ctx,
         },
     )
 
@@ -657,6 +673,7 @@ async def admin_log_detail(request: Request, request_id: str) -> HTMLResponse:
                 .order_by(OrderLog.created_at.asc())
             )
         ).scalars().all()
+        status_ctx = await _status_strip_context(session)
 
     def _pretty(value: Any) -> str | None:
         if value is None:
@@ -676,6 +693,7 @@ async def admin_log_detail(request: Request, request_id: str) -> HTMLResponse:
             "order_logs": order_logs,
             "raw_request_json": _pretty(ai_decision.raw_request) if ai_decision else None,
             "raw_response_json": _pretty(ai_decision.raw_response) if ai_decision else None,
+            **status_ctx,
         },
     )
 
@@ -685,6 +703,7 @@ async def admin_emergency(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
     async with async_session_factory() as session:
         configs = await _config_lookup(session)
+        status_ctx = await _status_strip_context(session, configs=configs)
 
     kill_switch = configs["killSwitchEnabled"].value == "true"
     current_mode = configs["tradingMode"].value
@@ -702,6 +721,7 @@ async def admin_emergency(request: Request) -> HTMLResponse:
             "error": None,
             "message": None,
             "submitted_reason": "",
+            **status_ctx,
         },
     )
 
@@ -728,6 +748,7 @@ async def admin_emergency_action(
     except ValueError as exc:
         async with async_session_factory() as session:
             configs = await _config_lookup(session)
+            status_ctx = await _status_strip_context(session, configs=configs)
         kill_switch = configs["killSwitchEnabled"].value == "true"
         current_mode = configs["tradingMode"].value
         return templates.TemplateResponse(
@@ -743,6 +764,7 @@ async def admin_emergency_action(
                 "error": str(exc),
                 "message": None,
                 "submitted_reason": reason,
+                **status_ctx,
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -979,6 +1001,25 @@ async def admin_api_delete_trade_profile(request: Request, code: str) -> dict[st
 
 async def _config_lookup(session: Any) -> dict[str, AdminConfigItem]:
     return {item.key: item for item in await list_admin_configs(session)}
+
+
+async def _status_strip_context(
+    session: Any,
+    *,
+    configs: dict[str, AdminConfigItem] | None = None,
+    profile: TradeProfile | None = None,
+) -> dict[str, Any]:
+    """Trading mode / kill switch / active trade profile — shown in the
+    header on every admin page so the current risk posture is always
+    visible without needing to visit Dashboard or Trade Profiles first."""
+    configs = configs if configs is not None else await _config_lookup(session)
+    profile = profile if profile is not None else await get_active_profile(session)
+    return {
+        "status_mode": configs["tradingMode"].value,
+        "status_kill_switch": configs["killSwitchEnabled"].value == "true",
+        "status_profile_code": profile.code,
+        "status_profile_risk_level": profile.risk_level,
+    }
 
 
 async def _apply_emergency_action(

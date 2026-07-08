@@ -47,30 +47,6 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         risk_config.locked_long_term_symbols,
         "Uzun vadeli kilitli semboller. Bu semboller otomatik SELL kararlarından korunur.",
     ),
-    "maxPositionValuePerSymbol": ConfigDefinition(
-        "maxPositionValuePerSymbol",
-        "float",
-        str(risk_config.max_position_value_per_symbol),
-        "Bir sembolde botun alabileceği maksimum pozisyon değeri.",
-    ),
-    "maxDailyTradeCount": ConfigDefinition(
-        "maxDailyTradeCount",
-        "int",
-        str(risk_config.max_daily_trade_count),
-        "Gün içinde izin verilen maksimum BUY/SELL işlem sayısı.",
-    ),
-    "minConfidenceForBuy": ConfigDefinition(
-        "minConfidenceForBuy",
-        "float",
-        str(risk_config.min_confidence_for_buy),
-        "BUY kararı için gereken minimum AI güven skoru.",
-    ),
-    "minConfidenceForSell": ConfigDefinition(
-        "minConfidenceForSell",
-        "float",
-        str(risk_config.min_confidence_for_sell),
-        "SELL kararı için gereken minimum AI güven skoru.",
-    ),
     "disableTradingAfter": ConfigDefinition(
         "disableTradingAfter",
         "time",
@@ -94,12 +70,6 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "bool",
         "false",
         "true olduğunda tüm sinyal değerlendirmeleri WAIT ve allowOrder=false döner.",
-    ),
-    "allowSellLongTerm": ConfigDefinition(
-        "allowSellLongTerm",
-        "bool",
-        str(risk_config.allow_sell_long_term).lower(),
-        "Uzun vadeli kilitli semboller için otomatik SELL kararına izin verir.",
     ),
     "botMode": ConfigDefinition(
         "botMode",
@@ -131,41 +101,11 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "false",
         "Matriks demo hesap kullanildigini onaylar.",
     ),
-    "botMaxOrderValueTl": ConfigDefinition(
-        "botMaxOrderValueTl",
-        "float",
-        "1000",
-        "Matriks bot tek emir maksimum TL degeri.",
-    ),
-    "botMaxQtyPerOrder": ConfigDefinition(
-        "botMaxQtyPerOrder",
-        "float",
-        "1",
-        "Matriks bot tek emir maksimum adet.",
-    ),
-    "botMaxOrdersPerDay": ConfigDefinition(
-        "botMaxOrdersPerDay",
-        "int",
-        "3",
-        "Matriks bot gunluk maksimum emir sayisi.",
-    ),
-    "botMaxOrdersPerSymbolPerDay": ConfigDefinition(
-        "botMaxOrdersPerSymbolPerDay",
-        "int",
-        "1",
-        "Matriks bot sembol basina gunluk maksimum emir sayisi.",
-    ),
     "botAllowMarketOrders": ConfigDefinition(
         "botAllowMarketOrders",
         "bool",
         "false",
         "MARKET emirleri sistem genelinde yasaktir; true kabul edilmez.",
-    ),
-    "botScanIntervalMinutes": ConfigDefinition(
-        "botScanIntervalMinutes",
-        "int",
-        "30",
-        "Matriks bot tarama araligi, dakika.",
     ),
     "botHttpTimeoutSeconds": ConfigDefinition(
         "botHttpTimeoutSeconds",
@@ -173,37 +113,14 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "15",
         "Matriks bot HTTP timeout suresi, saniye.",
     ),
-    "botMaxFetchLoopPerSession": ConfigDefinition(
-        "botMaxFetchLoopPerSession",
-        "int",
-        "3",
-        "Agentic FETCH_DATA dongusu icin maksimum tur sayisi.",
-    ),
-    "botOrderTimeInForce": ConfigDefinition(
-        "botOrderTimeInForce",
-        "time_in_force",
-        "Day",
-        "Matriks limit emir gecerlilik tipi: Day veya GoodTillCancel.",
-    ),
-    "botIndicatorPeriod": ConfigDefinition(
-        "botIndicatorPeriod",
-        "symbol_period",
-        "Min5",
-        "Matriks indikator periyodu: Min, Min5, Min15, Min30, Hour veya Day.",
-    ),
 }
 
 RISKY_CONFIG_KEYS = {
     "tradingMode",
     "killSwitchEnabled",
-    "allowSellLongTerm",
     "botMode",
     "botEnableRealOrders",
     "botDemoAccountConfirmed",
-    "botMaxOrderValueTl",
-    "botMaxQtyPerOrder",
-    "botMaxOrdersPerDay",
-    "botMaxOrdersPerSymbolPerDay",
 }
 
 
@@ -472,8 +389,6 @@ def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
         } and old_value != new_value
     if key == "killSwitchEnabled":
         return _parse_bool(old_value) is True and _parse_bool(new_value) is False
-    if key == "allowSellLongTerm":
-        return _parse_bool(new_value) is True and old_value != new_value
     if key == "botMode":
         return new_value in {
             SignalMode.DEMO_LIVE.value,
@@ -481,11 +396,4 @@ def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
         } and old_value != new_value
     if key in {"botEnableRealOrders", "botDemoAccountConfirmed"}:
         return _parse_bool(new_value) is True and old_value != new_value
-    if key in {
-        "botMaxOrderValueTl",
-        "botMaxQtyPerOrder",
-        "botMaxOrdersPerDay",
-        "botMaxOrdersPerSymbolPerDay",
-    }:
-        return float(new_value) > float(old_value)
     return False

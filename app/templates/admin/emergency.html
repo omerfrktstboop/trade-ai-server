@@ -1,6 +1,6 @@
 {% extends "admin/base.html" %}
-{% block title %}Emergency{% endblock %}
-{% block page_title %}Emergency Controls{% endblock %}
+{% block title %}Acil Durum{% endblock %}
+{% block page_title %}Acil Durum Kontrolleri{% endblock %}
 {% block content %}
 
 {% if error %}<div class="alert alert-danger">⚠️ {{ error }}</div>{% endif %}
@@ -9,57 +9,53 @@
 <div class="emergency-card mb-24">
   <h3>⚠️ Kill Switch</h3>
   <p class="text-muted text-sm">
-    When enabled, ALL trading stops immediately. No new orders will be submitted.
-    Existing positions are held but not managed.
+    Aktif olduğunda TÜM işlemler anında durur. Yeni emir gönderilmez.
+    Mevcut pozisyonlar korunur ama yönetilmez.
   </p>
   <div style="margin-top:16px">
     <span class="status {% if kill_switch %}status-danger{% else %}status-ok{% endif %}" style="font-size:15px;font-weight:600">
-      Kill Switch: <strong>{{ 'ACTIVE (trading blocked)' if kill_switch else 'OFF (trading allowed)' }}</strong>
+      Kill Switch: <strong>{{ 'AKTİF (işlemler durduruldu)' if kill_switch else 'KAPALI (işlemlere izin veriliyor)' }}</strong>
     </span>
   </div>
   <div class="emergency-actions">
     {% if not kill_switch %}
     <form method="post" action="/admin/emergency/enable-kill-switch">
       <div class="form-group">
-        <label class="form-label" for="ks_reason">Reason for enabling</label>
-        <input class="form-input" id="ks_reason" name="reason" placeholder="Why are you stopping all trading?" style="max-width:400px" value="{{ submitted_reason or '' }}" required>
+        <label class="form-label" for="ks_reason">Etkinleştirme nedeni</label>
+        <input class="form-input" id="ks_reason" name="reason" placeholder="Tüm işlemleri neden durduruyorsunuz?" style="max-width:400px" value="{{ submitted_reason or '' }}" required>
       </div>
-      <button class="btn btn-danger" type="submit">🔴 Enable Kill Switch</button>
+      <button class="btn btn-danger" type="submit">🔴 Kill Switch'i Etkinleştir</button>
     </form>
     {% else %}
     <form method="post" action="/admin/emergency/disable-kill-switch">
       <div class="form-group">
-        <label class="form-label" for="ksd_reason">Reason for disabling</label>
-        <input class="form-input" id="ksd_reason" name="reason" placeholder="Why is it safe to re-enable?" style="max-width:400px" value="{{ submitted_reason or '' }}" required>
+        <label class="form-label" for="ksd_reason">Devre dışı bırakma nedeni</label>
+        <input class="form-input" id="ksd_reason" name="reason" placeholder="Neden tekrar açmak güvenli?" style="max-width:400px" value="{{ submitted_reason or '' }}" required>
       </div>
       <div class="form-group">
-        <label class="form-label" for="ksd_conf">Confirmation (type {{ confirmation }})</label>
+        <label class="form-label" for="ksd_conf">Onay ({{ confirmation }} yazın)</label>
         <input class="form-input" id="ksd_conf" name="confirmation" placeholder="{{ confirmation }}" style="max-width:400px" required>
       </div>
-      <button class="btn btn-outline" type="submit">🟢 Disable Kill Switch</button>
+      <button class="btn btn-outline" type="submit">🟢 Kill Switch'i Devre Dışı Bırak</button>
     </form>
     {% endif %}
   </div>
 </div>
 
 <div class="card mb-24">
-  <div class="section-title mb-16">Force Paper Trading Mode</div>
+  <div class="section-title mb-16">PAPER Moduna Zorla</div>
   <p class="text-muted text-sm mb-16">
-    Immediately switch to PAPER (simulation) mode. Useful when you need to disable
-    live trading without fully enabling the kill switch. Current mode:
+    Anında PAPER (simülasyon) moduna geçer. Kill switch'i tamamen etkinleştirmeden
+    canlı işlemi durdurmak istediğinizde kullanışlıdır. Şu anki mod:
     <span class="badge {% if current_mode == 'LIVE' %}badge-live{% elif current_mode == 'PAPER' %}badge-paper{% else %}badge-manual{% endif %}" style="margin-left:8px">{{ current_mode }}</span>
   </p>
   <form method="post" action="/admin/emergency/force-paper">
-    <div class="form-row">
+    <div class="form-row" style="grid-template-columns:1fr auto">
       <div class="form-group" style="margin-bottom:0">
-        <label class="form-label" for="fp_reason">Reason</label>
-        <input class="form-input" id="fp_reason" name="reason" placeholder="Why forcing paper mode?" value="{{ submitted_reason or '' }}" required>
+        <label class="form-label" for="fp_reason">Neden</label>
+        <input class="form-input" id="fp_reason" name="reason" placeholder="PAPER moduna neden zorlanıyor?" value="{{ submitted_reason or '' }}" required>
       </div>
-      <div class="form-group" style="margin-bottom:0">
-        <label class="form-label" for="fp_conf">Confirmation</label>
-        <input class="form-input" id="fp_conf" name="confirmation" placeholder="FORCE-PAPER" required>
-      </div>
-      <button class="btn btn-outline" type="submit" style="align-self:end">Force PAPER Mode</button>
+      <button class="btn btn-outline" type="submit" style="align-self:end">PAPER Moduna Zorla</button>
     </div>
   </form>
 </div>

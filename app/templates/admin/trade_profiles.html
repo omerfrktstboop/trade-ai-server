@@ -41,28 +41,43 @@
 </div>
 {% endmacro %}
 
+{% macro field_section(title) %}
+<div class="mb-16">
+  <div class="text-sm text-muted mb-16" style="font-weight:700;text-transform:uppercase;letter-spacing:0.5px;font-size:11px">{{ title }}</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">
+    {{ caller() }}
+  </div>
+</div>
+{% endmacro %}
+
 {% macro fields_grid(p) %}
-<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:16px">
+{% call field_section("Limitler") %}
   {{ num_field('max_order_value_tl', 'Max Order Value TL', p.max_order_value_tl) }}
   {{ num_field('max_qty_per_order', 'Max Qty Per Order', p.max_qty_per_order) }}
   {{ num_field('max_position_value_per_symbol', 'Max Position Value/Symbol', p.max_position_value_per_symbol) }}
   {{ num_field('max_orders_per_day', 'Max Orders/Day', p.max_orders_per_day) }}
   {{ num_field('max_orders_per_symbol_per_day', 'Max Orders/Symbol/Day', p.max_orders_per_symbol_per_day) }}
+{% endcall %}
+{% call field_section("Sinyal Eşikleri") %}
   {{ num_field('min_confidence_for_buy', 'Min Confidence BUY', p.min_confidence_for_buy) }}
   {{ num_field('min_confidence_for_sell', 'Min Confidence SELL', p.min_confidence_for_sell) }}
   {{ num_field('max_natr_for_buy', 'Max nATR for BUY', p.max_natr_for_buy) }}
   {{ num_field('max_depth_queue_drop_pct_for_buy', 'Max Depth Queue Drop %', p.max_depth_queue_drop_pct_for_buy) }}
   {{ bool_field('require_alpha_trend_alignment', 'Require AlphaTrend Alignment', p.require_alpha_trend_alignment) }}
   {{ bool_field('require_indicator_consensus_alignment', 'Require Indicator Consensus', p.require_indicator_consensus_alignment) }}
+{% endcall %}
+{% call field_section("İzinler") %}
   {{ bool_field('allow_sell_long_term', 'Allow Sell Long Term', p.allow_sell_long_term) }}
   {{ bool_field('allow_short_selling', 'Allow Short Selling', p.allow_short_selling) }}
   {{ bool_field('allow_real_live', 'Allow REAL_LIVE', p.allow_real_live) }}
   {{ bool_field('allow_demo_live', 'Allow DEMO_LIVE', p.allow_demo_live) }}
+{% endcall %}
+{% call field_section("Bot Davranışı") %}
   {{ num_field('scan_interval_minutes', 'Scan Interval (dk)', p.scan_interval_minutes) }}
   {{ num_field('max_fetch_loop_per_session', 'Max Fetch Loop/Session', p.max_fetch_loop_per_session) }}
   {{ tif_field(p.order_time_in_force) }}
   {{ period_field(p.indicator_period) }}
-</div>
+{% endcall %}
 {% endmacro %}
 
 {% if error %}<div class="alert alert-danger">⚠️ {{ error }}</div>{% endif %}

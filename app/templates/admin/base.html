@@ -143,7 +143,13 @@
     }
     .main-header .page-title {
       font-size: 16px; font-weight: 600; letter-spacing: -0.2px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      min-width: 0; flex-shrink: 1;
     }
+    .status-strip {
+      display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+    }
+    .status-strip .badge, .status-strip .status { white-space: nowrap; }
     .main-content {
       padding: 24px;
       max-width: 1200px;
@@ -487,6 +493,9 @@
     @media (max-width: 400px) {
       .stat-grid { grid-template-columns: 1fr; }
       .main-header { padding: 0 16px; }
+      .status-strip { gap: 6px; }
+      .status-strip .badge { padding: 3px 7px; font-size: 11px; }
+      .status-strip .status-label { display: none; }
     }
   </style>
 </head>
@@ -534,6 +543,15 @@
         <span class="page-title">
           {% block page_title %}Dashboard{% endblock %}
         </span>
+        {% if status_mode is defined %}
+        <div class="status-strip">
+          <span class="badge {% if status_mode == 'LIVE' %}badge-live{% elif status_mode == 'PAPER' %}badge-paper{% else %}badge-manual{% endif %}" title="Trading Mode">{{ status_mode }}</span>
+          <span class="status {% if status_kill_switch %}status-danger{% else %}status-ok{% endif %}" title="Kill Switch">
+            <span class="status-label">{{ 'KİLİT' if status_kill_switch else 'Aktif' }}</span>
+          </span>
+          <span class="badge {% if status_profile_risk_level in ['HIGH', 'EXTREME'] %}badge-sell{% elif status_profile_risk_level == 'LOW' %}badge-buy{% else %}badge-wait{% endif %}" title="Aktif Trade Profile">{{ status_profile_code }}</span>
+        </div>
+        {% endif %}
         <form method="post" action="/admin/logout" id="logoutForm" style="display:none"></form>
       </header>
       <div class="main-content">

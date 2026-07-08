@@ -148,9 +148,10 @@ Aşağıdaki adımları **LIVE** moda geçmeden önce mutlaka tamamlayın:
 - Browser login uses `ADMIN_PASSWORD`; admin API calls also accept the existing Bearer `API_TOKEN`.
 - Secrets are not exposed by admin config endpoints: `API_TOKEN`, `DEEPSEEK_API_KEY`, and `DATABASE_URL` are not returned.
 - Config edits are stored in `system_configs`; every changed value writes `config_audit_logs`.
-- Risky changes require confirmation value `CONFIRM`: switching `tradingMode` to `LIVE`, `DEMO_LIVE`, or `REAL_LIVE`, disabling `killSwitchEnabled`, and enabling `allowSellLongTerm`.
+- Risky changes require confirmation value `CONFIRM`: switching `tradingMode` or `botMode` to a live mode, disabling `killSwitchEnabled`, and enabling `botEnableRealOrders`/`botDemoAccountConfirmed`.
 - `killSwitchEnabled=true` makes `/api/signal/evaluate` return `WAIT` with `allowOrder=false`.
 - If `tradingMode` exists in DB, it overrides the incoming request mode; otherwise request mode defaults remain unchanged.
+- Order limits, confidence thresholds, signal filters, and scan interval are no longer standalone admin config keys — they're managed by the active Trade Profile (`/admin/trade-profiles`), which also requires `CONFIRM` for risky changes (raising limits, lowering confidence thresholds, disabling alignment guards, enabling `allowRealLive`, or activating a HIGH/EXTREME risk-level profile).
 
 ### Signal Evaluate
 

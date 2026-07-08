@@ -33,12 +33,12 @@
 
 <div class="mb-24">
   <div class="flex-between mb-16">
-    <h2 class="section-title">Bot Positions</h2>
-    <span class="text-sm text-muted">{{ bot_positions|length }} active</span>
+    <h2 class="section-title">Bot Pozisyonları</h2>
+    <span class="text-sm text-muted">{{ bot_positions|length }} aktif</span>
   </div>
   <div class="table-container">
     <table>
-      <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Price</th><th>Current Price</th><th>P&L</th><th>Mode</th><th>Watchlist</th><th>Test Override</th><th>Updated</th></tr></thead>
+      <thead><tr><th>Sembol</th><th>Adet</th><th>Ort. Fiyat</th><th>Güncel Fiyat</th><th>K/Z</th><th>Mod</th><th>İzleme Listesi</th><th>Test Override</th><th>Güncelleme</th></tr></thead>
       <tbody>
         {% for row in bot_positions %}
         <tr>
@@ -68,13 +68,13 @@
                 <option value="BUY">BUY</option>
               </select>
               <input class="form-input" name="confirmation" placeholder="{{ confirmation }}" style="width:110px" required>
-              <button class="btn btn-outline-danger btn-sm" type="submit">Force</button>
+              <button class="btn btn-outline-danger btn-sm" type="submit">Uygula</button>
             </form>
           </td>
           <td class="mono text-muted">{{ row.updated_at }}</td>
         </tr>
         {% else %}
-        <tr class="empty-row"><td colspan="9">No active bot positions</td></tr>
+        <tr class="empty-row"><td colspan="9">Aktif bot pozisyonu yok</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -83,12 +83,12 @@
 
 <div>
   <div class="flex-between mb-16">
-    <h2 class="section-title">Locked Positions (Long Term)</h2>
-    <span class="text-sm text-muted">{{ locked_positions|length }} locked</span>
+    <h2 class="section-title">Kilitli Pozisyonlar (Uzun Vade)</h2>
+    <span class="text-sm text-muted">{{ locked_positions|length }} kilitli</span>
   </div>
   <div class="table-container">
     <table>
-      <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Price</th><th>Locked By</th><th>Locked At</th></tr></thead>
+      <thead><tr><th>Sembol</th><th>Adet</th><th>Ort. Fiyat</th><th>Kilitleyen</th><th>Kilitlenme Zamanı</th></tr></thead>
       <tbody>
         {% for row in locked_positions %}
         <tr>
@@ -99,7 +99,7 @@
           <td class="mono text-muted">{{ row.created_at }}</td>
         </tr>
         {% else %}
-        <tr class="empty-row"><td colspan="5">No locked positions</td></tr>
+        <tr class="empty-row"><td colspan="5">Kilitli pozisyon yok</td></tr>
         {% endfor %}
       </tbody>
     </table>

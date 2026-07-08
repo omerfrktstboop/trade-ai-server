@@ -7,12 +7,12 @@
 
 <div class="mb-24">
   <div class="flex-between mb-16">
-    <h2 class="section-title">AI Decisions</h2>
-    <span class="text-sm text-muted">{{ ai_decisions|length }} recent</span>
+    <h2 class="section-title">AI Kararları</h2>
+    <span class="text-sm text-muted">son {{ ai_decisions|length }} kayıt</span>
   </div>
   <div class="table-container">
     <table>
-      <thead><tr><th>Request</th><th>Symbol</th><th>Action</th><th>Confidence</th><th>Model</th><th>Created</th></tr></thead>
+      <thead><tr><th>İstek</th><th>Sembol</th><th>Karar</th><th>Güven</th><th>Model</th><th>Zaman</th></tr></thead>
       <tbody>
         {% for row in ai_decisions %}
         <tr>
@@ -21,12 +21,12 @@
           <td>
             <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
           </td>
-          <td>{{ row.confidence_score if row.confidence_score else '—' }}</td>
-          <td class="text-muted">{{ row.model_name or '—' }}</td>
+          <td>{{ row.confidence if row.confidence is not none else '—' }}</td>
+          <td class="text-muted">{{ row.model or '—' }}</td>
           <td class="mono text-muted">{{ row.created_at }}</td>
         </tr>
         {% else %}
-        <tr class="empty-row"><td colspan="6">No AI decisions yet</td></tr>
+        <tr class="empty-row"><td colspan="6">Henüz AI kararı yok</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -35,12 +35,12 @@
 
 <div class="mb-24">
   <div class="flex-between mb-16">
-    <h2 class="section-title">Risk Decisions</h2>
-    <span class="text-sm text-muted">{{ risk_decisions|length }} recent</span>
+    <h2 class="section-title">Risk Kararları</h2>
+    <span class="text-sm text-muted">son {{ risk_decisions|length }} kayıt</span>
   </div>
   <div class="table-container">
     <table>
-      <thead><tr><th>Request</th><th>Symbol</th><th>Action</th><th>Allow</th><th>Reason</th><th>Created</th></tr></thead>
+      <thead><tr><th>İstek</th><th>Sembol</th><th>Karar</th><th>İzin</th><th>Neden</th><th>Zaman</th></tr></thead>
       <tbody>
         {% for row in risk_decisions %}
         <tr>
@@ -49,12 +49,12 @@
           <td>
             <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
           </td>
-          <td>{% if row.allow_order %}<span class="status status-ok">Yes</span>{% else %}<span class="status status-danger">No</span>{% endif %}</td>
+          <td>{% if row.allow_order %}<span class="status status-ok">Evet</span>{% else %}<span class="status status-danger">Hayır</span>{% endif %}</td>
           <td class="text-muted" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;" title="{{ row.reason }}">{{ row.reason }}</td>
           <td class="mono text-muted">{{ row.created_at }}</td>
         </tr>
         {% else %}
-        <tr class="empty-row"><td colspan="6">No risk decisions yet</td></tr>
+        <tr class="empty-row"><td colspan="6">Henüz risk kararı yok</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -63,12 +63,12 @@
 
 <div class="mb-24">
   <div class="flex-between mb-16">
-    <h2 class="section-title">Order Logs</h2>
-    <span class="text-sm text-muted">{{ order_logs|length }} recent</span>
+    <h2 class="section-title">Emir Logları</h2>
+    <span class="text-sm text-muted">son {{ order_logs|length }} kayıt</span>
   </div>
   <div class="table-container">
     <table>
-      <thead><tr><th>Request</th><th>Symbol</th><th>Action</th><th>Qty</th><th>Status</th><th>Created</th></tr></thead>
+      <thead><tr><th>İstek</th><th>Sembol</th><th>Karar</th><th>Adet</th><th>Durum</th><th>Zaman</th></tr></thead>
       <tbody>
         {% for row in order_logs %}
         <tr>
@@ -82,7 +82,7 @@
           <td class="mono text-muted">{{ row.created_at }}</td>
         </tr>
         {% else %}
-        <tr class="empty-row"><td colspan="6">No order logs yet</td></tr>
+        <tr class="empty-row"><td colspan="6">Henüz emir logu yok</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -91,16 +91,16 @@
 
 <div>
   <div class="flex-between mb-16">
-    <h2 class="section-title">Config Audit Logs</h2>
-    <span class="text-sm text-muted">{{ audit_logs|length }} recent</span>
+    <h2 class="section-title">Config Değişiklik Geçmişi</h2>
+    <span class="text-sm text-muted">son {{ audit_logs|length }} kayıt</span>
   </div>
   <div class="table-container">
     <table>
-      <thead><tr><th>Key</th><th>From</th><th>To</th><th>By</th><th>Reason</th><th>Created</th></tr></thead>
+      <thead><tr><th>Anahtar</th><th>Eski Değer</th><th>Yeni Değer</th><th>Değiştiren</th><th>Neden</th><th>Zaman</th></tr></thead>
       <tbody>
         {% for row in audit_logs %}
         <tr>
-          <td><code class="mono">{{ row.config_key }}</code></td>
+          <td><code class="mono">{{ row.key }}</code></td>
           <td class="mono text-muted">{{ row.old_value }}</td>
           <td class="mono">{{ row.new_value }}</td>
           <td>{{ row.changed_by or '—' }}</td>
@@ -108,7 +108,7 @@
           <td class="mono text-muted">{{ row.created_at }}</td>
         </tr>
         {% else %}
-        <tr class="empty-row"><td colspan="6">No audit logs yet</td></tr>
+        <tr class="empty-row"><td colspan="6">Henüz config değişikliği yok</td></tr>
         {% endfor %}
       </tbody>
     </table>

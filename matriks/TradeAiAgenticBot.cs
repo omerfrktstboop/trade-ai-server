@@ -18,8 +18,6 @@ using Matriks.Trader.Core.Fields;
 using Matriks.Trader.Core.TraderModels;
 using Newtonsoft.Json;
 
-namespace Matriks.Lean.Algotrader
-{
     /// <summary>
     /// TradeAI Agentic Bot — Matriks IQ Algo.
     /// Agentic sinyal protokolü ile server'dan karar alır,
@@ -2010,4 +2008,3 @@ namespace Matriks.Lean.Algotrader
         public string Message { get; set; }
     }
     }
-}

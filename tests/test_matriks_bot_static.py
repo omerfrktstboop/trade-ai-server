@@ -102,6 +102,13 @@ def test_matriks_payload_includes_ai_server_technical_features():
     source = _bot_source()
 
     for field in (
+        "using Matriks.Indicators;",
+        "RSIIndicator(symbol, IndicatorPeriod, OHLCType.Close, 14)",
+        "MOVIndicator(symbol, IndicatorPeriod, OHLCType.Close, 20, MovMethod.Exponential)",
+        "MOVIndicator(symbol, IndicatorPeriod, OHLCType.Close, 50, MovMethod.Exponential)",
+        "MACDIndicator(symbol, IndicatorPeriod, OHLCType.Close, 26, 12, 9)",
+        "GetNativeRsi(symbol) ?? CalculateRsi(symbol, 14)",
+        'payload["indicatorSource"]',
         'payload["technicalFeatures"]',
         'features["alphaTrendSignal"]',
         'features["alphaTrendMode"] = "PROXY_EMA_MACD_RSI"',

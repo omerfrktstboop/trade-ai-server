@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Matriks.Data.Symbol;
 using Matriks.Engines;
 using Matriks.Enumeration;
+using Matriks.Indicators;
 using Matriks.Lean.Algotrader.AlgoBase;
 using Matriks.Lean.Algotrader.Models;
 using Matriks.Lean.Algotrader.Trading;
@@ -85,6 +86,9 @@ namespace Matriks.Lean.Algotrader
         [Parameter("Day")]
         public string OrderTimeInForce;
 
+        [Parameter(SymbolPeriod.Min5)]
+        public SymbolPeriod IndicatorPeriod;
+
         // ── Symbols ──────────────────────────────────────────────────
 
         public string[] AllowedSymbols =
@@ -124,6 +128,10 @@ namespace Matriks.Lean.Algotrader
         private readonly ConcurrentDictionary<string, decimal> _maxBid1SizeBySymbol = new ConcurrentDictionary<string, decimal>();
         private readonly ConcurrentDictionary<string, PendingOrderContext> _pendingOrdersBySymbolSide = new ConcurrentDictionary<string, PendingOrderContext>();
         private readonly ConcurrentDictionary<string, PendingOrderContext> _pendingOrdersByOrderId = new ConcurrentDictionary<string, PendingOrderContext>();
+        private readonly ConcurrentDictionary<string, RSI> _rsiBySymbol = new ConcurrentDictionary<string, RSI>();
+        private readonly ConcurrentDictionary<string, MOV> _ema20BySymbol = new ConcurrentDictionary<string, MOV>();
+        private readonly ConcurrentDictionary<string, MOV> _ema50BySymbol = new ConcurrentDictionary<string, MOV>();
+        private readonly ConcurrentDictionary<string, MACD> _macdBySymbol = new ConcurrentDictionary<string, MACD>();
 
         // Atomic duplicate requestId check (ConcurrentDictionary.TryAdd = atomic)
         private readonly ConcurrentDictionary<string, object> _sentRequestIds = new ConcurrentDictionary<string, object>();
@@ -153,8 +161,13 @@ namespace Matriks.Lean.Algotrader
             {
                 string normalized = NormalizeSymbol(symbol);
                 AddSymbol(normalized, SymbolPeriod.Min);
+                if (IndicatorPeriod != SymbolPeriod.Min)
+                {
+                    AddSymbol(normalized, IndicatorPeriod);
+                }
                 AddSymbolMarketData(normalized);
                 AddSymbolMarketDepth(normalized);
+                InitializeIndicators(normalized);
 
                 _lastScanUtcBySymbol[normalized] = DateTime.MinValue;
                 _inFlightBySymbol[normalized] = false;
@@ -176,6 +189,7 @@ namespace Matriks.Lean.Algotrader
                 + " demoConfirmed=" + DemoAccountConfirmed
                 + " scanIntervalMinutes=" + ScanIntervalMinutes
                 + " timerSeconds=60"
+                + " indicatorPeriod=" + IndicatorPeriod
                 + " timeInForce=" + NormalizeTimeInForce(OrderTimeInForce)
                 + " server=" + ServerBaseUrl);
 
@@ -588,11 +602,12 @@ namespace Matriks.Lean.Algotrader
                 depthSummary = "depth unavailable: " + ex.Message;
             }
 
-            double? rsi = CalculateRsi(symbol, 14);
-            double? ema20 = CalculateEma(symbol, 20);
-            double? ema50 = CalculateEma(symbol, 50);
-            double? macd = CalculateMacdLine(symbol);
-            double? macdSignal = CalculateMacdSignal(symbol);
+            double? rsi = GetNativeRsi(symbol) ?? CalculateRsi(symbol, 14);
+            double? ema20 = GetNativeEma20(symbol) ?? CalculateEma(symbol, 20);
+            double? ema50 = GetNativeEma50(symbol) ?? CalculateEma(symbol, 50);
+            double? macd = GetNativeMacdLine(symbol) ?? CalculateMacdLine(symbol);
+            double? macdSignal = GetNativeMacdSignal(symbol) ?? CalculateMacdSignal(symbol);
+            string indicatorSource = ResolveIndicatorSource(rsi, ema20, ema50, macd, macdSignal);
             var technicalFeatures = BuildTechnicalFeaturePayload(
                 symbol,
                 lastPrice,
@@ -601,6 +616,7 @@ namespace Matriks.Lean.Algotrader
                 ema50,
                 macd,
                 macdSignal,
+                indicatorSource,
                 bid1Size,
                 maxBid1Size,
                 depthQueueDropPct);
@@ -617,6 +633,7 @@ namespace Matriks.Lean.Algotrader
             payload["ema50"] = ema50;
             payload["macd"] = macd;
             payload["macdSignal"] = macdSignal;
+            payload["indicatorSource"] = indicatorSource;
             payload["bidPrice"] = ToDouble(bidPrice);
             payload["askPrice"] = ToDouble(askPrice);
             payload["bidVolume"] = ToDouble(bid1Size);
@@ -642,6 +659,106 @@ namespace Matriks.Lean.Algotrader
                 Payload = payload,
                 Timestamp = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz")
             };
+        }
+
+        private void InitializeIndicators(string symbol)
+        {
+            symbol = NormalizeSymbol(symbol);
+            try
+            {
+                _rsiBySymbol[symbol] = RSIIndicator(symbol, IndicatorPeriod, OHLCType.Close, 14);
+                _ema20BySymbol[symbol] = MOVIndicator(symbol, IndicatorPeriod, OHLCType.Close, 20, MovMethod.Exponential);
+                _ema50BySymbol[symbol] = MOVIndicator(symbol, IndicatorPeriod, OHLCType.Close, 50, MovMethod.Exponential);
+                _macdBySymbol[symbol] = MACDIndicator(symbol, IndicatorPeriod, OHLCType.Close, 26, 12, 9);
+                SafeDebug("Native indicators initialized symbol=" + symbol + " period=" + IndicatorPeriod);
+            }
+            catch (Exception ex)
+            {
+                SafeDebug("Native indicator init failed symbol=" + symbol + " error=" + ex.Message);
+            }
+        }
+
+        private double? GetNativeRsi(string symbol)
+        {
+            symbol = NormalizeSymbol(symbol);
+            try
+            {
+                if (_rsiBySymbol.TryGetValue(symbol, out var indicator) && indicator != null)
+                    return Convert.ToDouble(indicator.CurrentValue);
+            }
+            catch (Exception ex)
+            {
+                SafeDebug("Native RSI unavailable symbol=" + symbol + " error=" + ex.Message);
+            }
+            return null;
+        }
+
+        private double? GetNativeEma20(string symbol)
+        {
+            return GetNativeMovValue(_ema20BySymbol, symbol, "EMA20");
+        }
+
+        private double? GetNativeEma50(string symbol)
+        {
+            return GetNativeMovValue(_ema50BySymbol, symbol, "EMA50");
+        }
+
+        private double? GetNativeMovValue(ConcurrentDictionary<string, MOV> indicators, string symbol, string name)
+        {
+            symbol = NormalizeSymbol(symbol);
+            try
+            {
+                if (indicators.TryGetValue(symbol, out var indicator) && indicator != null)
+                    return Convert.ToDouble(indicator.CurrentValue);
+            }
+            catch (Exception ex)
+            {
+                SafeDebug("Native " + name + " unavailable symbol=" + symbol + " error=" + ex.Message);
+            }
+            return null;
+        }
+
+        private double? GetNativeMacdLine(string symbol)
+        {
+            symbol = NormalizeSymbol(symbol);
+            try
+            {
+                if (_macdBySymbol.TryGetValue(symbol, out var indicator) && indicator != null)
+                    return Convert.ToDouble(indicator.CurrentValue);
+            }
+            catch (Exception ex)
+            {
+                SafeDebug("Native MACD unavailable symbol=" + symbol + " error=" + ex.Message);
+            }
+            return null;
+        }
+
+        private double? GetNativeMacdSignal(string symbol)
+        {
+            symbol = NormalizeSymbol(symbol);
+            try
+            {
+                if (_macdBySymbol.TryGetValue(symbol, out var indicator)
+                    && indicator != null
+                    && indicator.MacdTrigger != null)
+                {
+                    return Convert.ToDouble(indicator.MacdTrigger.CurrentValue);
+                }
+            }
+            catch (Exception ex)
+            {
+                SafeDebug("Native MACD signal unavailable symbol=" + symbol + " error=" + ex.Message);
+            }
+            return null;
+        }
+
+        private string ResolveIndicatorSource(double? rsi, double? ema20, double? ema50, double? macd, double? macdSignal)
+        {
+            if (rsi.HasValue && ema20.HasValue && ema50.HasValue && macd.HasValue && macdSignal.HasValue)
+                return "MATRIX_NATIVE_OR_READY";
+            if (rsi.HasValue || ema20.HasValue || ema50.HasValue || macd.HasValue || macdSignal.HasValue)
+                return "PARTIAL";
+            return "UNAVAILABLE";
         }
 
         // ── Position helpers ────────────────────────────────────────
@@ -1314,6 +1431,7 @@ namespace Matriks.Lean.Algotrader
             double? ema50,
             double? macd,
             double? macdSignal,
+            string indicatorSource,
             decimal bid1Size,
             decimal maxBid1Size,
             decimal depthQueueDropPct)
@@ -1324,6 +1442,7 @@ namespace Matriks.Lean.Algotrader
             double? natr = CalculateNatrPct(symbol, 14);
 
             features["schemaVersion"] = "technical-features-v1";
+            features["indicatorSource"] = indicatorSource;
             features["alphaTrendSignal"] = CalculateAlphaTrendProxySignal(rsi, ema20, ema50, macd, macdSignal);
             features["alphaTrendMode"] = "PROXY_EMA_MACD_RSI";
             features["indicatorBuyCount"] = consensus.BuyCount;

@@ -159,6 +159,8 @@ async def admin_config_page(request: Request) -> HTMLResponse:
             "confirmation": RISKY_CONFIRMATION,
             "error": None,
             "message": None,
+            "form_values": {},
+            "reason": "",
         },
     )
 
@@ -197,6 +199,8 @@ async def admin_config_update(request: Request) -> Any:
                 "confirmation": RISKY_CONFIRMATION,
                 "error": str(exc),
                 "message": None,
+                "form_values": form,
+                "reason": reason,
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -269,6 +273,7 @@ async def admin_emergency(request: Request) -> HTMLResponse:
             "confirmation": RISKY_CONFIRMATION,
             "error": None,
             "message": None,
+            "submitted_reason": "",
         },
     )
 
@@ -309,6 +314,7 @@ async def admin_emergency_action(
                 "confirmation": RISKY_CONFIRMATION,
                 "error": str(exc),
                 "message": None,
+                "submitted_reason": reason,
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )

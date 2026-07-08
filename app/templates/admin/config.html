@@ -15,19 +15,20 @@
         <tr>
           <td><code class="mono">{{ item.key }}</code></td>
           <td class="config-value-cell">
+            {% set current_value = form_values[item.key] if item.key in form_values else item.value %}
             {% if item.value_type == "bool" %}
               <select class="form-select config-select-control" name="{{ item.key }}">
-                <option value="true" {% if item.value == "true" %}selected{% endif %}>true</option>
-                <option value="false" {% if item.value == "false" %}selected{% endif %}>false</option>
+                <option value="true" {% if current_value == "true" %}selected{% endif %}>true</option>
+                <option value="false" {% if current_value == "false" %}selected{% endif %}>false</option>
               </select>
             {% elif item.value_type == "mode" %}
               <select class="form-select config-select-control" name="{{ item.key }}">
                 {% for mode in ["PAPER", "MANUAL", "LIVE", "DEMO_LIVE", "REAL_LIVE"] %}
-                <option value="{{ mode }}" {% if item.value == mode %}selected{% endif %}>{{ mode }}</option>
+                <option value="{{ mode }}" {% if current_value == mode %}selected{% endif %}>{{ mode }}</option>
                 {% endfor %}
               </select>
             {% else %}
-              <input class="form-input config-value-control" name="{{ item.key }}" value="{{ item.display_value }}">
+              <input class="form-input config-value-control" name="{{ item.key }}" value="{{ form_values[item.key] if item.key in form_values else item.display_value }}">
             {% endif %}
           </td>
           <td class="text-muted text-sm">{{ item.description }}</td>
@@ -43,7 +44,7 @@
     <div class="form-row">
       <div class="form-group" style="margin-bottom:0">
         <label class="form-label" for="reason">Değişiklik nedeni</label>
-        <input class="form-input" id="reason" name="reason" placeholder="Bu ayar neden değişiyor?">
+        <input class="form-input" id="reason" name="reason" placeholder="Bu ayar neden değişiyor?" value="{{ reason or '' }}">
       </div>
       <div class="form-group" style="margin-bottom:0">
         <label class="form-label" for="confirmation">Risk onayı</label>

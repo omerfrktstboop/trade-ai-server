@@ -3,6 +3,8 @@
 {% block page_title %}Logs{% endblock %}
 {% block content %}
 
+{% include "admin/_auto_refresh.html" %}
+
 <div class="mb-24">
   <div class="flex-between mb-16">
     <h2 class="section-title">AI Decisions</h2>
@@ -14,7 +16,7 @@
       <tbody>
         {% for row in ai_decisions %}
         <tr>
-          <td class="mono">{{ row.request_id[:12] }}…</td>
+          <td class="mono" title="{{ row.request_id }}">{{ row.request_id[:12] }}…</td>
           <td><strong>{{ row.symbol }}</strong></td>
           <td>
             <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
@@ -42,13 +44,13 @@
       <tbody>
         {% for row in risk_decisions %}
         <tr>
-          <td class="mono">{{ row.request_id[:12] }}…</td>
+          <td class="mono" title="{{ row.request_id }}">{{ row.request_id[:12] }}…</td>
           <td><strong>{{ row.symbol }}</strong></td>
           <td>
             <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
           </td>
           <td>{% if row.allow_order %}<span class="status status-ok">Yes</span>{% else %}<span class="status status-danger">No</span>{% endif %}</td>
-          <td class="text-muted" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;">{{ row.reason }}</td>
+          <td class="text-muted" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;" title="{{ row.reason }}">{{ row.reason }}</td>
           <td class="mono text-muted">{{ row.created_at }}</td>
         </tr>
         {% else %}
@@ -70,7 +72,7 @@
       <tbody>
         {% for row in order_logs %}
         <tr>
-          <td class="mono">{{ row.request_id[:12] }}…</td>
+          <td class="mono" title="{{ row.request_id }}">{{ row.request_id[:12] }}…</td>
           <td><strong>{{ row.symbol }}</strong></td>
           <td>
             <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-info{% endif %}">{{ row.action }}</span>
@@ -102,7 +104,7 @@
           <td class="mono text-muted">{{ row.old_value }}</td>
           <td class="mono">{{ row.new_value }}</td>
           <td>{{ row.changed_by or '—' }}</td>
-          <td class="text-muted" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;">{{ row.reason }}</td>
+          <td class="text-muted" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="{{ row.reason }}">{{ row.reason }}</td>
           <td class="mono text-muted">{{ row.created_at }}</td>
         </tr>
         {% else %}

@@ -1,0 +1,15 @@
+<div class="text-sm text-muted mb-16">🔄 Otomatik yenileme: <span id="refreshCountdown">20</span>sn</div>
+<script>
+(function () {
+  var seconds = 20;
+  var el = document.getElementById('refreshCountdown');
+  setInterval(function () {
+    seconds -= 1;
+    if (seconds <= 0) {
+      location.reload();
+      return;
+    }
+    if (el) el.textContent = seconds;
+  }, 1000);
+})();
+</script>

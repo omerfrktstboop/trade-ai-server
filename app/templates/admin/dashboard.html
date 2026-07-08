@@ -3,6 +3,8 @@
 {% block page_title %}Dashboard{% endblock %}
 {% block content %}
 
+{% include "admin/_auto_refresh.html" %}
+
 <div class="stat-grid">
   <div class="card">
     <div class="card-header">İşlem Modu</div>
@@ -39,14 +41,14 @@
       <tbody>
         {% for row in latest_risk %}
         <tr>
-          <td class="mono">{{ row.request_id[:12] }}…</td>
+          <td class="mono" title="{{ row.request_id }}">{{ row.request_id[:12] }}…</td>
           <td><strong>{{ row.symbol }}</strong></td>
           <td>
             <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
           </td>
           <td>{% if row.allow_order %}<span class="status status-ok">Evet</span>{% else %}<span class="status status-danger">Hayır</span>{% endif %}</td>
           <td><span class="badge {% if row.mode == 'LIVE' %}badge-live{% elif row.mode == 'PAPER' %}badge-paper{% else %}badge-manual{% endif %}">{{ row.mode }}</span></td>
-          <td class="text-muted" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;">{{ row.reason }}</td>
+          <td class="text-muted" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="{{ row.reason }}">{{ row.reason }}</td>
           <td class="mono text-muted">{{ row.created_at }}</td>
         </tr>
         {% else %}
@@ -68,7 +70,7 @@
       <tbody>
         {% for row in latest_orders %}
         <tr>
-          <td class="mono">{{ row.request_id[:12] }}…</td>
+          <td class="mono" title="{{ row.request_id }}">{{ row.request_id[:12] }}…</td>
           <td><strong>{{ row.symbol }}</strong></td>
           <td>
             <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>

@@ -22,11 +22,7 @@
     <form method="post" action="/admin/emergency/enable-kill-switch">
       <div class="form-group">
         <label class="form-label" for="ks_reason">Reason for enabling</label>
-        <input class="form-input" id="ks_reason" name="reason" placeholder="Why are you stopping all trading?" style="max-width:400px" required>
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="ks_conf">Confirmation</label>
-        <input class="form-input" id="ks_conf" name="confirmation" placeholder="STOP-ALL-TRADING" style="max-width:400px" required>
+        <input class="form-input" id="ks_reason" name="reason" placeholder="Why are you stopping all trading?" style="max-width:400px" value="{{ submitted_reason or '' }}" required>
       </div>
       <button class="btn btn-danger" type="submit">🔴 Enable Kill Switch</button>
     </form>
@@ -34,7 +30,11 @@
     <form method="post" action="/admin/emergency/disable-kill-switch">
       <div class="form-group">
         <label class="form-label" for="ksd_reason">Reason for disabling</label>
-        <input class="form-input" id="ksd_reason" name="reason" placeholder="Why is it safe to re-enable?" style="max-width:400px" required>
+        <input class="form-input" id="ksd_reason" name="reason" placeholder="Why is it safe to re-enable?" style="max-width:400px" value="{{ submitted_reason or '' }}" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="ksd_conf">Confirmation (type {{ confirmation }})</label>
+        <input class="form-input" id="ksd_conf" name="confirmation" placeholder="{{ confirmation }}" style="max-width:400px" required>
       </div>
       <button class="btn btn-outline" type="submit">🟢 Disable Kill Switch</button>
     </form>
@@ -53,7 +53,7 @@
     <div class="form-row">
       <div class="form-group" style="margin-bottom:0">
         <label class="form-label" for="fp_reason">Reason</label>
-        <input class="form-input" id="fp_reason" name="reason" placeholder="Why forcing paper mode?" required>
+        <input class="form-input" id="fp_reason" name="reason" placeholder="Why forcing paper mode?" value="{{ submitted_reason or '' }}" required>
       </div>
       <div class="form-group" style="margin-bottom:0">
         <label class="form-label" for="fp_conf">Confirmation</label>

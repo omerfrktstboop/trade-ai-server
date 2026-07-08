@@ -44,54 +44,27 @@ namespace Matriks.Lean.Algotrader
         [Parameter("BURAYA_TOKEN")]
         public string ApiToken;
 
-        [Parameter("DEMO_LIVE")]
-        public string Mode;
-
-        [Parameter(true)]
-        public bool EnableDemoOrders;
-
-        [Parameter(false)]
-        public bool EnableRealOrders;
-
-        [Parameter(true)]
-        public bool RequireDemoAccount;
-
-        [Parameter(false)]
-        public bool DemoAccountConfirmed;
-
-        [Parameter(1000)]
-        public decimal MaxOrderValueTl;
-
-        [Parameter(10)]
-        public decimal MaxQtyPerOrder;
-
-        [Parameter(3)]
-        public int MaxOrdersPerDay;
-
-        [Parameter(1)]
-        public int MaxOrdersPerSymbolPerDay;
-
-        [Parameter(false)]
-        public bool AllowMarketOrders;
-
-        [Parameter(30)]
-        public int ScanIntervalMinutes;
-
-        [Parameter(15)]
-        public int HttpTimeoutSeconds;
-
-        [Parameter(3)]
-        public int MaxFetchLoopPerSession;
-
-        [Parameter("Day")]
-        public string OrderTimeInForce;
-
-        [Parameter(SymbolPeriod.Min5)]
-        public SymbolPeriod IndicatorPeriod;
+        private string Mode = "PAPER";
+        private bool EnableDemoOrders = false;
+        private bool EnableRealOrders = false;
+        private bool RequireDemoAccount = true;
+        private bool DemoAccountConfirmed = false;
+        private decimal MaxOrderValueTl = 1000m;
+        private decimal MaxQtyPerOrder = 1m;
+        private int MaxOrdersPerDay = 1;
+        private int MaxOrdersPerSymbolPerDay = 1;
+        private bool AllowMarketOrders = false;
+        private int ScanIntervalMinutes = 30;
+        private int HttpTimeoutSeconds = 15;
+        private int MaxFetchLoopPerSession = 3;
+        private string OrderTimeInForce = "Day";
+        private SymbolPeriod IndicatorPeriod = SymbolPeriod.Min5;
+        private string _configVersion = "";
+        private string _configHash = "";
 
         // ── Symbols ──────────────────────────────────────────────────
 
-        public string[] AllowedSymbols =
+        private string[] AllowedSymbols =
         {
             "THYAO",
             "AKBNK",
@@ -101,7 +74,7 @@ namespace Matriks.Lean.Algotrader
             "ANELE"
         };
 
-        public Dictionary<string, decimal> LockedLongTermQty = new Dictionary<string, decimal>
+        private Dictionary<string, decimal> LockedLongTermQty = new Dictionary<string, decimal>
         {
             { "THYAO", 100m },
             { "ASELS", 50m }
@@ -146,6 +119,7 @@ namespace Matriks.Lean.Algotrader
         private bool _realPositionsLoadedFromSnapshot;
         private bool? _autoOrderEnabled;
         private bool? _testAutoOrderEnabled;
+        private bool _subscriptionsInitialized;
 
         // ── Matriks lifecycle ───────────────────────────────────────
 
@@ -158,15 +132,9 @@ namespace Matriks.Lean.Algotrader
             };
             _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ApiToken);
 
-            string[] serverSymbols = FetchTradeableSymbolsFromServer();
-            if (serverSymbols != null && serverSymbols.Length > 0)
+            if (!FetchBotConfigFromServer(true))
             {
-                AllowedSymbols = serverSymbols;
-                SafeDebug("Loaded tradeable symbols from server: " + string.Join(",", AllowedSymbols));
-            }
-            else
-            {
-                SafeDebug("Tradeable symbols fetch failed or empty — using fallback hardcoded AllowedSymbols: " + string.Join(",", AllowedSymbols));
+                ApplySafeFallbackConfig();
             }
 
             foreach (string symbol in AllowedSymbols)
@@ -187,6 +155,7 @@ namespace Matriks.Lean.Algotrader
                 _botPositionQtyBySymbol[normalized] = 0m;
                 _closeHistoryBySymbol[normalized] = new List<decimal>();
             }
+            _subscriptionsInitialized = true;
 
             SendOrderSequential(false);
             WorkWithPermanentSignal(false);
@@ -220,33 +189,141 @@ namespace Matriks.Lean.Algotrader
         }
 
         /// <summary>
-        /// Fetch the admin-managed tradeable symbol universe from the server.
-        /// Blocking (OnInit is not async) — runs once at startup only.
-        /// Returns null on any failure so the caller can fall back to the
-        /// hardcoded AllowedSymbols default.
+        /// Fetch the admin-managed runtime config from the server.
+        /// Blocking on startup because OnInit is not async; runtime refreshes are
+        /// also intentionally simple so config drift never blocks order handling.
         /// </summary>
-        private string[] FetchTradeableSymbolsFromServer()
+        private bool FetchBotConfigFromServer(bool startup)
         {
             try
             {
-                using (var response = _http.GetAsync("api/bot/tradeable-symbols").GetAwaiter().GetResult())
+                using (var response = _http.GetAsync("api/bot/config").GetAwaiter().GetResult())
                 {
                     string body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
                     if (!response.IsSuccessStatusCode)
                     {
-                        SafeDebug("Tradeable symbols fetch failed: HTTP " + (int)response.StatusCode + ": " + body);
-                        return null;
+                        SafeDebug("Bot config fetch failed: HTTP " + (int)response.StatusCode + ": " + body);
+                        return false;
                     }
 
-                    TradeableSymbolsResponse parsed = JsonConvert.DeserializeObject<TradeableSymbolsResponse>(body);
-                    return parsed.Symbols;
+                    BotRuntimeConfigResponse parsed = JsonConvert.DeserializeObject<BotRuntimeConfigResponse>(body);
+                    if (parsed.AllowedSymbols == null || parsed.AllowedSymbols.Length == 0)
+                    {
+                        SafeDebug("Bot config fetch returned empty allowedSymbols.");
+                        return false;
+                    }
+
+                    ApplyBotRuntimeConfig(parsed, startup);
+                    return true;
                 }
             }
             catch (Exception ex)
             {
-                SafeDebug("Tradeable symbols fetch error: " + ex.Message);
-                return null;
+                SafeDebug("Bot config fetch error: " + ex.Message);
+                return false;
             }
+        }
+
+        private void ApplyBotRuntimeConfig(BotRuntimeConfigResponse config, bool startup)
+        {
+            string[] incomingSymbols = NormalizeSymbols(config.AllowedSymbols);
+            if (incomingSymbols.Length == 0)
+            {
+                SafeDebug("Bot config ignored because allowedSymbols is empty.");
+                return;
+            }
+
+            if (startup || !_subscriptionsInitialized)
+            {
+                AllowedSymbols = incomingSymbols;
+            }
+            else if (!SameSymbols(AllowedSymbols, incomingSymbols))
+            {
+                SafeDebug("AllowedSymbols changed; restart required to resubscribe symbols. server="
+                    + string.Join(",", incomingSymbols)
+                    + " local="
+                    + string.Join(",", AllowedSymbols));
+            }
+
+            Mode = NormalizeMode(config.Mode);
+            EnableDemoOrders = config.EnableDemoOrders;
+            EnableRealOrders = config.EnableRealOrders;
+            RequireDemoAccount = config.RequireDemoAccount;
+            DemoAccountConfirmed = config.DemoAccountConfirmed;
+            MaxOrderValueTl = PositiveDecimal(config.MaxOrderValueTl, 500m);
+            MaxQtyPerOrder = PositiveDecimal(config.MaxQtyPerOrder, 1m);
+            MaxOrdersPerDay = PositiveInt(config.MaxOrdersPerDay, 1);
+            MaxOrdersPerSymbolPerDay = PositiveInt(config.MaxOrdersPerSymbolPerDay, 1);
+            AllowMarketOrders = false;
+            if (config.AllowMarketOrders)
+            {
+                SafeDebug("Server returned allowMarketOrders=true; forced to false because MARKET orders are disabled.");
+            }
+
+            ScanIntervalMinutes = PositiveInt(config.ScanIntervalMinutes, 30);
+            HttpTimeoutSeconds = Math.Max(10, PositiveInt(config.HttpTimeoutSeconds, 15));
+            MaxFetchLoopPerSession = Math.Max(0, config.MaxFetchLoopPerSession);
+            OrderTimeInForce = NormalizeTimeInForce(config.OrderTimeInForce);
+
+            SymbolPeriod nextIndicatorPeriod = ParseSymbolPeriod(config.IndicatorPeriod);
+            if (startup || !_subscriptionsInitialized)
+            {
+                IndicatorPeriod = nextIndicatorPeriod;
+            }
+            else if (!IndicatorPeriod.Equals(nextIndicatorPeriod))
+            {
+                SafeDebug("IndicatorPeriod changed; restart required to resubscribe indicators. server="
+                    + nextIndicatorPeriod
+                    + " local="
+                    + IndicatorPeriod);
+            }
+
+            LockedLongTermQty = NormalizeLockedQty(config.LockedLongTermQty);
+            _configVersion = config.ConfigVersion ?? "";
+            _configHash = config.ConfigHash ?? "";
+            if (_http != null)
+            {
+                _http.Timeout = TimeSpan.FromSeconds(HttpTimeoutSeconds);
+            }
+
+            SafeDebug("Bot config loaded version=" + (_configVersion == "" ? "null" : _configVersion)
+                + " hash=" + (_configHash == "" ? "null" : _configHash)
+                + " mode=" + Mode
+                + " symbols=" + string.Join(",", AllowedSymbols)
+                + " scanIntervalMinutes=" + ScanIntervalMinutes
+                + " maxFetchLoopPerSession=" + MaxFetchLoopPerSession
+                + " indicatorPeriod=" + IndicatorPeriod
+                + " timeInForce=" + OrderTimeInForce);
+        }
+
+        private void ApplySafeFallbackConfig()
+        {
+            Mode = "PAPER";
+            EnableDemoOrders = false;
+            EnableRealOrders = false;
+            DemoAccountConfirmed = false;
+            MaxOrderValueTl = 500m;
+            MaxQtyPerOrder = 1m;
+            MaxOrdersPerDay = 1;
+            MaxOrdersPerSymbolPerDay = 1;
+            AllowMarketOrders = false;
+            _configVersion = "";
+            _configHash = "";
+            SafeDebug("Bot config unavailable; safe PAPER fallback active. symbols=" + string.Join(",", AllowedSymbols));
+        }
+
+        private void RefreshConfigIfChanged(AgenticSignalResponse response)
+        {
+            if (string.IsNullOrWhiteSpace(response.ConfigHash))
+                return;
+
+            if (string.Equals(response.ConfigHash, _configHash, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            SafeDebug("Config hash changed server=" + response.ConfigHash
+                + " local=" + (string.IsNullOrWhiteSpace(_configHash) ? "null" : _configHash)
+                + "; fetching bot config");
+            FetchBotConfigFromServer(false);
         }
 
         public override void OnDataUpdate(BarDataEventArgs barData)
@@ -527,6 +604,7 @@ namespace Matriks.Lean.Algotrader
                             throw new Exception("Empty response");
                         }
 
+                        RefreshConfigIfChanged(parsed);
                         return parsed;
                     }
                 }
@@ -1824,6 +1902,65 @@ namespace Matriks.Lean.Algotrader
 
         // ── Normalization helpers ────────────────────────────────────
 
+        private static string[] NormalizeSymbols(string[] symbols)
+        {
+            if (symbols == null)
+                return new string[0];
+
+            return symbols
+                .Select(NormalizeSymbol)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct()
+                .ToArray();
+        }
+
+        private static bool SameSymbols(string[] left, string[] right)
+        {
+            string[] normalizedLeft = NormalizeSymbols(left).OrderBy(x => x).ToArray();
+            string[] normalizedRight = NormalizeSymbols(right).OrderBy(x => x).ToArray();
+            return normalizedLeft.SequenceEqual(normalizedRight);
+        }
+
+        private static Dictionary<string, decimal> NormalizeLockedQty(Dictionary<string, decimal> lockedQty)
+        {
+            var result = new Dictionary<string, decimal>();
+            if (lockedQty == null)
+                return result;
+
+            foreach (var item in lockedQty)
+            {
+                string symbol = NormalizeSymbol(item.Key);
+                if (string.IsNullOrWhiteSpace(symbol))
+                    continue;
+
+                result[symbol] = item.Value < 0m ? 0m : item.Value;
+            }
+            return result;
+        }
+
+        private static decimal PositiveDecimal(decimal value, decimal fallback)
+        {
+            return value > 0m ? value : fallback;
+        }
+
+        private static int PositiveInt(int value, int fallback)
+        {
+            return value > 0 ? value : fallback;
+        }
+
+        private static SymbolPeriod ParseSymbolPeriod(string value)
+        {
+            string normalized = (value ?? "Min5").Trim();
+            if (normalized == "")
+                normalized = "Min5";
+
+            object parsed;
+            if (Enum.TryParse(typeof(SymbolPeriod), normalized, true, out parsed))
+                return (SymbolPeriod)parsed;
+
+            return SymbolPeriod.Min5;
+        }
+
         private static string NormalizeSymbol(string symbol)
         {
             return (symbol ?? "").Trim().ToUpperInvariant();
@@ -2143,6 +2280,66 @@ namespace Matriks.Lean.Algotrader
         public string Reason { get; set; }
     }
 
+    private struct BotRuntimeConfigResponse
+    {
+        [JsonProperty("configVersion")]
+        public string ConfigVersion { get; set; }
+
+        [JsonProperty("configHash")]
+        public string ConfigHash { get; set; }
+
+        [JsonProperty("mode")]
+        public string Mode { get; set; }
+
+        [JsonProperty("enableDemoOrders")]
+        public bool EnableDemoOrders { get; set; }
+
+        [JsonProperty("enableRealOrders")]
+        public bool EnableRealOrders { get; set; }
+
+        [JsonProperty("requireDemoAccount")]
+        public bool RequireDemoAccount { get; set; }
+
+        [JsonProperty("demoAccountConfirmed")]
+        public bool DemoAccountConfirmed { get; set; }
+
+        [JsonProperty("maxOrderValueTl")]
+        public decimal MaxOrderValueTl { get; set; }
+
+        [JsonProperty("maxQtyPerOrder")]
+        public decimal MaxQtyPerOrder { get; set; }
+
+        [JsonProperty("maxOrdersPerDay")]
+        public int MaxOrdersPerDay { get; set; }
+
+        [JsonProperty("maxOrdersPerSymbolPerDay")]
+        public int MaxOrdersPerSymbolPerDay { get; set; }
+
+        [JsonProperty("allowMarketOrders")]
+        public bool AllowMarketOrders { get; set; }
+
+        [JsonProperty("scanIntervalMinutes")]
+        public int ScanIntervalMinutes { get; set; }
+
+        [JsonProperty("httpTimeoutSeconds")]
+        public int HttpTimeoutSeconds { get; set; }
+
+        [JsonProperty("maxFetchLoopPerSession")]
+        public int MaxFetchLoopPerSession { get; set; }
+
+        [JsonProperty("orderTimeInForce")]
+        public string OrderTimeInForce { get; set; }
+
+        [JsonProperty("indicatorPeriod")]
+        public string IndicatorPeriod { get; set; }
+
+        [JsonProperty("allowedSymbols")]
+        public string[] AllowedSymbols { get; set; }
+
+        [JsonProperty("lockedLongTermQty")]
+        public Dictionary<string, decimal> LockedLongTermQty { get; set; }
+    }
+
     private struct AgenticSignalResponse
     {
         [JsonProperty("requestId")]
@@ -2153,6 +2350,12 @@ namespace Matriks.Lean.Algotrader
 
         [JsonProperty("symbol")]
         public string Symbol { get; set; }
+
+        [JsonProperty("configVersion")]
+        public string ConfigVersion { get; set; }
+
+        [JsonProperty("configHash")]
+        public string ConfigHash { get; set; }
 
         [JsonProperty("action")]
         public string Action { get; set; }
@@ -2224,6 +2427,8 @@ namespace Matriks.Lean.Algotrader
                 AllowOrder = false,
                 RequiresConfirmation = false,
                 Reason = reason,
+                ConfigVersion = null,
+                ConfigHash = null,
                 Qty = 0,
                 OrderType = "NONE",
                 ConfidenceScore = 0,
@@ -2278,15 +2483,6 @@ namespace Matriks.Lean.Algotrader
 
         [JsonProperty("orderId", NullValueHandling = NullValueHandling.Ignore)]
         public string OrderId { get; set; }
-    }
-
-    private struct TradeableSymbolsResponse
-    {
-        [JsonProperty("symbols")]
-        public string[] Symbols { get; set; }
-
-        [JsonProperty("lockedLongTerm")]
-        public string[] LockedLongTerm { get; set; }
     }
 
     private struct PendingOverridesResponse

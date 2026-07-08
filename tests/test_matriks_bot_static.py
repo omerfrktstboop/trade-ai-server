@@ -98,6 +98,57 @@ def test_demo_account_gate_logs_trade_user_permissions():
     assert "_testAutoOrderEnabled.Value" in source
 
 
+def test_only_server_url_and_token_are_matriks_parameters():
+    source = _bot_source()
+
+    assert source.count("[Parameter(") == 2
+    assert '[Parameter("https://aaa.ddns.net")]' in source
+    assert '[Parameter("BURAYA_TOKEN")]' in source
+    for field in (
+        "Mode",
+        "EnableDemoOrders",
+        "EnableRealOrders",
+        "RequireDemoAccount",
+        "DemoAccountConfirmed",
+        "MaxOrderValueTl",
+        "MaxQtyPerOrder",
+        "MaxOrdersPerDay",
+        "MaxOrdersPerSymbolPerDay",
+        "AllowMarketOrders",
+        "ScanIntervalMinutes",
+        "HttpTimeoutSeconds",
+        "MaxFetchLoopPerSession",
+        "OrderTimeInForce",
+        "IndicatorPeriod",
+    ):
+        assert f"[Parameter(\"{field}" not in source
+
+
+def test_matriks_bot_fetches_server_driven_config():
+    source = _bot_source()
+
+    assert 'GetAsync("api/bot/config")' in source
+    assert "FetchBotConfigFromServer(true)" in source
+    assert "ApplyBotRuntimeConfig(parsed, startup)" in source
+    assert "ApplySafeFallbackConfig()" in source
+    assert 'Mode = "PAPER";' in source
+    assert "AllowMarketOrders = false;" in source
+    assert "AllowedSymbols changed; restart required to resubscribe symbols" in source
+    assert "ParseSymbolPeriod(config.IndicatorPeriod)" in source
+
+
+def test_matriks_bot_refreshes_config_when_agent_hash_changes():
+    source = _bot_source()
+
+    assert "public string ConfigVersion" in source
+    assert "public string ConfigHash" in source
+    assert 'JsonProperty("configVersion")' in source
+    assert 'JsonProperty("configHash")' in source
+    assert "RefreshConfigIfChanged(parsed)" in source
+    assert "FetchBotConfigFromServer(false)" in source
+    assert "response.ConfigHash" in source
+
+
 def test_matriks_payload_includes_ai_server_technical_features():
     source = _bot_source()
 

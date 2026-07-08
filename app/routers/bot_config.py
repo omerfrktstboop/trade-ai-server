@@ -13,6 +13,10 @@ from app.core.risk_config import risk_config
 from app.db.session import async_session_factory
 from app.models.db import BotPosition
 from app.services.admin_config import build_runtime_risk_config
+from app.services.bot_runtime_config import (
+    build_bot_runtime_config,
+    build_static_bot_runtime_config,
+)
 from app.services.signal_override import list_pending_override_symbols
 
 logger = logging.getLogger(__name__)
@@ -30,6 +34,30 @@ def _split_symbols(raw: str) -> list[str]:
 class TradeableSymbolsResponse(BaseModel):
     symbols: list[str]
     locked_long_term: list[str] = Field(alias="lockedLongTerm")
+
+    model_config = {"populate_by_name": True}
+
+
+class BotRuntimeConfigResponse(BaseModel):
+    config_version: str = Field(alias="configVersion")
+    config_hash: str = Field(alias="configHash")
+    mode: str
+    enable_demo_orders: bool = Field(alias="enableDemoOrders")
+    enable_real_orders: bool = Field(alias="enableRealOrders")
+    require_demo_account: bool = Field(alias="requireDemoAccount")
+    demo_account_confirmed: bool = Field(alias="demoAccountConfirmed")
+    max_order_value_tl: float = Field(alias="maxOrderValueTl")
+    max_qty_per_order: float = Field(alias="maxQtyPerOrder")
+    max_orders_per_day: int = Field(alias="maxOrdersPerDay")
+    max_orders_per_symbol_per_day: int = Field(alias="maxOrdersPerSymbolPerDay")
+    allow_market_orders: bool = Field(alias="allowMarketOrders")
+    scan_interval_minutes: int = Field(alias="scanIntervalMinutes")
+    http_timeout_seconds: int = Field(alias="httpTimeoutSeconds")
+    max_fetch_loop_per_session: int = Field(alias="maxFetchLoopPerSession")
+    order_time_in_force: str = Field(alias="orderTimeInForce")
+    indicator_period: str = Field(alias="indicatorPeriod")
+    allowed_symbols: list[str] = Field(alias="allowedSymbols")
+    locked_long_term_qty: dict[str, float] = Field(alias="lockedLongTermQty")
 
     model_config = {"populate_by_name": True}
 
@@ -52,6 +80,19 @@ async def get_tradeable_symbols() -> TradeableSymbolsResponse:
         symbols=_split_symbols(cfg.allowed_symbols),
         lockedLongTerm=_split_symbols(cfg.locked_long_term_symbols),
     )
+
+
+@router.get("/bot/config")
+async def get_bot_runtime_config() -> BotRuntimeConfigResponse:
+    """Return the full server-driven runtime config for the Matriks bot."""
+    try:
+        async with async_session_factory() as session:
+            config = await build_bot_runtime_config(session)
+    except Exception:
+        logger.exception("Failed to load bot runtime config, using static fallback")
+        config = build_static_bot_runtime_config()
+
+    return BotRuntimeConfigResponse(**config)
 
 
 # ── POST /bot/positions/sync ─────────────────────────────────────────────────

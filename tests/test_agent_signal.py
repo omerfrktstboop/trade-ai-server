@@ -172,7 +172,11 @@ def _post(
     assert resp.status_code == expect_status, (
         f"HTTP {resp.status_code}: {resp.text}"
     )
-    return resp.json()
+    body = resp.json()
+    if expect_status == 200:
+        assert body.get("configVersion"), f"Missing configVersion: {body}"
+        assert body.get("configHash"), f"Missing configHash: {body}"
+    return body
 
 
 # ── 1. Agentic request accepted (no 422) ────────────────────────────────────

@@ -40,6 +40,11 @@ from app.services.admin_config import (
     get_trading_mode_override,
     is_kill_switch_enabled,
 )
+from app.services.bot_runtime_config import (
+    BotConfigMetadata,
+    get_bot_config_metadata,
+    get_static_bot_config_metadata,
+)
 from app.services.session_store import (
     session_store,  # v2 session store singleton
 )
@@ -520,8 +525,10 @@ def _agentic_waiter(
     symbol: str = "",
     *,
     proceed_to_ai: bool = False,
+    config_metadata: BotConfigMetadata | None = None,
 ) -> AgenticSignalResponse:
     """Shortcut: return a WAIT response with allowOrder=False."""
+    metadata = config_metadata or get_static_bot_config_metadata()
     return AgenticSignalResponse(
         requestId=request_id,
         sessionId=session_id,
@@ -534,7 +541,18 @@ def _agentic_waiter(
         riskScore=0.0,
         qty=0.0,
         orderType=OrderType.NONE,
+        configVersion=metadata.config_version,
+        configHash=metadata.config_hash,
     )
+
+
+async def _load_bot_config_metadata() -> BotConfigMetadata:
+    try:
+        async with async_session_factory() as session:
+            return await get_bot_config_metadata(session)
+    except Exception:
+        logger.exception("Failed to load bot config metadata")
+        return get_static_bot_config_metadata()
 
 
 @router.post("/signal/evaluate-agent")
@@ -557,6 +575,7 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
     req_id = body.request_id
     symbol = body.symbol
     raw_session_id = body.session_id
+    bot_config_metadata = await _load_bot_config_metadata()
 
     try:
         async with async_session_factory() as session:
@@ -570,6 +589,7 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
             req_id, raw_session_id or "",
             "Kill switch enabled: trading disabled by admin",
             symbol,
+            config_metadata=bot_config_metadata,
         )
 
     # ── 1-2: Session management ────────────────────────────────────────
@@ -582,6 +602,7 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
                 req_id, raw_session_id,
                 "Session expired or not found",
                 symbol,
+                config_metadata=bot_config_metadata,
             )
     else:
         sess = session_store.create_session(symbol)
@@ -623,6 +644,7 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
                 req_id, sess.session_id,
                 f"Target symbol {target} is not in the allowed list",
                 symbol,
+                config_metadata=bot_config_metadata,
             )
 
         if not sess.can_tool_call:
@@ -630,6 +652,7 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
                 req_id, sess.session_id,
                 "Tool call limit reached — cannot FETCH_DATA",
                 symbol,
+                config_metadata=bot_config_metadata,
             )
 
         session_store.increment_tool_call(sess.session_id)
@@ -647,12 +670,20 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
             riskScore=0.0,
             qty=0.0,
             orderType=OrderType.NONE,
+            configVersion=bot_config_metadata.config_version,
+            configHash=bot_config_metadata.config_hash,
         )
 
     # ── 7: WAIT from planner (hard stop — e.g. symbol not allowed) ────
     if plan.action == AgenticAction.WAIT and not plan.proceed_to_ai:
         session_store.close_session(sess.session_id)
-        return _agentic_waiter(req_id, sess.session_id, plan.reason, symbol)
+        return _agentic_waiter(
+            req_id,
+            sess.session_id,
+            plan.reason,
+            symbol,
+            config_metadata=bot_config_metadata,
+        )
 
     # ── 8: PROCEED — build bridge to AI + RiskEngine ────────────────────
     sig_req = _agentic_to_signal_request(body, sess.session_id)
@@ -725,4 +756,6 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
         entryRange=response.entry_range,
         stopLoss=response.stop_loss,
         targetPrice=response.target_price,
+        configVersion=bot_config_metadata.config_version,
+        configHash=bot_config_metadata.config_hash,
     )

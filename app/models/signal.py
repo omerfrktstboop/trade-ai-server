@@ -281,5 +281,7 @@ class AgenticSignalResponse(BaseModel):
     entry_range: Optional[EntryRange] = Field(None, alias="entryRange")
     stop_loss: Optional[float] = Field(None, alias="stopLoss")
     target_price: Optional[float] = Field(None, alias="targetPrice")
+    config_version: str = Field("", alias="configVersion")
+    config_hash: str = Field("", alias="configHash")
 
     model_config = ConfigDict(populate_by_name=True)

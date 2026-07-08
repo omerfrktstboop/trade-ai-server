@@ -100,9 +100,110 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         str(risk_config.allow_sell_long_term).lower(),
         "Uzun vadeli kilitli semboller için otomatik SELL kararına izin verir.",
     ),
+    "botMode": ConfigDefinition(
+        "botMode",
+        "mode",
+        "PAPER",
+        "Matriks bot runtime modu. Riskli modlar confirmation ister.",
+    ),
+    "botEnableDemoOrders": ConfigDefinition(
+        "botEnableDemoOrders",
+        "bool",
+        "false",
+        "Matriks botun demo hesaba emir gondermesine izin verir.",
+    ),
+    "botEnableRealOrders": ConfigDefinition(
+        "botEnableRealOrders",
+        "bool",
+        "false",
+        "Matriks botun real hesaba emir gondermesine izin verir.",
+    ),
+    "botRequireDemoAccount": ConfigDefinition(
+        "botRequireDemoAccount",
+        "bool",
+        "true",
+        "Demo hesap onayi zorunlulugunu belirler.",
+    ),
+    "botDemoAccountConfirmed": ConfigDefinition(
+        "botDemoAccountConfirmed",
+        "bool",
+        "false",
+        "Matriks demo hesap kullanildigini onaylar.",
+    ),
+    "botMaxOrderValueTl": ConfigDefinition(
+        "botMaxOrderValueTl",
+        "float",
+        "1000",
+        "Matriks bot tek emir maksimum TL degeri.",
+    ),
+    "botMaxQtyPerOrder": ConfigDefinition(
+        "botMaxQtyPerOrder",
+        "float",
+        "1",
+        "Matriks bot tek emir maksimum adet.",
+    ),
+    "botMaxOrdersPerDay": ConfigDefinition(
+        "botMaxOrdersPerDay",
+        "int",
+        "3",
+        "Matriks bot gunluk maksimum emir sayisi.",
+    ),
+    "botMaxOrdersPerSymbolPerDay": ConfigDefinition(
+        "botMaxOrdersPerSymbolPerDay",
+        "int",
+        "1",
+        "Matriks bot sembol basina gunluk maksimum emir sayisi.",
+    ),
+    "botAllowMarketOrders": ConfigDefinition(
+        "botAllowMarketOrders",
+        "bool",
+        "false",
+        "MARKET emirleri sistem genelinde yasaktir; true kabul edilmez.",
+    ),
+    "botScanIntervalMinutes": ConfigDefinition(
+        "botScanIntervalMinutes",
+        "int",
+        "30",
+        "Matriks bot tarama araligi, dakika.",
+    ),
+    "botHttpTimeoutSeconds": ConfigDefinition(
+        "botHttpTimeoutSeconds",
+        "int",
+        "15",
+        "Matriks bot HTTP timeout suresi, saniye.",
+    ),
+    "botMaxFetchLoopPerSession": ConfigDefinition(
+        "botMaxFetchLoopPerSession",
+        "int",
+        "3",
+        "Agentic FETCH_DATA dongusu icin maksimum tur sayisi.",
+    ),
+    "botOrderTimeInForce": ConfigDefinition(
+        "botOrderTimeInForce",
+        "time_in_force",
+        "Day",
+        "Matriks limit emir gecerlilik tipi: Day veya GoodTillCancel.",
+    ),
+    "botIndicatorPeriod": ConfigDefinition(
+        "botIndicatorPeriod",
+        "symbol_period",
+        "Min5",
+        "Matriks indikator periyodu: Min, Min5, Min15, Min30, Hour veya Day.",
+    ),
 }
 
-RISKY_CONFIG_KEYS = {"tradingMode", "killSwitchEnabled", "allowSellLongTerm"}
+RISKY_CONFIG_KEYS = {
+    "tradingMode",
+    "killSwitchEnabled",
+    "allowSellLongTerm",
+    "botMode",
+    "botEnableRealOrders",
+    "botDemoAccountConfirmed",
+    "botMaxOrderValueTl",
+    "botMaxQtyPerOrder",
+    "botMaxOrdersPerDay",
+    "botMaxOrdersPerSymbolPerDay",
+}
 
 
 @dataclass(frozen=True)
@@ -275,7 +376,10 @@ async def _load_config_rows(session: AsyncSession) -> dict[str, SystemConfig]:
 
 def _serialize_value(key: str, raw_value: Any, value_type: str) -> str:
     if value_type == "bool":
-        return str(_parse_bool(raw_value)).lower()
+        value = _parse_bool(raw_value)
+        if key == "botAllowMarketOrders" and value:
+            raise ValueError("botAllowMarketOrders=true is not allowed; MARKET orders are disabled")
+        return str(value).lower()
     if value_type == "int":
         value = int(raw_value)
         if value < 0:
@@ -304,6 +408,28 @@ def _serialize_value(key: str, raw_value: Any, value_type: str) -> str:
         value = str(raw_value).strip()
         ZoneInfo(value)
         return value
+    if value_type == "time_in_force":
+        value = str(raw_value).strip()
+        normalized = value.replace("_", "").replace("-", "").replace(" ", "").lower()
+        if normalized in {"day", "d"}:
+            return "Day"
+        if normalized in {"gtc", "goodtillcancel", "goodtilcancel"}:
+            return "GoodTillCancel"
+        raise ValueError(f"{key} must be Day or GoodTillCancel")
+    if value_type == "symbol_period":
+        value = str(raw_value).strip()
+        allowed = {
+            "min": "Min",
+            "min5": "Min5",
+            "min15": "Min15",
+            "min30": "Min30",
+            "hour": "Hour",
+            "day": "Day",
+        }
+        normalized = value.replace("_", "").replace("-", "").replace(" ", "").lower()
+        if normalized not in allowed:
+            raise ValueError(f"{key} must be one of Min, Min5, Min15, Min30, Hour, Day")
+        return allowed[normalized]
 
     value = str(raw_value).strip()
     if key in {"allowedSymbols", "lockedLongTermSymbols"}:
@@ -337,4 +463,18 @@ def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
         return _parse_bool(old_value) is True and _parse_bool(new_value) is False
     if key == "allowSellLongTerm":
         return _parse_bool(new_value) is True and old_value != new_value
+    if key == "botMode":
+        return new_value in {
+            SignalMode.DEMO_LIVE.value,
+            SignalMode.REAL_LIVE.value,
+        } and old_value != new_value
+    if key in {"botEnableRealOrders", "botDemoAccountConfirmed"}:
+        return _parse_bool(new_value) is True and old_value != new_value
+    if key in {
+        "botMaxOrderValueTl",
+        "botMaxQtyPerOrder",
+        "botMaxOrdersPerDay",
+        "botMaxOrdersPerSymbolPerDay",
+    }:
+        return float(new_value) > float(old_value)
     return False

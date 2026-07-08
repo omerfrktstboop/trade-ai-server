@@ -65,6 +65,82 @@ class TestTradeableSymbols:
         assert "ASELS" in resp.json()["symbols"]
 
 
+class TestBotRuntimeConfig:
+    def test_requires_auth(self, client: TestClient):
+        resp = client.get("/api/bot/config")
+        assert resp.status_code == 401
+
+    def test_returns_default_runtime_config(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        resp = client.get("/api/bot/config", headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+
+        assert body["configVersion"]
+        assert body["configHash"]
+        assert body["mode"] == "PAPER"
+        assert body["allowMarketOrders"] is False
+        assert body["orderTimeInForce"] == "Day"
+        assert body["indicatorPeriod"] == "Min5"
+        assert "THYAO" in body["allowedSymbols"]
+        assert isinstance(body["lockedLongTermQty"], dict)
+
+    def test_reflects_admin_config_values(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        update = client.put(
+            "/api/admin/config/allowedSymbols",
+            json={"value": "THYAO,AKBNK,ASELS"},
+            headers=auth_headers,
+        )
+        assert update.status_code == 200
+
+        resp = client.get("/api/bot/config", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["allowedSymbols"] == ["THYAO", "AKBNK", "ASELS"]
+
+    def test_hash_changes_when_config_changes(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        before = client.get("/api/bot/config", headers=auth_headers).json()
+
+        update = client.put(
+            "/api/admin/config/botScanIntervalMinutes",
+            json={"value": 5, "reason": "test faster scan"},
+            headers=auth_headers,
+        )
+        assert update.status_code == 200
+
+        after = client.get("/api/bot/config", headers=auth_headers).json()
+        assert after["scanIntervalMinutes"] == 5
+        assert after["configHash"] != before["configHash"]
+
+    def test_market_orders_cannot_be_enabled(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        resp = client.put(
+            "/api/admin/config/botAllowMarketOrders",
+            json={"value": True, "reason": "must stay disabled"},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 400
+        assert "MARKET orders are disabled" in resp.json()["detail"]
+
+    def test_risky_bot_live_mode_requires_confirmation(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        resp = client.put(
+            "/api/admin/config/botMode",
+            json={"value": "DEMO_LIVE", "reason": "demo test"},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 400
+        assert "requires confirmation" in resp.json()["detail"]
+
+
 class TestPositionSync:
     def test_requires_auth(self, client: TestClient):
         resp = client.post("/api/bot/positions/sync", json={"positions": []})

@@ -313,8 +313,15 @@ class RiskEngine:
             price = None
 
         # ── Build final reason ───────────────────────────────────────
+        # Important: when the AI provider returns an error (e.g. API 401,
+        # network timeout, parse failure) the decision.reason carries that
+        # real error message.  We MUST preserve it so Matriks can display
+        # the actual cause, not just the generic confidence-threshold note.
         if reasons:
-            base_reason = "; ".join(reasons)
+            reason_parts = reasons.copy()
+            if decision.reason and decision.reason not in "; ".join(reasons):
+                reason_parts.insert(0, decision.reason)
+            base_reason = "; ".join(reason_parts)
         elif decision.reason:
             base_reason = decision.reason
         else:

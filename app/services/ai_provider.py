@@ -100,13 +100,30 @@ def _normalize_decision(raw: dict[str, Any]) -> dict[str, Any]:
         "reason": reason,
     }
 
-    # Optional fields
-    for field in ("qty", "stop_loss", "target_price", "risk_score"):
-        if field in raw:
+    # Optional numeric fields — accept camelCase (matches the rest of the API's
+    # JSON convention) as well as the snake_case documented in the system prompt.
+    numeric_aliases: dict[str, tuple[str, ...]] = {
+        "qty": ("qty",),
+        "stop_loss": ("stop_loss", "stopLoss"),
+        "target_price": ("target_price", "targetPrice"),
+        "risk_score": ("risk_score", "riskScore"),
+    }
+    for dest_field, aliases in numeric_aliases.items():
+        for alias in aliases:
+            if alias not in raw:
+                continue
             try:
-                result[field] = float(raw[field])
+                result[dest_field] = float(raw[alias])
+                break
             except (TypeError, ValueError):
-                pass
+                continue
+
+    # entry_range — pass through untouched (nested {min,max}/{entryMin,entryMax}
+    # or flat entryMin/entryMax, either casing); _parse_entry_range() downstream
+    # already understands every shape/casing combination.
+    for field in ("entry_range", "entryRange", "entry_min", "entryMin", "entry_max", "entryMax"):
+        if field in raw:
+            result[field] = raw[field]
 
     return result
 

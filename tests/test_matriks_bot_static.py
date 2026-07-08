@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 BOT_PATH = Path("matriks/TradeAiAgenticBot.cs")
-MATRIX_ALGO_CLASS = "adnlsad"
+MATRIX_ALGO_CLASS = "TradeAiAgenticBot"
 
 
 def _bot_source() -> str:

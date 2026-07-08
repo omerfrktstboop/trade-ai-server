@@ -32,14 +32,14 @@ Copy `.env.example` → `.env` and fill in the required values:
 |---------------------|----------|-------------------------|------------------------------------------|
 | `APP_ENV`           | Yes      | `development`           | `development` / `staging` / `production` |
 | `API_TOKEN`         | Prod     | `dev-token-change-me`   | API auth token                           |
-| `AI_PROVIDER`       | Yes      | `mock`                  | `mock` (dev) / `deepseek` / `openai` / `anthropic` |
+| `AI_PROVIDER`       | Yes      | `mock`                  | `mock` (dev) / `deepseek`. `openai` / `anthropic` are accepted by config validation but **not implemented yet** — selecting them raises `ValueError` at first signal evaluation. |
 | `DEEPSEEK_API_KEY`  | *        | —                       | Required when `AI_PROVIDER=deepseek`     |
 | `DEEPSEEK_MODEL`    | No       | `deepseek-chat`         | Model name                               |
 | `DATABASE_URL`      | Prod     | `sqlite+aiosqlite:///./dev.db` (dev) | PostgreSQL for production, SQLite auto for dev |
 | `POSTGRES_PASSWORD`  | Prod    | —                       | PostgreSQL password (used by docker compose) |
 | `TELEGRAM_BOT_TOKEN`| No       | —                       | Telegram bot token                       |
 | `TELEGRAM_CHAT_ID`  | No       | —                       | Default chat ID                          |
-| `DEFAULT_MODE`      | No       | `paper`                 | `paper` / `live`                         |
+| `DEFAULT_MODE`      | No       | `paper`                 | `paper` / `live` / `demo_live` / `real_live` — fallback mode used when a request doesn't specify one. `manual` is only valid as a **per-request** `mode` field, not as `DEFAULT_MODE`. |
 
 \* `DEEPSEEK_API_KEY` is only required in production or when `AI_PROVIDER=deepseek`.
 
@@ -130,8 +130,11 @@ Aşağıdaki adımları **LIVE** moda geçmeden önce mutlaka tamamlayın:
 |--------|-------------------------|----------|--------------------------|
 | GET    | `/`                     | —        | Root (docs links)        |
 | GET    | `/api/health`           | —        | Health check             |
-| POST   | `/api/signal/evaluate`  | Bearer   | Evaluate trading signal  |
+| POST   | `/api/signal/evaluate`  | Bearer   | Evaluate trading signal (single-turn) |
+| POST   | `/api/signal/evaluate-agent` | Bearer | Evaluate trading signal (stateful, multi-turn agentic — used by the Matriks bot) |
 | POST   | `/api/order-result`     | Bearer   | Receive order result     |
+| GET    | `/api/bot/tradeable-symbols` | Bearer | Admin-managed symbol universe for the bot to scan |
+| POST   | `/api/bot/positions/sync` | Bearer | Bot reports its full position snapshot |
 | GET    | `/admin`                | Admin    | Admin dashboard          |
 | GET    | `/admin/config`         | Admin    | Runtime risk config UI   |
 | GET    | `/admin/emergency`      | Admin    | Kill switch controls     |
@@ -233,6 +236,54 @@ curl -X POST http://localhost:8000/api/signal/evaluate \
 | `entryRange` | object\|null | `{"min": ..., "max": ...}` — limit emir için fiyat aralığı |
 | `stopLoss` | float\|null | Önerilen zarar-kes |
 | `targetPrice` | float\|null | Önerilen hedef fiyat |
+
+### Agentic Signal Evaluate
+
+`/api/signal/evaluate-agent` is the stateful, multi-turn version of Signal
+Evaluate — this is the endpoint the Matriks bot actually calls
+(`SendEvaluateAsync` in `matriks/TradeAiAgenticBot.cs`). Instead of always
+deciding from a single OHLCV snapshot, it can ask the caller (Matriks) for
+additional data (`action: "FETCH_DATA"` with `targetSymbol` /
+`requiredDataType`) across several requests sharing the same `sessionId`,
+before returning a final `WAIT` / `BUY` / `SELL` decision. Every response —
+`FETCH_DATA`, hard-stop `WAIT`, and the final decision — includes a
+top-level `symbol` field matching the request's root symbol.
+
+```bash
+curl -X POST http://localhost:8000/api/signal/evaluate-agent \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "requestId": "agent-001",
+    "symbol": "THYAO",
+    "mode": "PAPER",
+    "marketData": {
+      "symbol": "THYAO",
+      "dataType": "OHLCV",
+      "payload": {"lastPrice": 71.5, "open": 71.0, "high": 72.0, "low": 70.8, "volume": 12000}
+    }
+  }'
+```
+
+**Response (200) — needs more data:**
+```json
+{
+  "requestId": "agent-001",
+  "sessionId": "8f2c1a...",
+  "symbol": "THYAO",
+  "action": "FETCH_DATA",
+  "targetSymbol": "THYAO",
+  "requiredDataType": "DEPTH",
+  "allowOrder": false,
+  "requiresConfirmation": false,
+  "reason": "Derinlik verisi gerekli"
+}
+```
+
+Matriks then re-posts with the requested data plus `sessionId` +
+`contextHistory` until the planner has enough context to proceed to the
+AI/RiskEngine and return a final `WAIT`/`BUY`/`SELL` (same response shape as
+`/api/signal/evaluate`).
 
 ### Order Result
 

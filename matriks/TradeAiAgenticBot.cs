@@ -34,7 +34,7 @@ namespace Matriks.Lean.Algotrader
     /// 4. REAL_LIVE default kapalı: EnableRealOrders=false
     /// MARKET emir ASLA gönderilmez — sadece LIMIT.
     /// </summary>
-    public class adnlsad : MatriksAlgo
+    public class TradeAiAgenticBot : MatriksAlgo
     {
         // ── Parameters ──────────────────────────────────────────────
 

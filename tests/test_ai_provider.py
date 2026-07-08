@@ -174,6 +174,46 @@ class TestNormalizeDecision:
         assert "qty" not in result
         assert "stop_loss" not in result
 
+    def test_camel_case_stop_loss_and_target_price_preserved(self):
+        """DeepSeek sometimes replies camelCase (matching the rest of the API's
+        JSON convention) instead of the snake_case documented in the system
+        prompt — both must survive normalization."""
+        result = _normalize_decision(
+            {
+                "action": "BUY",
+                "confidence": 80,
+                "stopLoss": 98.0,
+                "targetPrice": 106.0,
+            }
+        )
+        assert result["stop_loss"] == 98.0
+        assert result["target_price"] == 106.0
+
+    def test_entry_range_nested_camel_case_preserved(self):
+        result = _normalize_decision(
+            {
+                "action": "BUY",
+                "confidence": 80,
+                "entryRange": {"min": 100, "max": 101},
+            }
+        )
+        assert result["entryRange"] == {"min": 100, "max": 101}
+
+    def test_entry_range_snake_case_preserved(self):
+        result = _normalize_decision(
+            {
+                "action": "BUY",
+                "confidence": 80,
+                "entry_range": {"min": 100, "max": 101},
+            }
+        )
+        assert result["entry_range"] == {"min": 100, "max": 101}
+
+    def test_entry_range_absent_when_not_provided(self):
+        result = _normalize_decision({"action": "WAIT", "confidence": 50})
+        assert "entry_range" not in result
+        assert "entryRange" not in result
+
 
 # ── DeepSeek provider — async decide tests ─────────────────────────────────────
 

@@ -395,6 +395,70 @@ def test_response_has_top_level_target_and_datatype(
         assert "action" in body
 
 
+# ── 8b. Every response carries the root symbol ──────────────────────────────
+#
+# Regression coverage: response.Symbol was previously always empty on the
+# Matriks bot side (the field didn't exist on AgenticSignalResponse), which
+# caused every BUY/SELL order to be rejected at the bot's "symbol not
+# allowed" gate since NormalizeSymbol(null) -> "".
+
+
+def test_fetch_data_response_includes_root_symbol(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    payload = _make_agentic_payload(symbol="ANELE")
+    body = _post(client, payload, auth_headers)
+
+    assert body["symbol"] == "ANELE"
+
+
+def test_wait_hard_stop_response_includes_root_symbol(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """Target-symbol-not-allowed WAIT (hard stop) must still carry the symbol."""
+    payload = _make_agentic_payload(symbol="ZZZZ-NOT-ALLOWED")
+    body = _post(client, payload, auth_headers)
+
+    assert body["action"] == "WAIT"
+    assert body["symbol"] == "ZZZZ-NOT-ALLOWED"
+
+
+def test_final_response_includes_root_symbol(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """Second-step (final BUY/SELL/WAIT) response must carry the root symbol."""
+    p1 = _make_agentic_payload(symbol="ANELE", request_id="req-symbol-1")
+    r1 = _post(client, p1, auth_headers)
+    assert r1["symbol"] == "ANELE"
+    session_id = r1["sessionId"]
+
+    ctx_history = [
+        {
+            "stepNo": 1,
+            "symbol": "ANELE",
+            "dataType": "OHLCV",
+            "payload": dict(_DEFAULT_OHLCV),
+            "reason": "Step 1: ANELE OHLCV",
+        },
+    ]
+    p2 = {
+        "requestId": "req-symbol-2",
+        "symbol": "ANELE",
+        "mode": "PAPER",
+        "sessionId": session_id,
+        "marketData": {
+            "symbol": "THYAO",
+            "dataType": "DEPTH",
+            "payload": dict(_DEFAULT_DEPTH),
+        },
+        "contextHistory": ctx_history,
+    }
+    r2 = _post(client, p2, auth_headers)
+
+    assert r2["action"] != "FETCH_DATA"
+    assert r2["symbol"] == "ANELE"
+
+
 # ── 9. contextHistory is appended to session ────────────────────────────────
 
 

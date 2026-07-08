@@ -515,6 +515,7 @@ def _agentic_waiter(
     request_id: str,
     session_id: str,
     reason: str,
+    symbol: str = "",
     *,
     proceed_to_ai: bool = False,
 ) -> AgenticSignalResponse:
@@ -522,6 +523,7 @@ def _agentic_waiter(
     return AgenticSignalResponse(
         requestId=request_id,
         sessionId=session_id,
+        symbol=symbol,
         action=AgenticAction.WAIT,
         allowOrder=False,
         requiresConfirmation=False,
@@ -565,6 +567,7 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
         return _agentic_waiter(
             req_id, raw_session_id or "",
             "Kill switch enabled: trading disabled by admin",
+            symbol,
         )
 
     # ── 1-2: Session management ────────────────────────────────────────
@@ -576,6 +579,7 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
             return _agentic_waiter(
                 req_id, raw_session_id,
                 "Session expired or not found",
+                symbol,
             )
     else:
         sess = session_store.create_session(symbol)
@@ -616,18 +620,21 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
             return _agentic_waiter(
                 req_id, sess.session_id,
                 f"Target symbol {target} is not in the allowed list",
+                symbol,
             )
 
         if not sess.can_tool_call:
             return _agentic_waiter(
                 req_id, sess.session_id,
                 "Tool call limit reached — cannot FETCH_DATA",
+                symbol,
             )
 
         session_store.increment_tool_call(sess.session_id)
         return AgenticSignalResponse(
             requestId=req_id,
             sessionId=sess.session_id,
+            symbol=symbol,
             action=AgenticAction.FETCH_DATA,
             allowOrder=False,
             requiresConfirmation=False,
@@ -643,7 +650,7 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
     # ── 7: WAIT from planner (hard stop — e.g. symbol not allowed) ────
     if plan.action == AgenticAction.WAIT and not plan.proceed_to_ai:
         session_store.close_session(sess.session_id)
-        return _agentic_waiter(req_id, sess.session_id, plan.reason)
+        return _agentic_waiter(req_id, sess.session_id, plan.reason, symbol)
 
     # ── 8: PROCEED — build bridge to AI + RiskEngine ────────────────────
     sig_req = _agentic_to_signal_request(body, sess.session_id)
@@ -688,6 +695,7 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
     return AgenticSignalResponse(
         requestId=response.request_id,
         sessionId=sess.session_id,
+        symbol=sig_req.symbol,
         action=AgenticAction(response.action.value),
         allowOrder=response.allow_order,
         requiresConfirmation=response.requires_confirmation,

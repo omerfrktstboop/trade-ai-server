@@ -266,6 +266,7 @@ class AgenticSignalResponse(BaseModel):
 
     request_id: str = Field(..., alias="requestId")
     session_id: str = Field(..., alias="sessionId")
+    symbol: str
     action: AgenticAction
     allow_order: bool = Field(..., alias="allowOrder")
     requires_confirmation: bool = Field(..., alias="requiresConfirmation")

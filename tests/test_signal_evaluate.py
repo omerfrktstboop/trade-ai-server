@@ -335,3 +335,61 @@ class TestDictToRiskDecisionDefense:
         # Must not raise, must return WAIT
         assert resp.action == SignalAction.WAIT
         assert resp.allow_order is False
+
+
+class TestNormalizeDecisionToRiskDecisionPipeline:
+    """Full pipeline: raw provider dict -> _normalize_decision -> _dict_to_risk_decision.
+
+    Regression coverage for a bug where _normalize_decision silently dropped
+    entryRange/stopLoss/targetPrice before _dict_to_risk_decision ever saw
+    them, even though _dict_to_risk_decision was already written to parse
+    both camelCase and snake_case correctly.
+    """
+
+    def test_camel_case_buy_response_keeps_entry_range_stop_loss_target_price(self):
+        from app.services.ai_provider import _normalize_decision
+        from app.routers.signal import _dict_to_risk_decision
+
+        raw = {
+            "action": "BUY",
+            "confidence": 82,
+            "qty": 1,
+            "entryRange": {"min": 100, "max": 101},
+            "stopLoss": 98,
+            "targetPrice": 106,
+            "risk_score": 20,
+            "reason": "test",
+        }
+
+        normalized = _normalize_decision(raw)
+        decision = _dict_to_risk_decision(normalized, _req())
+
+        assert decision.action == SignalAction.BUY
+        assert decision.entry_range is not None
+        assert decision.entry_range.min == 100.0
+        assert decision.entry_range.max == 101.0
+        assert decision.stop_loss == 98.0
+        assert decision.target_price == 106.0
+
+    def test_documented_snake_case_buy_response_keeps_entry_range(self):
+        """The system prompt asks the model for snake_case — that must also work."""
+        from app.services.ai_provider import _normalize_decision
+        from app.routers.signal import _dict_to_risk_decision
+
+        raw = {
+            "action": "BUY",
+            "confidence": 82,
+            "entry_range": {"min": 100, "max": 101},
+            "stop_loss": 98,
+            "target_price": 106,
+            "reason": "test",
+        }
+
+        normalized = _normalize_decision(raw)
+        decision = _dict_to_risk_decision(normalized, _req())
+
+        assert decision.entry_range is not None
+        assert decision.entry_range.min == 100.0
+        assert decision.entry_range.max == 101.0
+        assert decision.stop_loss == 98.0
+        assert decision.target_price == 106.0

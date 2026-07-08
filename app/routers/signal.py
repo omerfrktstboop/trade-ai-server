@@ -30,6 +30,7 @@ from app.models.signal import (
     EntryRange,
     OrderType,
     SignalAction,
+    SignalMode,
     SignalRequest,
     SignalResponse,
 )
@@ -48,6 +49,7 @@ from app.services.daily_trade_count import get_today_trade_counts
 from app.services.fund_scanner import get_fund_context
 from app.services.news_service import get_news_context
 from app.services.risk_engine import RiskDecision, RiskEngine
+from app.services.signal_override import consume_override, override_to_raw_decision
 
 logger = logging.getLogger(__name__)
 
@@ -673,7 +675,22 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
     # Inject accumulated session steps into AI payload
     payload["agenticSteps"] = [s.model_dump(by_alias=True) for s in sess.steps]
 
-    raw = await _provider.decide(payload)
+    # Manual test override — bypass the AI for this symbol's next evaluation
+    # only (never in REAL_LIVE, so a test-only feature can't move real capital).
+    raw = None
+    if sig_req.mode in (SignalMode.PAPER, SignalMode.MANUAL, SignalMode.DEMO_LIVE):
+        try:
+            async with async_session_factory() as ov_session:
+                override = await consume_override(ov_session, sig_req.symbol)
+            if override is not None:
+                raw = override_to_raw_decision(override)
+        except Exception:
+            logger.exception(
+                "Failed to check signal override for %s", sig_req.symbol
+            )
+
+    if raw is None:
+        raw = await _provider.decide(payload)
     decision = _dict_to_risk_decision(raw, sig_req)
     sig_req = await _with_resolved_daily_trade_count(sig_req)
 

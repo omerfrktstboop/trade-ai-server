@@ -5,6 +5,32 @@
 
 {% include "admin/_auto_refresh.html" %}
 
+{% if error %}<div class="alert alert-danger">⚠️ {{ error }}</div>{% endif %}
+{% if message %}<div class="alert alert-success">✅ {{ message }}</div>{% endif %}
+
+<div class="card mb-24" style="border-color:rgba(248,81,73,0.25)">
+  <div class="section-title mb-16" style="color:var(--danger)">⚠️ Test: Tüm Pozisyonları Sat</div>
+  <p class="text-muted text-sm mb-16">
+    Mevcut tüm bot pozisyonları için tek kullanımlık SELL override oluşturur.
+    Bot'un bir sonraki tarama turunda AI bypass edilip gerçek SELL emri gönderilir
+    (RiskEngine'in diğer tüm kapılarından geçmek şartıyla). Sadece PAPER/MANUAL/DEMO_LIVE
+    modunda etkilidir, REAL_LIVE'da yok sayılır.
+  </p>
+  <form method="post" action="/admin/positions/force-sell-all">
+    <div class="form-row">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label" for="fsa_reason">Neden</label>
+        <input class="form-input" id="fsa_reason" name="reason" placeholder="Test amaçlı tüm pozisyonları satıyorum" required>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label" for="fsa_conf">Confirmation (type {{ confirmation }})</label>
+        <input class="form-input" id="fsa_conf" name="confirmation" placeholder="{{ confirmation }}" required>
+      </div>
+      <button class="btn btn-danger" type="submit" style="align-self:end">🔴 Tüm Pozisyonları Test-Sat</button>
+    </div>
+  </form>
+</div>
+
 <div class="mb-24">
   <div class="flex-between mb-16">
     <h2 class="section-title">Bot Positions</h2>
@@ -12,7 +38,7 @@
   </div>
   <div class="table-container">
     <table>
-      <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Price</th><th>Current Price</th><th>P&L</th><th>Mode</th><th>Watchlist</th><th>Updated</th></tr></thead>
+      <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Price</th><th>Current Price</th><th>P&L</th><th>Mode</th><th>Watchlist</th><th>Test Override</th><th>Updated</th></tr></thead>
       <tbody>
         {% for row in bot_positions %}
         <tr>
@@ -35,10 +61,20 @@
               </form>
             {% endif %}
           </td>
+          <td>
+            <form method="post" action="/admin/positions/{{ row.symbol }}/force-override" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <select class="form-select config-select-control" name="action" style="min-width:90px">
+                <option value="SELL">SELL</option>
+                <option value="BUY">BUY</option>
+              </select>
+              <input class="form-input" name="confirmation" placeholder="{{ confirmation }}" style="width:110px" required>
+              <button class="btn btn-outline-danger btn-sm" type="submit">Force</button>
+            </form>
+          </td>
           <td class="mono text-muted">{{ row.updated_at }}</td>
         </tr>
         {% else %}
-        <tr class="empty-row"><td colspan="8">No active bot positions</td></tr>
+        <tr class="empty-row"><td colspan="9">No active bot positions</td></tr>
         {% endfor %}
       </tbody>
     </table>

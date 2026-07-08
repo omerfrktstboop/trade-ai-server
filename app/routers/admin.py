@@ -32,6 +32,7 @@ from app.services.admin_config import (
     set_admin_config_value,
 )
 from app.services.daily_trade_count import get_today_trade_counts
+from app.services.signal_override import SELL_ALL_SENTINEL_QTY, create_override
 
 admin_router = APIRouter(tags=["Admin"])
 admin_api_router = APIRouter(tags=["Admin API"])
@@ -234,8 +235,108 @@ async def admin_positions(request: Request) -> HTMLResponse:
             "bot_positions": bot_positions,
             "locked_positions": locked_positions,
             "allowed_symbols": allowed_symbols,
+            "confirmation": RISKY_CONFIRMATION,
+            "error": None,
+            "message": None,
         },
     )
+
+
+async def _positions_page_error(request: Request, identity: str, error: str) -> HTMLResponse:
+    async with async_session_factory() as session:
+        bot_positions = await _latest(session, BotPosition, 100, order_field="updated_at")
+        locked_positions = await _latest(
+            session, LockedPosition, 100, order_field="created_at"
+        )
+        allowed_raw = await get_admin_config_value(session, "allowedSymbols")
+
+    return templates.TemplateResponse(
+        request,
+        "admin/positions.html",
+        {
+            "identity": identity,
+            "active": "positions",
+            "bot_positions": bot_positions,
+            "locked_positions": locked_positions,
+            "allowed_symbols": _split_csv_symbols(allowed_raw),
+            "confirmation": RISKY_CONFIRMATION,
+            "error": error,
+            "message": None,
+        },
+        status_code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+@admin_router.post("/positions/{symbol}/force-override")
+async def admin_force_override(request: Request, symbol: str) -> Any:
+    identity = await require_admin(request)
+    form = await request.form()
+    action = str(form.get("action") or "").strip().upper()
+    reason = str(form.get("reason") or "Manual test override")
+    confirmation = str(form.get("confirmation") or "")
+
+    if confirmation != RISKY_CONFIRMATION:
+        return await _positions_page_error(
+            request, identity, f"force-override requires confirmation={RISKY_CONFIRMATION}"
+        )
+    if action not in ("BUY", "SELL"):
+        return await _positions_page_error(
+            request, identity, f"Unsupported override action: {action or '(empty)'}"
+        )
+
+    qty = SELL_ALL_SENTINEL_QTY if action == "SELL" else _to_float(form.get("qty"))
+    async with async_session_factory() as session:
+        await create_override(
+            session,
+            symbol,
+            action,
+            qty,
+            reason=reason,
+            created_by=identity,
+            entry_min=_to_float(form.get("entryMin")),
+            entry_max=_to_float(form.get("entryMax")),
+            stop_loss=_to_float(form.get("stopLoss")),
+            target_price=_to_float(form.get("targetPrice")),
+        )
+
+    return RedirectResponse("/admin/positions", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@admin_router.post("/positions/force-sell-all")
+async def admin_force_sell_all(request: Request) -> Any:
+    identity = await require_admin(request)
+    form = await request.form()
+    reason = str(form.get("reason") or "Force-sell-all test")
+    confirmation = str(form.get("confirmation") or "")
+
+    if confirmation != RISKY_CONFIRMATION:
+        return await _positions_page_error(
+            request, identity, f"force-sell-all requires confirmation={RISKY_CONFIRMATION}"
+        )
+
+    async with async_session_factory() as session:
+        positions = await _latest(session, BotPosition, 500, order_field="updated_at")
+        symbols = [p.symbol for p in positions if p.qty and p.qty != 0]
+        for symbol in symbols:
+            await create_override(
+                session,
+                symbol,
+                "SELL",
+                SELL_ALL_SENTINEL_QTY,
+                reason=reason,
+                created_by=identity,
+            )
+
+    return RedirectResponse("/admin/positions", status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 @admin_router.post("/positions/add-to-watchlist")

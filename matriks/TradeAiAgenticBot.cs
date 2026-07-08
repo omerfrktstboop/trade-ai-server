@@ -17,6 +17,14 @@ using Matriks.Trader.Core;
 using Matriks.Trader.Core.Fields;
 using Matriks.Trader.Core.TraderModels;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using AgenticSignalRequest = System.Collections.Generic.Dictionary<string, object>;
+using AgenticSignalResponse = Newtonsoft.Json.Linq.JObject;
+using ContextStep = System.Collections.Generic.Dictionary<string, object>;
+using IndicatorConsensus = System.Tuple<int, int, int, string, double>;
+using MarketDataPayload = System.Collections.Generic.Dictionary<string, object>;
+using OrderExecutionResult = System.Tuple<bool, bool, string, string>;
+using PendingOrderContext = System.Tuple<string, string, string, decimal, decimal>;
 
     /// <summary>
     /// TradeAI Agentic Bot — Matriks IQ Algo.
@@ -31,8 +39,8 @@ using Newtonsoft.Json;
     /// 4. REAL_LIVE default kapalı: EnableRealOrders=false
     /// MARKET emir ASLA gönderilmez — sadece LIMIT.
     /// </summary>
-    public class TradeAiAgenticBot : MatriksAlgo
-    {
+public class TradeAiAgenticBot : MatriksAlgo
+{
         // ── Parameters ──────────────────────────────────────────────
 
         [Parameter("https://omermatriks.ddns.net")]
@@ -274,22 +282,15 @@ using Newtonsoft.Json;
                 + " avgPx=" + avgPx
                 + " ordStatus=" + order.OrdStatus);
 
-            PendingOrderContext? resolvedContext = ResolvePendingOrderContext(orderId, symbol, side);
-            PendingOrderContext context;
-            if (resolvedContext.HasValue)
+            PendingOrderContext context = ResolvePendingOrderContext(orderId, symbol, side);
+            if (context == null)
             {
-                context = resolvedContext.Value;
-            }
-            else
-            {
-                context = new PendingOrderContext
-                {
-                    RequestId = "MATRiKS-" + (string.IsNullOrWhiteSpace(orderId) ? BuildRequestId(symbol) : orderId),
-                    Symbol = symbol,
-                    Action = side,
-                    Qty = orderQty > 0 ? orderQty : filledQty,
-                    Price = avgPx > 0 ? avgPx : order.Price
-                };
+                context = CreatePendingOrderContext(
+                    "MATRiKS-" + (string.IsNullOrWhiteSpace(orderId) ? BuildRequestId(symbol) : orderId),
+                    symbol,
+                    side,
+                    orderQty > 0 ? orderQty : filledQty,
+                    avgPx > 0 ? avgPx : order.Price);
             }
 
             if (!string.IsNullOrWhiteSpace(orderId))
@@ -297,8 +298,8 @@ using Newtonsoft.Json;
                 _pendingOrdersByOrderId[orderId] = context;
             }
 
-            decimal reportQty = filledQty > 0 ? filledQty : (orderQty > 0 ? orderQty : context.Qty);
-            decimal reportPrice = avgPx > 0 ? avgPx : (order.Price > 0 ? order.Price : context.Price);
+            decimal reportQty = filledQty > 0 ? filledQty : (orderQty > 0 ? orderQty : PendingQty(context));
+            decimal reportPrice = avgPx > 0 ? avgPx : (order.Price > 0 ? order.Price : PendingPrice(context));
             string message = "Matriks order update status=" + status
                 + " orderQty=" + orderQty
                 + " filledQty=" + filledQty
@@ -315,7 +316,7 @@ using Newtonsoft.Json;
                 {
                     _pendingOrdersByOrderId.TryRemove(orderId, out _);
                 }
-                _pendingOrdersBySymbolSide.TryRemove(BuildSymbolSideKey(symbol, context.Action), out _);
+                _pendingOrdersBySymbolSide.TryRemove(BuildSymbolSideKey(symbol, PendingAction(context)), out _);
             }
         }
 
@@ -338,16 +339,14 @@ using Newtonsoft.Json;
         private async Task SendEvaluateAsync(string symbol)
         {
             string requestId = BuildRequestId(symbol);
-            var request = new AgenticSignalRequest
-            {
-                RequestId = requestId,
-                SessionId = null,
-                Symbol = symbol,
-                MarketData = BuildMarketData(symbol, "DEPTH"),
-                ContextHistory = new List<ContextStep>(),
-                Mode = NormalizeMode(Mode)
-            };
-            ApplyFlatCompatibilityFields(ref request);
+            var request = BuildSignalRequest(
+                requestId,
+                null,
+                symbol,
+                BuildMarketData(symbol, "DEPTH"),
+                new List<ContextStep>(),
+                NormalizeMode(Mode));
+            ApplyFlatCompatibilityFields(request);
 
             SafeDebug("Sending evaluate request symbol=" + symbol + " requestId=" + requestId);
 
@@ -362,9 +361,9 @@ using Newtonsoft.Json;
                 try
                 {
                     string json = JsonConvert.SerializeObject(request, _jsonSettings);
-                    SafeDebug("POST /api/signal/evaluate-agent requestId=" + request.RequestId
-                        + " symbol=" + request.Symbol
-                        + " sessionId=" + (request.SessionId ?? "null")
+                    SafeDebug("POST /api/signal/evaluate-agent requestId=" + GetRequestString(request, "requestId")
+                        + " symbol=" + GetRequestString(request, "symbol")
+                        + " sessionId=" + (GetRequestString(request, "sessionId") ?? "null")
                         + " attempt=" + (attempt + 1));
 
                     using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
@@ -376,8 +375,8 @@ using Newtonsoft.Json;
                             throw new Exception("HTTP " + (int)response.StatusCode + ": " + body);
                         }
 
-                        AgenticSignalResponse parsed = JsonConvert.DeserializeObject<AgenticSignalResponse>(body);
-                        if (string.IsNullOrWhiteSpace(parsed.Action))
+                        AgenticSignalResponse parsed = JObject.Parse(body);
+                        if (string.IsNullOrWhiteSpace(GetResponseString(parsed, "action")))
                         {
                             throw new Exception("Empty response");
                         }
@@ -387,19 +386,23 @@ using Newtonsoft.Json;
                 }
                 catch (Exception ex)
                 {
-                    SafeDebug("HTTP error requestId=" + request.RequestId + " attempt=" + (attempt + 1) + " error=" + ex.Message);
+                    SafeDebug("HTTP error requestId=" + GetRequestString(request, "requestId") + " attempt=" + (attempt + 1) + " error=" + ex.Message);
                     if (attempt >= 1)
                     {
-                        return AgenticSignalResponse.Wait(
-                            request.RequestId,
-                            request.SessionId,
-                            request.Symbol,
+                        return BuildWaitResponse(
+                            GetRequestString(request, "requestId"),
+                            GetRequestString(request, "sessionId"),
+                            GetRequestString(request, "symbol"),
                             "HTTP error after retry: " + ex.Message);
                     }
                 }
             }
 
-            return AgenticSignalResponse.Wait(request.RequestId, request.SessionId, request.Symbol, "HTTP error");
+            return BuildWaitResponse(
+                GetRequestString(request, "requestId"),
+                GetRequestString(request, "sessionId"),
+                GetRequestString(request, "symbol"),
+                "HTTP error");
         }
 
         private async Task HandleServerResponseAsync(
@@ -408,15 +411,15 @@ using Newtonsoft.Json;
             AgenticSignalRequest previousRequest,
             int fetchLoopCount)
         {
-            string action = NormalizeAction(response.Action);
-            string targetSymbol = response.GetTargetSymbol();
-            string requiredDataType = response.GetRequiredDataType();
+            string action = NormalizeAction(GetResponseString(response, "action"));
+            string targetSymbol = GetResponseTargetSymbol(response);
+            string requiredDataType = GetResponseRequiredDataType(response);
 
             SafeDebug("Response action=" + action
-                + " sessionId=" + (response.SessionId ?? "null")
+                + " sessionId=" + (GetResponseString(response, "sessionId") ?? "null")
                 + " targetSymbol=" + (targetSymbol ?? "null")
                 + " dataType=" + (requiredDataType ?? "null")
-                + " reason=" + response.Reason);
+                + " reason=" + GetResponseString(response, "reason"));
 
             if (action == "FETCH_DATA")
             {
@@ -440,8 +443,8 @@ using Newtonsoft.Json;
                     originalSymbol,
                     targetSymbol,
                     requiredDataType,
-                    response.SessionId,
-                    previousRequest.RequestId,
+                    GetResponseString(response, "sessionId"),
+                    GetRequestString(previousRequest, "requestId"),
                     previousRequest);
 
                 AgenticSignalResponse nextResponse = await SendAgenticRequestAsync(nextRequest);
@@ -451,7 +454,7 @@ using Newtonsoft.Json;
 
             if (action == "WAIT")
             {
-                SafeDebug("Final response action=WAIT reason=" + response.Reason);
+                SafeDebug("Final response action=WAIT reason=" + GetResponseString(response, "reason"));
                 return;
             }
 
@@ -461,7 +464,7 @@ using Newtonsoft.Json;
                 return;
             }
 
-            SafeDebug("Unknown response action=" + response.Action + ". Treated as WAIT.");
+            SafeDebug("Unknown response action=" + GetResponseString(response, "action") + ". Treated as WAIT.");
         }
 
         // ── FETCH_DATA handler ──────────────────────────────────────
@@ -475,35 +478,34 @@ using Newtonsoft.Json;
             AgenticSignalRequest previousRequest)
         {
             var contextHistory = new List<ContextStep>();
-            if (previousRequest.ContextHistory != null)
+            var previousContextHistory = GetRequestContextHistory(previousRequest);
+            if (previousContextHistory != null)
             {
-                contextHistory.AddRange(previousRequest.ContextHistory);
+                contextHistory.AddRange(previousContextHistory);
             }
 
-            if (previousRequest.MarketData.Payload != null)
+            MarketDataPayload previousMarketData = GetRequestMarketData(previousRequest);
+            Dictionary<string, object> previousPayload = GetMarketDataPayload(previousMarketData);
+            if (previousPayload != null)
             {
-                contextHistory.Add(new ContextStep
-                {
-                    StepNo = contextHistory.Count + 1,
-                    Symbol = previousRequest.MarketData.Symbol,
-                    DataType = previousRequest.MarketData.DataType,
-                    Payload = previousRequest.MarketData.Payload,
-                    Reason = "Previous marketData"
-                });
+                contextHistory.Add(BuildContextStep(
+                    contextHistory.Count + 1,
+                    GetMarketDataString(previousMarketData, "symbol"),
+                    GetMarketDataString(previousMarketData, "dataType"),
+                    previousPayload,
+                    "Previous marketData"));
             }
 
             SafeDebug("Agentic fetch request rootSymbol=" + rootSymbol + " targetSymbol=" + targetSymbol + " dataType=" + requiredDataType);
 
-            var request = new AgenticSignalRequest
-            {
-                RequestId = rootRequestId,
-                SessionId = sessionId,
-                Symbol = NormalizeSymbol(rootSymbol),
-                MarketData = BuildMarketData(targetSymbol, requiredDataType),
-                ContextHistory = contextHistory,
-                Mode = NormalizeMode(Mode)
-            };
-            ApplyFlatCompatibilityFields(ref request);
+            var request = BuildSignalRequest(
+                rootRequestId,
+                sessionId,
+                NormalizeSymbol(rootSymbol),
+                BuildMarketData(targetSymbol, requiredDataType),
+                contextHistory,
+                NormalizeMode(Mode));
+            ApplyFlatCompatibilityFields(request);
 
             await Task.CompletedTask; // explicit async signal
             return request;
@@ -633,13 +635,12 @@ using Newtonsoft.Json;
             }
             payload["technicalFeatures"] = technicalFeatures;
 
-            return new MarketDataPayload
-            {
-                Symbol = symbol,
-                DataType = NormalizeDataType(dataType),
-                Payload = payload,
-                Timestamp = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz")
-            };
+            var marketData = new MarketDataPayload();
+            marketData["symbol"] = symbol;
+            marketData["dataType"] = NormalizeDataType(dataType);
+            marketData["payload"] = payload;
+            marketData["timestamp"] = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz");
+            return marketData;
         }
 
         // ── Position helpers ────────────────────────────────────────
@@ -764,54 +765,55 @@ using Newtonsoft.Json;
         {
             // ── Pre-trade validation gates ──
 
-            string action = NormalizeAction(response.Action);
-            string symbol = NormalizeSymbol(response.Symbol);
+            string action = NormalizeAction(GetResponseString(response, "action"));
+            string symbol = NormalizeSymbol(GetResponseString(response, "symbol"));
             string mode = NormalizeMode(Mode);
 
             // Convert Qty/Price
-            decimal qty = ToDecimal(response.Qty);
-            decimal price = response.Price.HasValue ? ToDecimal(response.Price.Value) : 0m;
+            decimal qty = ToDecimal(GetResponseDouble(response, "qty"));
+            double? responsePrice = GetResponseNullableDouble(response, "price");
+            decimal price = responsePrice.HasValue ? ToDecimal(responsePrice.Value) : 0m;
             decimal orderValue = qty * price;
 
             SafeDebug("Final response action=" + action
-                + " allowOrder=" + response.AllowOrder
-                + " orderType=" + response.OrderType
-                + " price=" + (response.Price.HasValue ? response.Price.Value.ToString() : "null")
-                + " qty=" + response.Qty);
-            SafeDebug("Pre-trade checks started requestId=" + response.RequestId);
+                + " allowOrder=" + GetResponseBool(response, "allowOrder")
+                + " orderType=" + GetResponseString(response, "orderType")
+                + " price=" + (responsePrice.HasValue ? responsePrice.Value.ToString() : "null")
+                + " qty=" + GetResponseDouble(response, "qty"));
+            SafeDebug("Pre-trade checks started requestId=" + GetResponseString(response, "requestId"));
 
             // Gate 1: Action must be BUY or SELL
             if (action != "BUY" && action != "SELL")
             {
-                await RejectOrderAsync(response, "unknown action=" + response.Action);
+                await RejectOrderAsync(response, "unknown action=" + GetResponseString(response, "action"));
                 return;
             }
 
             // Gate 2: Duplicate requestId (atomic check+add via ConcurrentDictionary)
-            if (!_sentRequestIds.TryAdd(response.RequestId, null))
+            if (!_sentRequestIds.TryAdd(GetResponseString(response, "requestId"), null))
             {
                 await RejectOrderAsync(response, "duplicate requestId");
                 return;
             }
 
             // Gate 3: allowOrder must be true
-            if (!response.AllowOrder)
+            if (!GetResponseBool(response, "allowOrder"))
             {
                 await RejectOrderAsync(response, "allowOrder=false");
                 return;
             }
 
             // Gate 4: No confirmation required
-            if (response.RequiresConfirmation)
+            if (GetResponseBool(response, "requiresConfirmation"))
             {
                 await RejectOrderAsync(response, "requiresConfirmation=true");
                 return;
             }
 
             // Gate 5: Only LIMIT orders
-            if (NormalizeOrderType(response.OrderType) != "LIMIT")
+            if (NormalizeOrderType(GetResponseString(response, "orderType")) != "LIMIT")
             {
-                await RejectOrderAsync(response, "orderType is not LIMIT: " + response.OrderType);
+                await RejectOrderAsync(response, "orderType is not LIMIT: " + GetResponseString(response, "orderType"));
                 return;
             }
 
@@ -927,23 +929,23 @@ using Newtonsoft.Json;
 
             try
             {
-                OrderExecutionResult execution = await SendLimitOrderAsync(response.RequestId, symbol, action, qty, price);
-                if (execution.Success)
+                OrderExecutionResult execution = await SendLimitOrderAsync(GetResponseString(response, "requestId"), symbol, action, qty, price);
+                if (ExecutionSuccess(execution))
                 {
                     IncrementDailyTradeCount(symbol);
                     SafeDebug("Order SENT_PENDING symbol=" + symbol
                         + " side=" + action
                         + " qty=" + qty
                         + " price=" + price
-                        + " message=" + execution.Message);
+                        + " message=" + ExecutionMessage(execution));
                     return;
                 }
 
-                await ReportOrderResultAsync(response, "REJECTED", execution.Message, execution.OrderId);
+                await ReportOrderResultAsync(response, "REJECTED", ExecutionMessage(execution), ExecutionOrderId(execution));
             }
             catch (Exception ex)
             {
-                SafeDebug("Order exception requestId=" + response.RequestId + " error=" + ex.Message);
+                SafeDebug("Order exception requestId=" + GetResponseString(response, "requestId") + " error=" + ex.Message);
                 await ReportOrderResultAsync(response, "ERROR", ex.Message, null);
             }
         }
@@ -956,13 +958,7 @@ using Newtonsoft.Json;
         {
             if (!TryConvertOrderQuantity(qty, out int quantity, out string quantityError))
             {
-                return new OrderExecutionResult
-                {
-                    Success = false,
-                    IsSimulated = false,
-                    OrderId = null,
-                    Message = quantityError
-                };
+                return CreateOrderExecutionResult(false, false, null, quantityError);
             }
 
             if (quantity != qty)
@@ -976,13 +972,7 @@ using Newtonsoft.Json;
             decimal roundedPrice = RoundPriceStepBistViop(symbol, limitPrice);
             if (roundedPrice <= 0m)
             {
-                return new OrderExecutionResult
-                {
-                    Success = false,
-                    IsSimulated = false,
-                    OrderId = null,
-                    Message = "rounded limit price <= 0"
-                };
+                return CreateOrderExecutionResult(false, false, null, "rounded limit price <= 0");
             }
 
             if (roundedPrice != limitPrice)
@@ -990,17 +980,10 @@ using Newtonsoft.Json;
                 SafeDebug("Limit price rounded symbol=" + symbol + " original=" + limitPrice + " rounded=" + roundedPrice);
             }
 
-            var pending = new PendingOrderContext
-            {
-                RequestId = requestId,
-                Symbol = symbol,
-                Action = NormalizeAction(side),
-                Qty = quantity,
-                Price = roundedPrice
-            };
-            _pendingOrdersBySymbolSide[BuildSymbolSideKey(symbol, pending.Action)] = pending;
+            var pending = CreatePendingOrderContext(requestId, symbol, NormalizeAction(side), quantity, roundedPrice);
+            _pendingOrdersBySymbolSide[BuildSymbolSideKey(symbol, PendingAction(pending))] = pending;
 
-            SafeDebug("Sending real limit order: " + pending.Action
+            SafeDebug("Sending real limit order: " + PendingAction(pending)
                 + " " + symbol
                 + " qty=" + quantity
                 + " price=" + roundedPrice
@@ -1014,18 +997,12 @@ using Newtonsoft.Json;
             }
             catch
             {
-                _pendingOrdersBySymbolSide.TryRemove(BuildSymbolSideKey(symbol, pending.Action), out _);
+                _pendingOrdersBySymbolSide.TryRemove(BuildSymbolSideKey(symbol, PendingAction(pending)), out _);
                 throw;
             }
 
             await Task.CompletedTask; // explicit async yield
-            return new OrderExecutionResult
-            {
-                Success = true,
-                IsSimulated = false,
-                OrderId = null,
-                Message = "Limit order SENT_PENDING; final status will be reported by OnOrderUpdate"
-            };
+            return CreateOrderExecutionResult(true, false, null, "Limit order SENT_PENDING; final status will be reported by OnOrderUpdate");
         }
 
         private async Task RejectOrderAsync(AgenticSignalResponse response, string reason)
@@ -1043,17 +1020,16 @@ using Newtonsoft.Json;
             string matriksMessage,
             string orderId)
         {
-            var payload = new OrderResultRequest
-            {
-                RequestId = response.RequestId,
-                Symbol = NormalizeSymbol(response.Symbol),
-                Action = NormalizeAction(response.Action),
-                Qty = response.Qty,
-                Price = response.Price.HasValue ? response.Price.Value : 0,
-                Status = status,
-                MatriksMessage = matriksMessage,
-                OrderId = orderId
-            };
+            double? responsePrice = GetResponseNullableDouble(response, "price");
+            var payload = BuildOrderResultPayload(
+                GetResponseString(response, "requestId"),
+                NormalizeSymbol(GetResponseString(response, "symbol")),
+                NormalizeAction(GetResponseString(response, "action")),
+                GetResponseDouble(response, "qty"),
+                responsePrice.HasValue ? responsePrice.Value : 0,
+                status,
+                matriksMessage,
+                orderId);
 
             try
             {
@@ -1069,11 +1045,11 @@ using Newtonsoft.Json;
                     }
                 }
 
-                SafeDebug("Order result posted to server status=" + status + " requestId=" + response.RequestId);
+                SafeDebug("Order result posted to server status=" + status + " requestId=" + GetResponseString(response, "requestId"));
             }
             catch (Exception ex)
             {
-                SafeDebug("Order result post exception requestId=" + response.RequestId + " error=" + ex.Message);
+                SafeDebug("Order result post exception requestId=" + GetResponseString(response, "requestId") + " error=" + ex.Message);
             }
         }
 
@@ -1085,17 +1061,15 @@ using Newtonsoft.Json;
             decimal qty,
             decimal price)
         {
-            var payload = new OrderResultRequest
-            {
-                RequestId = context.RequestId,
-                Symbol = NormalizeSymbol(context.Symbol),
-                Action = NormalizeAction(context.Action),
-                Qty = ToDouble(qty),
-                Price = ToDouble(price),
-                Status = status,
-                MatriksMessage = matriksMessage,
-                OrderId = orderId
-            };
+            var payload = BuildOrderResultPayload(
+                PendingRequestId(context),
+                NormalizeSymbol(PendingSymbol(context)),
+                NormalizeAction(PendingAction(context)),
+                ToDouble(qty),
+                ToDouble(price),
+                status,
+                matriksMessage,
+                orderId);
 
             try
             {
@@ -1112,12 +1086,12 @@ using Newtonsoft.Json;
                 }
 
                 SafeDebug("Order update posted to server status=" + status
-                    + " requestId=" + context.RequestId
+                    + " requestId=" + PendingRequestId(context)
                     + " orderId=" + orderId);
             }
             catch (Exception ex)
             {
-                SafeDebug("Order update post exception requestId=" + context.RequestId + " error=" + ex.Message);
+                SafeDebug("Order update post exception requestId=" + PendingRequestId(context) + " error=" + ex.Message);
             }
         }
 
@@ -1137,40 +1111,41 @@ using Newtonsoft.Json;
 
         // ── Compatibility layer (flat fields for legacy clients) ────
 
-        private void ApplyFlatCompatibilityFields(ref AgenticSignalRequest request)
+        private void ApplyFlatCompatibilityFields(AgenticSignalRequest request)
         {
-            if (request.MarketData.Payload == null)
+            MarketDataPayload marketData = GetRequestMarketData(request);
+            Dictionary<string, object> payload = GetMarketDataPayload(marketData);
+            if (payload == null)
                 return;
 
-            var payload = request.MarketData.Payload;
-            request.Timeframe = SymbolPeriod.Min.ToString();
-            request.LastPrice = GetPayloadDouble(payload, "lastPrice");
-            request.Open = GetPayloadDouble(payload, "open");
-            request.High = GetPayloadDouble(payload, "high");
-            request.Low = GetPayloadDouble(payload, "low");
-            request.Volume = GetPayloadDouble(payload, "volume");
-            request.Rsi = GetPayloadNullableDouble(payload, "rsi");
-            request.Ema20 = GetPayloadNullableDouble(payload, "ema20");
-            request.Ema50 = GetPayloadNullableDouble(payload, "ema50");
-            request.Macd = GetPayloadNullableDouble(payload, "macd");
-            request.MacdSignal = GetPayloadNullableDouble(payload, "macdSignal");
-            request.AlphaTrendSignal = GetPayloadString(payload, "alphaTrendSignal");
-            request.AlphaTrendMode = GetPayloadString(payload, "alphaTrendMode");
-            request.IndicatorBuyCount = Convert.ToInt32(GetPayloadDouble(payload, "indicatorBuyCount"));
-            request.IndicatorSellCount = Convert.ToInt32(GetPayloadDouble(payload, "indicatorSellCount"));
-            request.IndicatorNeutralCount = Convert.ToInt32(GetPayloadDouble(payload, "indicatorNeutralCount"));
-            request.IndicatorConsensus = GetPayloadString(payload, "indicatorConsensus");
-            request.IndicatorConsensusRatio = GetPayloadNullableDouble(payload, "indicatorConsensusRatio");
-            request.Atr = GetPayloadNullableDouble(payload, "atr");
-            request.Natr = GetPayloadNullableDouble(payload, "natr");
-            request.DepthBid1Size = GetPayloadNullableDouble(payload, "depthBid1Size");
-            request.DepthBid1MaxSize = GetPayloadNullableDouble(payload, "depthBid1MaxSize");
-            request.DepthQueueDropPct = GetPayloadNullableDouble(payload, "depthQueueDropPct");
-            request.MarketRegime = GetPayloadString(payload, "marketRegime");
-            request.BotPositionQty = GetPayloadDouble(payload, "botPositionQty");
-            request.TotalAccountQty = GetPayloadDouble(payload, "totalAccountQty");
-            request.LockedLongTermQty = GetPayloadDouble(payload, "lockedLongTermQty");
-            request.DailyTradeCount = Convert.ToInt32(GetPayloadDouble(payload, "dailyTradeCount"));
+            request["timeframe"] = SymbolPeriod.Min.ToString();
+            request["lastPrice"] = GetPayloadDouble(payload, "lastPrice");
+            request["open"] = GetPayloadDouble(payload, "open");
+            request["high"] = GetPayloadDouble(payload, "high");
+            request["low"] = GetPayloadDouble(payload, "low");
+            request["volume"] = GetPayloadDouble(payload, "volume");
+            request["rsi"] = GetPayloadNullableDouble(payload, "rsi");
+            request["ema20"] = GetPayloadNullableDouble(payload, "ema20");
+            request["ema50"] = GetPayloadNullableDouble(payload, "ema50");
+            request["macd"] = GetPayloadNullableDouble(payload, "macd");
+            request["macdSignal"] = GetPayloadNullableDouble(payload, "macdSignal");
+            request["alphaTrendSignal"] = GetPayloadString(payload, "alphaTrendSignal");
+            request["alphaTrendMode"] = GetPayloadString(payload, "alphaTrendMode");
+            request["indicatorBuyCount"] = Convert.ToInt32(GetPayloadDouble(payload, "indicatorBuyCount"));
+            request["indicatorSellCount"] = Convert.ToInt32(GetPayloadDouble(payload, "indicatorSellCount"));
+            request["indicatorNeutralCount"] = Convert.ToInt32(GetPayloadDouble(payload, "indicatorNeutralCount"));
+            request["indicatorConsensus"] = GetPayloadString(payload, "indicatorConsensus");
+            request["indicatorConsensusRatio"] = GetPayloadNullableDouble(payload, "indicatorConsensusRatio");
+            request["atr"] = GetPayloadNullableDouble(payload, "atr");
+            request["natr"] = GetPayloadNullableDouble(payload, "natr");
+            request["depthBid1Size"] = GetPayloadNullableDouble(payload, "depthBid1Size");
+            request["depthBid1MaxSize"] = GetPayloadNullableDouble(payload, "depthBid1MaxSize");
+            request["depthQueueDropPct"] = GetPayloadNullableDouble(payload, "depthQueueDropPct");
+            request["marketRegime"] = GetPayloadString(payload, "marketRegime");
+            request["botPositionQty"] = GetPayloadDouble(payload, "botPositionQty");
+            request["totalAccountQty"] = GetPayloadDouble(payload, "totalAccountQty");
+            request["lockedLongTermQty"] = GetPayloadDouble(payload, "lockedLongTermQty");
+            request["dailyTradeCount"] = Convert.ToInt32(GetPayloadDouble(payload, "dailyTradeCount"));
         }
 
         // ── Market data access ──────────────────────────────────────
@@ -1324,11 +1299,11 @@ using Newtonsoft.Json;
             features["schemaVersion"] = "technical-features-v1";
             features["alphaTrendSignal"] = CalculateAlphaTrendProxySignal(rsi, ema20, ema50, macd, macdSignal);
             features["alphaTrendMode"] = "PROXY_EMA_MACD_RSI";
-            features["indicatorBuyCount"] = consensus.BuyCount;
-            features["indicatorSellCount"] = consensus.SellCount;
-            features["indicatorNeutralCount"] = consensus.NeutralCount;
-            features["indicatorConsensus"] = consensus.Signal;
-            features["indicatorConsensusRatio"] = consensus.Ratio;
+            features["indicatorBuyCount"] = ConsensusBuyCount(consensus);
+            features["indicatorSellCount"] = ConsensusSellCount(consensus);
+            features["indicatorNeutralCount"] = ConsensusNeutralCount(consensus);
+            features["indicatorConsensus"] = ConsensusSignal(consensus);
+            features["indicatorConsensusRatio"] = ConsensusRatio(consensus);
             AddIfNotNull(features, "atr", atr);
             AddIfNotNull(features, "natr", natr);
             features["depthBid1Size"] = ToDouble(bid1Size);
@@ -1365,14 +1340,7 @@ using Newtonsoft.Json;
             else if (sell >= 4)
                 signal = "SELL";
 
-            return new IndicatorConsensus
-            {
-                BuyCount = buy,
-                SellCount = sell,
-                NeutralCount = neutral,
-                Signal = signal,
-                Ratio = total > 0 ? ToDouble((decimal)maxDirectional / total) : 0
-            };
+            return Tuple.Create(buy, sell, neutral, signal, total > 0 ? ToDouble((decimal)maxDirectional / total) : 0);
         }
 
         private static void AddVote(ref int buy, ref int sell, ref int neutral, bool buyCondition, bool sellCondition)
@@ -1451,7 +1419,7 @@ using Newtonsoft.Json;
         {
             if (natr.HasValue && natr.Value >= 8)
                 return "HIGH_VOLATILITY";
-            if (consensus.Signal == "BUY" || consensus.Signal == "SELL")
+            if (ConsensusSignal(consensus) == "BUY" || ConsensusSignal(consensus) == "SELL")
                 return "TRENDING";
             if (natr.HasValue && natr.Value <= 2)
                 return "RANGE_LOW_VOLATILITY";
@@ -1500,7 +1468,7 @@ using Newtonsoft.Json;
             return NormalizeSymbol(symbol) + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
         }
 
-        private PendingOrderContext? ResolvePendingOrderContext(string orderId, string symbol, string side)
+        private PendingOrderContext ResolvePendingOrderContext(string orderId, string symbol, string side)
         {
             if (!string.IsNullOrWhiteSpace(orderId)
                 && _pendingOrdersByOrderId.TryGetValue(orderId, out var byOrderId))
@@ -1687,6 +1655,249 @@ using Newtonsoft.Json;
             return Convert.ToString(payload[key]);
         }
 
+        private static AgenticSignalRequest BuildSignalRequest(
+            string requestId,
+            string sessionId,
+            string symbol,
+            MarketDataPayload marketData,
+            List<ContextStep> contextHistory,
+            string mode)
+        {
+            var request = new AgenticSignalRequest();
+            request["requestId"] = requestId;
+            request["sessionId"] = sessionId;
+            request["symbol"] = symbol;
+            request["marketData"] = marketData;
+            request["contextHistory"] = contextHistory;
+            request["mode"] = mode;
+            return request;
+        }
+
+        private static ContextStep BuildContextStep(
+            int stepNo,
+            string symbol,
+            string dataType,
+            Dictionary<string, object> payload,
+            string reason)
+        {
+            var step = new ContextStep();
+            step["stepNo"] = stepNo;
+            step["symbol"] = symbol;
+            step["dataType"] = dataType;
+            step["payload"] = payload;
+            step["reason"] = reason;
+            return step;
+        }
+
+        private static Dictionary<string, object> BuildOrderResultPayload(
+            string requestId,
+            string symbol,
+            string action,
+            double qty,
+            double price,
+            string status,
+            string matriksMessage,
+            string orderId)
+        {
+            var payload = new Dictionary<string, object>();
+            payload["requestId"] = requestId;
+            payload["symbol"] = symbol;
+            payload["action"] = action;
+            payload["qty"] = qty;
+            payload["price"] = price;
+            payload["status"] = status;
+            payload["matriksMessage"] = matriksMessage;
+            payload["orderId"] = orderId;
+            return payload;
+        }
+
+        private static string GetRequestString(AgenticSignalRequest request, string key)
+        {
+            if (request == null || !request.ContainsKey(key) || request[key] == null)
+                return null;
+            return Convert.ToString(request[key]);
+        }
+
+        private static MarketDataPayload GetRequestMarketData(AgenticSignalRequest request)
+        {
+            if (request == null || !request.ContainsKey("marketData"))
+                return null;
+            return request["marketData"] as MarketDataPayload;
+        }
+
+        private static List<ContextStep> GetRequestContextHistory(AgenticSignalRequest request)
+        {
+            if (request == null || !request.ContainsKey("contextHistory"))
+                return null;
+            return request["contextHistory"] as List<ContextStep>;
+        }
+
+        private static string GetMarketDataString(MarketDataPayload marketData, string key)
+        {
+            if (marketData == null || !marketData.ContainsKey(key) || marketData[key] == null)
+                return null;
+            return Convert.ToString(marketData[key]);
+        }
+
+        private static Dictionary<string, object> GetMarketDataPayload(MarketDataPayload marketData)
+        {
+            if (marketData == null || !marketData.ContainsKey("payload"))
+                return null;
+            return marketData["payload"] as Dictionary<string, object>;
+        }
+
+        private static AgenticSignalResponse BuildWaitResponse(string requestId, string sessionId, string symbol, string reason)
+        {
+            var response = new AgenticSignalResponse();
+            response["requestId"] = requestId;
+            response["sessionId"] = sessionId == null ? JValue.CreateNull() : new JValue(sessionId);
+            response["symbol"] = symbol;
+            response["action"] = "WAIT";
+            response["allowOrder"] = false;
+            response["requiresConfirmation"] = false;
+            response["reason"] = reason;
+            response["qty"] = 0;
+            response["orderType"] = "NONE";
+            response["confidenceScore"] = 0;
+            response["riskScore"] = 0;
+            return response;
+        }
+
+        private static string GetResponseString(AgenticSignalResponse response, string key)
+        {
+            if (response == null)
+                return null;
+            JToken token = response[key];
+            if (token == null || token.Type == JTokenType.Null)
+                return null;
+            return token.Value<string>();
+        }
+
+        private static bool GetResponseBool(AgenticSignalResponse response, string key)
+        {
+            if (response == null)
+                return false;
+            JToken token = response[key];
+            if (token == null || token.Type == JTokenType.Null)
+                return false;
+            return token.Value<bool>();
+        }
+
+        private static double GetResponseDouble(AgenticSignalResponse response, string key)
+        {
+            double? value = GetResponseNullableDouble(response, key);
+            return value.HasValue ? value.Value : 0;
+        }
+
+        private static double? GetResponseNullableDouble(AgenticSignalResponse response, string key)
+        {
+            if (response == null)
+                return null;
+            JToken token = response[key];
+            if (token == null || token.Type == JTokenType.Null)
+                return null;
+            return token.Value<double>();
+        }
+
+        private static string GetResponseTargetSymbol(AgenticSignalResponse response)
+        {
+            string targetSymbol = GetResponseString(response, "targetSymbol");
+            if (!string.IsNullOrWhiteSpace(targetSymbol))
+                return targetSymbol;
+
+            JToken fetchData = response == null ? null : response["fetchData"];
+            if (fetchData == null || fetchData.Type == JTokenType.Null)
+                return null;
+            return fetchData.Value<string>("targetSymbol");
+        }
+
+        private static string GetResponseRequiredDataType(AgenticSignalResponse response)
+        {
+            string requiredDataType = GetResponseString(response, "requiredDataType");
+            if (!string.IsNullOrWhiteSpace(requiredDataType))
+                return requiredDataType;
+
+            JToken fetchData = response == null ? null : response["fetchData"];
+            if (fetchData == null || fetchData.Type == JTokenType.Null)
+                return null;
+            return fetchData.Value<string>("dataType");
+        }
+
+        private static PendingOrderContext CreatePendingOrderContext(string requestId, string symbol, string action, decimal qty, decimal price)
+        {
+            return Tuple.Create(requestId, symbol, action, qty, price);
+        }
+
+        private static string PendingRequestId(PendingOrderContext context)
+        {
+            return context == null ? null : context.Item1;
+        }
+
+        private static string PendingSymbol(PendingOrderContext context)
+        {
+            return context == null ? null : context.Item2;
+        }
+
+        private static string PendingAction(PendingOrderContext context)
+        {
+            return context == null ? null : context.Item3;
+        }
+
+        private static decimal PendingQty(PendingOrderContext context)
+        {
+            return context == null ? 0m : context.Item4;
+        }
+
+        private static decimal PendingPrice(PendingOrderContext context)
+        {
+            return context == null ? 0m : context.Item5;
+        }
+
+        private static OrderExecutionResult CreateOrderExecutionResult(bool success, bool isSimulated, string orderId, string message)
+        {
+            return Tuple.Create(success, isSimulated, orderId, message);
+        }
+
+        private static bool ExecutionSuccess(OrderExecutionResult result)
+        {
+            return result != null && result.Item1;
+        }
+
+        private static string ExecutionOrderId(OrderExecutionResult result)
+        {
+            return result == null ? null : result.Item3;
+        }
+
+        private static string ExecutionMessage(OrderExecutionResult result)
+        {
+            return result == null ? null : result.Item4;
+        }
+
+        private static int ConsensusBuyCount(IndicatorConsensus consensus)
+        {
+            return consensus == null ? 0 : consensus.Item1;
+        }
+
+        private static int ConsensusSellCount(IndicatorConsensus consensus)
+        {
+            return consensus == null ? 0 : consensus.Item2;
+        }
+
+        private static int ConsensusNeutralCount(IndicatorConsensus consensus)
+        {
+            return consensus == null ? 0 : consensus.Item3;
+        }
+
+        private static string ConsensusSignal(IndicatorConsensus consensus)
+        {
+            return consensus == null ? "NEUTRAL" : consensus.Item4;
+        }
+
+        private static double ConsensusRatio(IndicatorConsensus consensus)
+        {
+            return consensus == null ? 0 : consensus.Item5;
+        }
+
         // ── Debug output ────────────────────────────────────────────
 
         private void SafeDebug(string message)
@@ -1701,310 +1912,4 @@ using Newtonsoft.Json;
             }
         }
 
-        private struct IndicatorConsensus
-        {
-            public int BuyCount { get; set; }
-            public int SellCount { get; set; }
-            public int NeutralCount { get; set; }
-            public string Signal { get; set; }
-            public double Ratio { get; set; }
-        }
-
-    // ═════════════════════════════════════════════════════════════════
-    // JSON DTOs — match trade-ai-server Pydantic models (camelCase JSON)
-    // ═════════════════════════════════════════════════════════════════
-
-    private struct AgenticSignalRequest
-    {
-        [JsonProperty("requestId")]
-        public string RequestId { get; set; }
-
-        [JsonProperty("sessionId", NullValueHandling = NullValueHandling.Ignore)]
-        public string SessionId { get; set; }
-
-        [JsonProperty("symbol")]
-        public string Symbol { get; set; }
-
-        [JsonProperty("marketData")]
-        public MarketDataPayload MarketData { get; set; }
-
-        [JsonProperty("contextHistory")]
-        public List<ContextStep> ContextHistory { get; set; }
-
-        [JsonProperty("mode")]
-        public string Mode { get; set; }
-
-        // ── Flat compatibility fields ──
-
-        [JsonProperty("timeframe")]
-        public string Timeframe { get; set; }
-
-        [JsonProperty("lastPrice")]
-        public double LastPrice { get; set; }
-
-        [JsonProperty("open")]
-        public double Open { get; set; }
-
-        [JsonProperty("high")]
-        public double High { get; set; }
-
-        [JsonProperty("low")]
-        public double Low { get; set; }
-
-        [JsonProperty("volume")]
-        public double Volume { get; set; }
-
-        [JsonProperty("rsi", NullValueHandling = NullValueHandling.Ignore)]
-        public double? Rsi { get; set; }
-
-        [JsonProperty("ema20", NullValueHandling = NullValueHandling.Ignore)]
-        public double? Ema20 { get; set; }
-
-        [JsonProperty("ema50", NullValueHandling = NullValueHandling.Ignore)]
-        public double? Ema50 { get; set; }
-
-        [JsonProperty("macd", NullValueHandling = NullValueHandling.Ignore)]
-        public double? Macd { get; set; }
-
-        [JsonProperty("macdSignal", NullValueHandling = NullValueHandling.Ignore)]
-        public double? MacdSignal { get; set; }
-
-        [JsonProperty("alphaTrendSignal", NullValueHandling = NullValueHandling.Ignore)]
-        public string AlphaTrendSignal { get; set; }
-
-        [JsonProperty("alphaTrendMode", NullValueHandling = NullValueHandling.Ignore)]
-        public string AlphaTrendMode { get; set; }
-
-        [JsonProperty("indicatorBuyCount")]
-        public int IndicatorBuyCount { get; set; }
-
-        [JsonProperty("indicatorSellCount")]
-        public int IndicatorSellCount { get; set; }
-
-        [JsonProperty("indicatorNeutralCount")]
-        public int IndicatorNeutralCount { get; set; }
-
-        [JsonProperty("indicatorConsensus", NullValueHandling = NullValueHandling.Ignore)]
-        public string IndicatorConsensus { get; set; }
-
-        [JsonProperty("indicatorConsensusRatio", NullValueHandling = NullValueHandling.Ignore)]
-        public double? IndicatorConsensusRatio { get; set; }
-
-        [JsonProperty("atr", NullValueHandling = NullValueHandling.Ignore)]
-        public double? Atr { get; set; }
-
-        [JsonProperty("natr", NullValueHandling = NullValueHandling.Ignore)]
-        public double? Natr { get; set; }
-
-        [JsonProperty("depthBid1Size", NullValueHandling = NullValueHandling.Ignore)]
-        public double? DepthBid1Size { get; set; }
-
-        [JsonProperty("depthBid1MaxSize", NullValueHandling = NullValueHandling.Ignore)]
-        public double? DepthBid1MaxSize { get; set; }
-
-        [JsonProperty("depthQueueDropPct", NullValueHandling = NullValueHandling.Ignore)]
-        public double? DepthQueueDropPct { get; set; }
-
-        [JsonProperty("marketRegime", NullValueHandling = NullValueHandling.Ignore)]
-        public string MarketRegime { get; set; }
-
-        [JsonProperty("botPositionQty")]
-        public double BotPositionQty { get; set; }
-
-        [JsonProperty("totalAccountQty")]
-        public double TotalAccountQty { get; set; }
-
-        [JsonProperty("lockedLongTermQty")]
-        public double LockedLongTermQty { get; set; }
-
-        [JsonProperty("dailyTradeCount")]
-        public int DailyTradeCount { get; set; }
-    }
-
-    private struct MarketDataPayload
-    {
-        [JsonProperty("symbol")]
-        public string Symbol { get; set; }
-
-        [JsonProperty("dataType")]
-        public string DataType { get; set; }
-
-        [JsonProperty("payload")]
-        public Dictionary<string, object> Payload { get; set; }
-
-        [JsonProperty("timestamp")]
-        public string Timestamp { get; set; }
-    }
-
-    private struct ContextStep
-    {
-        [JsonProperty("stepNo")]
-        public int StepNo { get; set; }
-
-        [JsonProperty("symbol")]
-        public string Symbol { get; set; }
-
-        [JsonProperty("dataType")]
-        public string DataType { get; set; }
-
-        [JsonProperty("payload")]
-        public Dictionary<string, object> Payload { get; set; }
-
-        [JsonProperty("reason")]
-        public string Reason { get; set; }
-    }
-
-    private struct AgenticSignalResponse
-    {
-        [JsonProperty("requestId")]
-        public string RequestId { get; set; }
-
-        [JsonProperty("sessionId")]
-        public string SessionId { get; set; }
-
-        [JsonProperty("symbol")]
-        public string Symbol { get; set; }
-
-        [JsonProperty("action")]
-        public string Action { get; set; }
-
-        [JsonProperty("allowOrder")]
-        public bool AllowOrder { get; set; }
-
-        [JsonProperty("requiresConfirmation")]
-        public bool RequiresConfirmation { get; set; }
-
-        [JsonProperty("reason")]
-        public string Reason { get; set; }
-
-        [JsonProperty("targetSymbol")]
-        public string TargetSymbol { get; set; }
-
-        [JsonProperty("requiredDataType")]
-        public string RequiredDataType { get; set; }
-
-        [JsonProperty("fetchData")]
-        public FetchData? FetchData { get; set; }
-
-        [JsonProperty("confidenceScore")]
-        public double ConfidenceScore { get; set; }
-
-        [JsonProperty("riskScore")]
-        public double RiskScore { get; set; }
-
-        [JsonProperty("qty")]
-        public double Qty { get; set; }
-
-        [JsonProperty("orderType")]
-        public string OrderType { get; set; }
-
-        [JsonProperty("price")]
-        public double? Price { get; set; }
-
-        [JsonProperty("entryRange")]
-        public EntryRange? EntryRange { get; set; }
-
-        [JsonProperty("stopLoss")]
-        public double? StopLoss { get; set; }
-
-        [JsonProperty("targetPrice")]
-        public double? TargetPrice { get; set; }
-
-        public string GetTargetSymbol()
-        {
-            if (!string.IsNullOrWhiteSpace(TargetSymbol))
-                return TargetSymbol;
-            return FetchData.HasValue ? FetchData.Value.TargetSymbol : null;
-        }
-
-        public string GetRequiredDataType()
-        {
-            if (!string.IsNullOrWhiteSpace(RequiredDataType))
-                return RequiredDataType;
-            return FetchData.HasValue ? FetchData.Value.DataType : null;
-        }
-
-        public static AgenticSignalResponse Wait(string requestId, string sessionId, string symbol, string reason)
-        {
-            return new AgenticSignalResponse
-            {
-                RequestId = requestId,
-                SessionId = sessionId,
-                Symbol = symbol,
-                Action = "WAIT",
-                AllowOrder = false,
-                RequiresConfirmation = false,
-                Reason = reason,
-                Qty = 0,
-                OrderType = "NONE",
-                ConfidenceScore = 0,
-                RiskScore = 0
-            };
-        }
-    }
-
-    private struct FetchData
-    {
-        [JsonProperty("targetSymbol")]
-        public string TargetSymbol { get; set; }
-
-        [JsonProperty("dataType")]
-        public string DataType { get; set; }
-
-        [JsonProperty("reason")]
-        public string Reason { get; set; }
-    }
-
-    private struct EntryRange
-    {
-        [JsonProperty("min")]
-        public double Min { get; set; }
-
-        [JsonProperty("max")]
-        public double Max { get; set; }
-    }
-
-    private struct OrderResultRequest
-    {
-        [JsonProperty("requestId")]
-        public string RequestId { get; set; }
-
-        [JsonProperty("symbol")]
-        public string Symbol { get; set; }
-
-        [JsonProperty("action")]
-        public string Action { get; set; }
-
-        [JsonProperty("qty")]
-        public double Qty { get; set; }
-
-        [JsonProperty("price")]
-        public double Price { get; set; }
-
-        [JsonProperty("status")]
-        public string Status { get; set; }
-
-        [JsonProperty("matriksMessage")]
-        public string MatriksMessage { get; set; }
-
-        [JsonProperty("orderId", NullValueHandling = NullValueHandling.Ignore)]
-        public string OrderId { get; set; }
-    }
-
-    private struct PendingOrderContext
-    {
-        public string RequestId { get; set; }
-        public string Symbol { get; set; }
-        public string Action { get; set; }
-        public decimal Qty { get; set; }
-        public decimal Price { get; set; }
-    }
-
-    private struct OrderExecutionResult
-    {
-        public bool Success { get; set; }
-        public bool IsSimulated { get; set; }
-        public string OrderId { get; set; }
-        public string Message { get; set; }
-    }
     }

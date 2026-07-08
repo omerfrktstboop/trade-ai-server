@@ -21,6 +21,7 @@ def test_send_limit_order_uses_documented_signature():
     all_classes = re.findall(r"\bclass\s+(\w+)", source)
     assert all_classes == ["TradeAiAgenticBot"]
     assert "namespace " not in source
+    assert re.findall(r"\bstruct\s+(\w+)", source) == []
     assert "public class TradeAiAgenticBot : MatriksAlgo" in source
     assert (
         "SendLimitOrder(symbol, quantity, orderSide, roundedPrice, timeInForce, chartIcon)"

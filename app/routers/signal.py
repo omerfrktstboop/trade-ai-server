@@ -46,6 +46,7 @@ from app.services.bot_runtime_config import (
     get_static_bot_config_metadata,
 )
 from app.services.session_store import (
+    SessionState,
     session_store,  # v2 session store singleton
 )
 from app.services.ai_provider import get_default_provider
@@ -469,16 +470,39 @@ def _payload_get(payload: dict[str, Any], key: str, default: Any = None) -> Any:
     return default
 
 
+def _resolve_root_payload(
+    agentic: AgenticSignalRequest, session: SessionState | None
+) -> dict[str, Any]:
+    """Return the payload to build the decision ``SignalRequest`` from.
+
+    ``agentic.market_data`` holds whatever the CURRENT turn's data is — on
+    the turn that finally triggers PROCEED, that can be an auxiliary/related
+    symbol's data (e.g. THYAO DEPTH fetched for PGSUS's related-symbol check
+    — see ``RELATED_SYMBOLS`` in agent_planner.py) rather than the root
+    symbol's own data. When a session is available, prefer the root symbol's
+    own most-recently-collected step instead, so the decision (RiskEngine
+    gates, DB persistence) is never built from a different symbol's price/
+    indicator/position data than the one actually being traded.
+    """
+    if session is not None:
+        root = agentic.symbol.strip().upper()
+        for step in reversed(session.steps):
+            if step.symbol.strip().upper() == root:
+                return step.payload
+    return agentic.market_data.payload
+
+
 def _agentic_to_signal_request(
     agentic: AgenticSignalRequest,
     session_id: str = "",
+    session: SessionState | None = None,
 ) -> SignalRequest:
     """Build a :class:`SignalRequest` from the agentic marketData payload.
 
     Falls back gracefully when fields are missing — the downstream AI and
     RiskEngine handle partial data defensively.
     """
-    p = agentic.market_data.payload
+    p = _resolve_root_payload(agentic, session)
     return SignalRequest(
         requestId=agentic.request_id,
         symbol=agentic.symbol,
@@ -620,8 +644,20 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
     session_store.append_step(sess.session_id, step)
 
     # ── 4: Append contextHistory steps ─────────────────────────────────
+    # The Matriks bot rebuilds its own rolling history on every FETCH_DATA
+    # response (TradeAiAgenticBot.cs::FetchRequestedDataAsync appends the
+    # previous marketData as a "Previous marketData" step) and resends it
+    # here — but the server already recorded that same step itself when it
+    # first received that marketData (see step 3 above, on the earlier
+    # turn). Skip anything already collected so agenticSteps sent to the AI
+    # doesn't accumulate duplicate entries turn after turn.
+    already_collected = {(s.symbol.strip().upper(), s.data_type) for s in sess.steps}
     for hist_step in body.context_history:
+        key = (hist_step.symbol.strip().upper(), hist_step.data_type)
+        if key in already_collected:
+            continue
         session_store.append_step(sess.session_id, hist_step)
+        already_collected.add(key)
 
     # ── 5: Planner decides next action ──────────────────────────────────
     # Build runtime risk config once, up front, so both the planner's initial
@@ -686,7 +722,7 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
         )
 
     # ── 8: PROCEED — build bridge to AI + RiskEngine ────────────────────
-    sig_req = _agentic_to_signal_request(body, sess.session_id)
+    sig_req = _agentic_to_signal_request(body, sess.session_id, session=sess)
 
     # Runtime controls on the built SignalRequest
     sig_req, runtime_engine, _ks = await _with_runtime_controls(sig_req)

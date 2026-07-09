@@ -588,3 +588,148 @@ def test_agentic_bridge_maps_nested_technical_features() -> None:
     assert signal_request.natr == 2.8
     assert signal_request.depth_queue_drop_pct == 10.5
     assert signal_request.market_regime == "TRENDING"
+
+
+# ── 13. Related-symbol flow must not mix root/auxiliary symbol data ────────
+#
+# Regression coverage for a real production bug: for RELATED_SYMBOLS roots
+# (PGSUS/ANELE/TUPRS), the planner proceeds to AI right after the related
+# symbol's DEPTH is collected — so the request that finally triggers PROCEED
+# carries the AUXILIARY symbol's marketData, not the root's own. Before the
+# fix, _agentic_to_signal_request built the whole decision (price, RSI,
+# EMA/MACD, position qty) from that auxiliary payload while still labeling
+# the decision with the root symbol — i.e. a PGSUS decision built from
+# THYAO's price/indicators/position.
+
+
+def test_agentic_bridge_uses_root_symbols_own_step_not_related_symbol() -> None:
+    """Unit test: session has both the root's own step and a related
+    symbol's step; market_data on this turn is the related symbol's. The
+    built SignalRequest must reflect the root symbol's own data."""
+    from app.models.signal import AgenticSignalRequest, AgenticDataType, ContextStep
+    from app.routers.signal import _agentic_to_signal_request
+    from app.services.session_store import SessionState
+
+    session = SessionState(rootSymbol="PGSUS")
+    session.steps.append(ContextStep(
+        stepNo=1, symbol="PGSUS", dataType=AgenticDataType.DEPTH,
+        payload={**dict(_DEFAULT_OHLCV), "rsi": 71.5, "ema20": 123.4, "lastPrice": 55.5},
+        reason="Market data: DEPTH",
+    ))
+    session.steps.append(ContextStep(
+        stepNo=2, symbol="THYAO", dataType=AgenticDataType.DEPTH,
+        payload=dict(_DEFAULT_DEPTH),
+        reason="Market data: DEPTH",
+    ))
+
+    payload = _make_agentic_payload(symbol="PGSUS", payload=dict(_DEFAULT_DEPTH))
+    payload["marketData"]["symbol"] = "THYAO"  # this turn's data is THYAO's
+    request = AgenticSignalRequest(**payload)
+
+    signal_request = _agentic_to_signal_request(request, "sess-related", session=session)
+
+    assert signal_request.symbol == "PGSUS"
+    assert signal_request.rsi == 71.5
+    assert signal_request.ema20 == 123.4
+    assert signal_request.last_price == 55.5
+
+
+async def _load_market_snapshot(request_id: str):
+    from sqlalchemy import select
+    from app.models.db import MarketSnapshot
+
+    async with async_session_factory() as session:
+        stmt = select(MarketSnapshot).where(MarketSnapshot.request_id == request_id)
+        return (await session.execute(stmt)).scalar_one_or_none()
+
+
+def test_related_symbol_flow_persists_root_symbols_own_data(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """End-to-end: PGSUS → FETCH_DATA THYAO DEPTH → PROCEED. The persisted
+    market_snapshot for this request must carry PGSUS's own OHLCV/RSI, not
+    THYAO's DEPTH-only payload (which has no rsi/ema/price fields at all —
+    if the bug were present these would come back as None/0)."""
+    root_payload = {**dict(_DEFAULT_OHLCV), "rsi": 71.5, "ema20": 123.4, "lastPrice": 55.5}
+    p1 = _make_agentic_payload(
+        symbol="PGSUS", request_id="req-related-1", payload=root_payload,
+    )
+    r1 = _post(client, p1, auth_headers)
+    assert r1["action"] == "FETCH_DATA"
+    assert r1["targetSymbol"] == "THYAO"
+    session_id = r1["sessionId"]
+
+    ctx_history = [
+        {
+            "stepNo": 1,
+            "symbol": "PGSUS",
+            "dataType": "OHLCV",
+            "payload": root_payload,
+            "reason": "Step 1: PGSUS OHLCV",
+        },
+    ]
+    p2 = {
+        "requestId": "req-related-1",
+        "symbol": "PGSUS",
+        "mode": "PAPER",
+        "sessionId": session_id,
+        "marketData": {
+            "symbol": "THYAO",
+            "dataType": "DEPTH",
+            "payload": dict(_DEFAULT_DEPTH),
+        },
+        "contextHistory": ctx_history,
+    }
+    r2 = _post(client, p2, auth_headers)
+    assert r2["action"] != "FETCH_DATA"
+    assert r2["symbol"] == "PGSUS"
+
+    snapshot = asyncio.run(_load_market_snapshot("req-related-1"))
+    assert snapshot is not None
+    assert snapshot.symbol == "PGSUS"
+    assert snapshot.rsi == 71.5
+    assert snapshot.ema20 == 123.4
+    assert snapshot.close == 55.5
+
+
+def test_context_history_dedup_skips_already_collected_step(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    """Resending an already-recorded step via contextHistory (as the C# bot
+    does on every FETCH_DATA turn — see TradeAiAgenticBot.cs's "Previous
+    marketData" step) must not duplicate it in session.steps."""
+    p1 = _make_agentic_payload(symbol="ANELE", request_id="req-dedup-1")
+    r1 = _post(client, p1, auth_headers)
+    session_id = r1["sessionId"]
+
+    sess = session_store.get_session(session_id)
+    assert len(sess.steps) == 1
+    first_step_payload = sess.steps[0].payload
+
+    ctx_history = [
+        {
+            "stepNo": 1,
+            "symbol": "ANELE",
+            "dataType": "OHLCV",
+            "payload": first_step_payload,
+            "reason": "Previous marketData",
+        },
+    ]
+    p2 = {
+        "requestId": "req-dedup-1",
+        "symbol": "ANELE",
+        "mode": "PAPER",
+        "sessionId": session_id,
+        "marketData": {
+            "symbol": "THYAO",
+            "dataType": "DEPTH",
+            "payload": dict(_DEFAULT_DEPTH),
+        },
+        "contextHistory": ctx_history,
+    }
+    _post(client, p2, auth_headers)
+
+    sess = session_store.get_session(session_id)
+    assert sess is not None
+    keys = [(s.symbol.upper(), s.data_type.value) for s in sess.steps]
+    assert keys == [("ANELE", "OHLCV"), ("THYAO", "DEPTH")], keys

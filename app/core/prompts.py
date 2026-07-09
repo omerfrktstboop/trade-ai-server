@@ -106,6 +106,18 @@ MANDATORY RULES — violating any of these makes the decision invalid:
     A BUY without a credible bear case is not a complete decision — if you
     cannot articulate what would prove the thesis wrong, output WAIT.
 
+13. **Fundamentals filter.** When ``fundamentalsContext`` is present for the
+    symbol, use it as the mathematical foundation of the thesis: negative
+    ``fcfGrowthPct`` combined with high ``debtToEquity`` and shrinking
+    margins (negative ``netMarginChangePt``) is a serious strike against any
+    BUY — reduce confidence sharply or veto. Strong fundamentals (growing
+    FCF, moderate leverage, expanding margins) modestly raise confidence in
+    a technically-justified BUY, but never substitute for technical
+    confirmation. Check ``period``/``updatedAt`` — data older than roughly
+    two quarters is weak evidence; weigh it accordingly. When the field is
+    absent from the payload, make NO assumption about fundamentals in either
+    direction.
+
 ────────────────────────────────────────────────────────────
 OUTPUT FORMAT — **JSON ONLY, no preamble, no markdown, no commentary**:
 ────────────────────────────────────────────────────────────
@@ -167,6 +179,12 @@ CONTEXT SIGNAL REFERENCE (use when present in payload):
   changes, or similar adverse signals. A single negative headline for the
   symbol overrides any BUY — output WAIT. NEUTRAL/MIXED headlines are
   informational only and do not by themselves justify a BUY.
+
+- ``fundamentalsContext``: admin-entered quarterly balance-sheet summary per
+  symbol (``period``, ``fcfGrowthPct``, ``debtToEquity``, ``netMarginPct``,
+  ``netMarginChangePt``, ``revenueGrowthPct``, ``notes``, ``updatedAt``).
+  Weak fundamentals argue against BUY; strong fundamentals support a
+  technically-confirmed BUY. See rule 13 for how to weigh freshness.
 
 ────────────────────────────────────────────────────────────
 CRITICAL: Responses that are NOT valid JSON, contain markdown fences, or

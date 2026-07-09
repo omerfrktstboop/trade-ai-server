@@ -557,6 +557,95 @@ class TestLogDeletion:
         assert asyncio.run(_count()) == 0
 
 
+class TestResearchRanking:
+    """Unit tests for the pure ranking helpers behind /admin/research."""
+
+    def test_rr_ratio_computed_from_entry_stop_target(self):
+        from app.routers.admin import _research_rr_ratio
+
+        # entry 100, stop 95 (risk 5), target 115 (reward 15) → 3.0x
+        assert _research_rr_ratio(100.0, 95.0, 115.0) == 3.0
+
+    def test_rr_ratio_none_when_any_leg_missing(self):
+        from app.routers.admin import _research_rr_ratio
+
+        assert _research_rr_ratio(None, 95.0, 115.0) is None
+        assert _research_rr_ratio(100.0, None, 115.0) is None
+        assert _research_rr_ratio(100.0, 95.0, None) is None
+
+    def test_rr_ratio_none_when_stop_not_below_entry(self):
+        from app.routers.admin import _research_rr_ratio
+
+        assert _research_rr_ratio(100.0, 100.0, 115.0) is None
+        assert _research_rr_ratio(100.0, 105.0, 115.0) is None
+
+    def test_ranking_order_buy_by_rr_then_wait_then_sell(self):
+        from types import SimpleNamespace
+        from app.routers.admin import _research_rank_rows
+
+        def _dec(symbol, action, confidence, entry_max=None, stop=None, target=None):
+            return SimpleNamespace(
+                symbol=symbol, action=action, confidence=confidence,
+                risk_score=10.0, entry_min=entry_max, entry_max=entry_max,
+                stop_loss=stop, target_price=target, reason="r",
+                request_id=f"req-{symbol}", created_at=None,
+            )
+
+        ranked = _research_rank_rows([
+            _dec("WAITHIGH", "WAIT", 90.0),
+            _dec("BUYLOW", "BUY", 95.0, entry_max=100, stop=95, target=105),   # 1.0x
+            _dec("SELLONE", "SELL", 99.0),
+            _dec("BUYHIGH", "BUY", 60.0, entry_max=100, stop=95, target=120),  # 4.0x
+            _dec("BUYNORR", "BUY", 99.0),  # BUY without price legs
+            _dec("WAITLOW", "WAIT", 10.0),
+        ])
+
+        assert [r["symbol"] for r in ranked] == [
+            "BUYHIGH", "BUYLOW", "BUYNORR", "WAITHIGH", "WAITLOW", "SELLONE",
+        ]
+        assert ranked[0]["rank"] == 1
+        assert ranked[0]["rr"] == 4.0
+        assert ranked[2]["rr"] is None
+
+
+class TestResearchPage:
+    async def _seed_decision(self, symbol, action, confidence, *, entry=None, stop=None, target=None):
+        async with async_session_factory() as session:
+            session.add(RiskDecision(
+                request_id=f"research-{symbol}", symbol=symbol, action=action,
+                confidence=confidence, risk_score=10.0, allow_order=action == "BUY",
+                reason=f"{symbol} research seed", entry_min=entry, entry_max=entry,
+                stop_loss=stop, target_price=target, qty=10.0,
+                order_type="LIMIT", mode="PAPER",
+            ))
+            await session.commit()
+
+    def test_requires_auth(self, client: TestClient):
+        assert client.get("/admin/research").status_code == 401
+
+    def test_empty_state_lists_watchlist_as_missing(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        resp = client.get("/admin/research", headers=auth_headers)
+        assert resp.status_code == 200
+        assert "hiç değerlendirme yok" in resp.text
+        assert "THYAO" in resp.text  # in the missing-symbols section
+
+    def test_ranked_page_orders_buy_above_wait(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        asyncio.run(self._seed_decision(
+            "THYAO", "BUY", 80.0, entry=100.0, stop=95.0, target=120.0
+        ))
+        asyncio.run(self._seed_decision("AKBNK", "WAIT", 95.0))
+
+        resp = client.get("/admin/research", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.text.index("THYAO") < resp.text.index("AKBNK")
+        assert "4.00x" in resp.text  # R/R = (120-100)/(100-95)
+        assert "/admin/logs/research-THYAO" in resp.text
+
+
 class TestLocalTimeFilter:
     """DB timestamps are stored as UTC (func.now()) but the admin panel must
     display Europe/Istanbul local time — otherwise every row looks 3 hours

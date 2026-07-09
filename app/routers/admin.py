@@ -7,7 +7,7 @@ import hmac
 import json
 import logging
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -38,6 +38,12 @@ from app.services.admin_config import (
     set_admin_config_value,
 )
 from app.services.daily_trade_count import get_today_trade_counts
+from app.services.fundamentals_service import (
+    NUMERIC_FIELDS as FUNDAMENTAL_NUMERIC_FIELDS,
+    delete_fundamental,
+    list_fundamentals,
+    upsert_fundamental,
+)
 from app.services.signal_override import SELL_ALL_SENTINEL_QTY, create_override
 from app.services.trade_profile import (
     EDITABLE_FIELDS,
@@ -153,6 +159,18 @@ class TradeProfileActivateBody(BaseModel):
 class TradeProfileCloneBody(BaseModel):
     new_code: str = Field(alias="newCode")
     new_name: str = Field(alias="newName")
+
+    model_config = {"populate_by_name": True}
+
+
+class FundamentalBody(BaseModel):
+    period: str
+    fcf_growth_pct: float | None = Field(None, alias="fcfGrowthPct")
+    debt_to_equity: float | None = Field(None, alias="debtToEquity")
+    net_margin_pct: float | None = Field(None, alias="netMarginPct")
+    net_margin_change_pt: float | None = Field(None, alias="netMarginChangePt")
+    revenue_growth_pct: float | None = Field(None, alias="revenueGrowthPct")
+    notes: str | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -648,6 +666,184 @@ async def admin_trade_profiles_delete(request: Request, code: str) -> Any:
     return RedirectResponse("/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER)
 
 
+# ── Fundamentals (admin-entered quarterly balance-sheet data) ────────────────
+
+
+async def _fundamentals_page(
+    request: Request, identity: str, *, error: str | None = None
+) -> HTMLResponse:
+    async with async_session_factory() as session:
+        rows = await list_fundamentals(session)
+        allowed_raw = await get_admin_config_value(session, "allowedSymbols")
+        status_ctx = await _status_strip_context(session)
+
+    rows_by_symbol = {row.symbol: row for row in rows}
+    # Watchlist symbols first (alphabetical), then any leftover rows for
+    # symbols that have since been removed from the watchlist.
+    symbols = sorted(_split_csv_symbols(allowed_raw))
+    extra_symbols = sorted(set(rows_by_symbol) - set(symbols))
+
+    return templates.TemplateResponse(
+        request,
+        "admin/fundamentals.html",
+        {
+            "identity": identity,
+            "active": "fundamentals",
+            "symbols": symbols,
+            "extra_symbols": extra_symbols,
+            "rows_by_symbol": rows_by_symbol,
+            "error": error,
+            **status_ctx,
+        },
+    )
+
+
+@admin_router.get("/fundamentals", response_class=HTMLResponse)
+async def admin_fundamentals(request: Request) -> HTMLResponse:
+    identity = await require_admin(request)
+    return await _fundamentals_page(request, identity)
+
+
+@admin_router.post("/fundamentals/{symbol}")
+async def admin_fundamentals_upsert(request: Request, symbol: str) -> Any:
+    identity = await require_admin(request)
+    form = await request.form()
+    numeric = {
+        field: _to_float(form.get(field)) for field in FUNDAMENTAL_NUMERIC_FIELDS
+    }
+
+    try:
+        async with async_session_factory() as session:
+            await upsert_fundamental(
+                session,
+                symbol,
+                period=str(form.get("period") or ""),
+                changed_by=identity,
+                notes=str(form.get("notes") or "").strip() or None,
+                **numeric,
+            )
+    except ValueError as exc:
+        return await _fundamentals_page(request, identity, error=str(exc))
+
+    return RedirectResponse("/admin/fundamentals", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@admin_router.post("/fundamentals/{symbol}/delete")
+async def admin_fundamentals_delete(request: Request, symbol: str) -> Any:
+    identity = await require_admin(request)
+    async with async_session_factory() as session:
+        await delete_fundamental(session, symbol)
+    return RedirectResponse("/admin/fundamentals", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# ── Research report ("Fırsat Sıralaması") ────────────────────────────────────
+
+# Decisions older than this aren't ranked — the market has moved on.
+RESEARCH_FRESH_WINDOW = timedelta(hours=24)
+
+
+def _research_rr_ratio(
+    entry_max: float | None, stop_loss: float | None, target_price: float | None
+) -> float | None:
+    """Reward/risk ratio: (target - entry) / (entry - stop).
+
+    This is the "asymmetric opportunity" measure — how many units of upside
+    per unit of downside. None when any leg is missing or the stop isn't
+    below the entry (degenerate/invalid geometry).
+    """
+    if entry_max is None or stop_loss is None or target_price is None:
+        return None
+    risk = entry_max - stop_loss
+    if risk <= 0:
+        return None
+    return (target_price - entry_max) / risk
+
+
+def _research_sort_key(row: dict[str, Any]) -> tuple:
+    """BUYs first (best R/R, then confidence), then WAITs by confidence,
+    then SELLs. Rows with an R/R ratio outrank same-action rows without."""
+    priority = {"BUY": 0, "WAIT": 1, "SELL": 2}.get(row["action"], 3)
+    rr = row["rr"]
+    return (
+        priority,
+        0 if rr is not None else 1,
+        -(rr if rr is not None else 0.0),
+        -(row["confidence"] or 0.0),
+    )
+
+
+def _research_rank_rows(decisions: list[Any]) -> list[dict[str, Any]]:
+    """Turn latest-per-symbol RiskDecision rows into a ranked opportunity
+    list. Pure function so the ranking logic is unit-testable."""
+    rows: list[dict[str, Any]] = []
+    for d in decisions:
+        rows.append(
+            {
+                "symbol": d.symbol,
+                "action": d.action,
+                "confidence": d.confidence,
+                "risk_score": d.risk_score,
+                "rr": _research_rr_ratio(d.entry_max, d.stop_loss, d.target_price),
+                "entry_min": d.entry_min,
+                "entry_max": d.entry_max,
+                "stop_loss": d.stop_loss,
+                "target_price": d.target_price,
+                "reason": d.reason,
+                "request_id": d.request_id,
+                "created_at": d.created_at,
+            }
+        )
+    rows.sort(key=_research_sort_key)
+    for rank, row in enumerate(rows, start=1):
+        row["rank"] = rank
+    return rows
+
+
+@admin_router.get("/research", response_class=HTMLResponse)
+async def admin_research(request: Request) -> HTMLResponse:
+    """Rank the watchlist's most recent evaluations by asymmetric
+    opportunity. Makes NO new AI calls — it reads what the bot's normal
+    scan cycle already produced."""
+    identity = await require_admin(request)
+    async with async_session_factory() as session:
+        decisions = await _latest(session, RiskDecision, 500)
+        allowed_raw = await get_admin_config_value(session, "allowedSymbols")
+        status_ctx = await _status_strip_context(session)
+
+    # decisions are created_at DESC — first hit per symbol is its latest.
+    latest_by_symbol: dict[str, Any] = {}
+    for d in decisions:
+        symbol = d.symbol.strip().upper()
+        if symbol not in latest_by_symbol:
+            latest_by_symbol[symbol] = d
+
+    cutoff = datetime.now(UTC) - RESEARCH_FRESH_WINDOW
+    fresh = []
+    for d in latest_by_symbol.values():
+        created = d.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=UTC)
+        if created >= cutoff:
+            fresh.append(d)
+
+    ranked = _research_rank_rows(fresh)
+    ranked_symbols = {row["symbol"] for row in ranked}
+    missing_symbols = sorted(_split_csv_symbols(allowed_raw) - ranked_symbols)
+
+    return templates.TemplateResponse(
+        request,
+        "admin/research.html",
+        {
+            "identity": identity,
+            "active": "research",
+            "ranked": ranked,
+            "missing_symbols": missing_symbols,
+            "window_hours": int(RESEARCH_FRESH_WINDOW.total_seconds() // 3600),
+            **status_ctx,
+        },
+    )
+
+
 async def _logs_page(
     request: Request, identity: str, *, error: str | None = None
 ) -> HTMLResponse:
@@ -1092,6 +1288,63 @@ async def admin_api_delete_trade_profile(request: Request, code: str) -> dict[st
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok", "code": code}
+
+
+def _fundamental_dict(row: Any) -> dict[str, Any]:
+    return {
+        "symbol": row.symbol,
+        "period": row.period,
+        "fcfGrowthPct": row.fcf_growth_pct,
+        "debtToEquity": row.debt_to_equity,
+        "netMarginPct": row.net_margin_pct,
+        "netMarginChangePt": row.net_margin_change_pt,
+        "revenueGrowthPct": row.revenue_growth_pct,
+        "notes": row.notes,
+        "updatedBy": row.updated_by,
+        "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+@admin_api_router.get("/fundamentals")
+async def admin_api_list_fundamentals(request: Request) -> list[dict[str, Any]]:
+    await require_admin(request)
+    async with async_session_factory() as session:
+        rows = await list_fundamentals(session)
+    return [_fundamental_dict(row) for row in rows]
+
+
+@admin_api_router.put("/fundamentals/{symbol}")
+async def admin_api_upsert_fundamental(
+    request: Request, symbol: str, body: FundamentalBody
+) -> dict[str, Any]:
+    identity = await require_admin(request)
+    try:
+        async with async_session_factory() as session:
+            row = await upsert_fundamental(
+                session,
+                symbol,
+                period=body.period,
+                changed_by=identity,
+                notes=body.notes,
+                fcf_growth_pct=body.fcf_growth_pct,
+                debt_to_equity=body.debt_to_equity,
+                net_margin_pct=body.net_margin_pct,
+                net_margin_change_pt=body.net_margin_change_pt,
+                revenue_growth_pct=body.revenue_growth_pct,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _fundamental_dict(row)
+
+
+@admin_api_router.delete("/fundamentals/{symbol}")
+async def admin_api_delete_fundamental(request: Request, symbol: str) -> dict[str, str]:
+    await require_admin(request)
+    async with async_session_factory() as session:
+        existed = await delete_fundamental(session, symbol)
+    if not existed:
+        raise HTTPException(status_code=404, detail=f"No fundamentals for {symbol}")
+    return {"status": "ok", "symbol": symbol.strip().upper()}
 
 
 async def _config_lookup(session: Any) -> dict[str, AdminConfigItem]:

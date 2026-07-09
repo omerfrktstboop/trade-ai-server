@@ -51,6 +51,7 @@ from app.services.session_store import (
 )
 from app.services.ai_provider import get_default_provider
 from app.services.daily_trade_count import get_today_trade_counts
+from app.services.fundamentals_service import get_fundamentals_context
 from app.services.news_service import get_news_context
 from app.services.risk_engine import RiskDecision, RiskEngine
 from app.services.signal_override import consume_override, override_to_raw_decision
@@ -96,15 +97,18 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
         await _persist_to_db(body, payload, raw, response)
         return response
 
-    # ── 1. Fetch external context (news only — fund/broker flow context
-    # generation is disabled until a real data source is wired up; see
-    # app/services/fund_scanner.py and app/services/broker_flow_service.py)
+    # ── 1. Fetch external context (news + admin-entered fundamentals —
+    # fund/broker flow context generation stays disabled until a real data
+    # source is wired up; see app/services/fund_scanner.py and
+    # app/services/broker_flow_service.py)
     news_context = await get_news_context([body.symbol])
+    fundamentals_context = await get_fundamentals_context([body.symbol])
 
     # ── 2. Build payload for the AI provider ──────────────────────────────
     payload = _build_payload(
         body,
         news_context,
+        fundamentals_context=fundamentals_context,
         active_config=runtime_engine.config,
     )
 
@@ -141,6 +145,7 @@ def _build_payload(
     news_context: dict[str, Any] | None = None,
     fund_context: dict[str, Any] | None = None,
     broker_flow_context: dict[str, Any] | None = None,
+    fundamentals_context: dict[str, Any] | None = None,
     active_config: RiskConfig | None = None,
 ) -> dict:
     """Convert a SignalRequest into a plain dict for the AI provider.
@@ -189,6 +194,8 @@ def _build_payload(
         payload["fundContext"] = fund_context
     if broker_flow_context:
         payload["brokerFlowContext"] = broker_flow_context
+    if fundamentals_context:
+        payload["fundamentalsContext"] = fundamentals_context
     return payload
 
 
@@ -747,14 +754,17 @@ async def evaluate_signal_agent(body: AgenticSignalRequest) -> AgenticSignalResp
     # Runtime controls on the built SignalRequest
     sig_req, runtime_engine, _ks = await _with_runtime_controls(sig_req)
 
-    # Fetch external context (news only — fund/broker flow context
-    # generation is disabled until a real data source is wired up; see
-    # app/services/fund_scanner.py and app/services/broker_flow_service.py)
+    # Fetch external context (news + admin-entered fundamentals —
+    # fund/broker flow context generation stays disabled until a real data
+    # source is wired up; see app/services/fund_scanner.py and
+    # app/services/broker_flow_service.py)
     news_context = await get_news_context([sig_req.symbol])
+    fundamentals_context = await get_fundamentals_context([sig_req.symbol])
 
     payload = _build_payload(
         sig_req,
         news_context=news_context,
+        fundamentals_context=fundamentals_context,
         active_config=runtime_engine.config,
     )
     # Inject accumulated session steps into AI payload

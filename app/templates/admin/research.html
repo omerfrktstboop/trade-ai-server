@@ -1,0 +1,65 @@
+{% extends "admin/base.html" %}
+{% block title %}Araştırma{% endblock %}
+{% block page_title %}Fırsat Sıralaması{% endblock %}
+{% block content %}
+
+<div class="card mb-24" style="border-color:var(--accent)">
+  <div class="section-title mb-16" style="color:var(--accent)">🔬 Asimetrik fırsat sıralaması</div>
+  <p class="text-muted text-sm">
+    Watchlist'teki sembollerin son {{ window_hours }} saat içindeki EN GÜNCEL değerlendirmeleri,
+    risk/getiri oranına göre sıralanır: R/G = (hedef − giriş) / (giriş − stop) — 1 birim riske
+    karşılık kaç birim getiri. BUY kararları önce (en yüksek R/G üstte), sonra WAIT'ler (güvene göre),
+    en sonda SELL'ler. Bu sayfa yeni AI çağrısı yapmaz; botun mevcut tarama döngüsünün ürettiği
+    kararları sıralar.
+  </p>
+</div>
+
+<div class="mb-24">
+  <div class="flex-between mb-16">
+    <h2 class="section-title">Sıralama</h2>
+    <span class="text-sm text-muted">{{ ranked|length }} sembol değerlendirildi</span>
+  </div>
+  <div class="table-container">
+    <table>
+      <thead><tr><th>#</th><th>Sembol</th><th>Karar</th><th>Güven</th><th>Risk</th><th>R/G</th><th>Giriş</th><th>Stop</th><th>Hedef</th><th>Neden</th><th>Zaman</th></tr></thead>
+      <tbody>
+        {% for row in ranked %}
+        <tr>
+          <td><strong>{{ row.rank }}</strong></td>
+          <td><strong>{{ row.symbol }}</strong></td>
+          <td>
+            <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
+          </td>
+          <td>{{ row.confidence }}</td>
+          <td>{{ row.risk_score }}</td>
+          <td class="mono">{% if row.rr is not none %}{{ "%.2f"|format(row.rr) }}x{% else %}—{% endif %}</td>
+          <td class="mono">{% if row.entry_min is not none %}{{ row.entry_min }}–{{ row.entry_max }}{% else %}—{% endif %}</td>
+          <td class="mono">{{ row.stop_loss if row.stop_loss is not none else '—' }}</td>
+          <td class="mono">{{ row.target_price if row.target_price is not none else '—' }}</td>
+          <td class="text-muted" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;" title="{{ row.reason }}">{{ row.reason }}</td>
+          <td class="mono text-muted"><a href="/admin/logs/{{ row.request_id }}" class="log-link">{{ row.created_at | local_time }}</a></td>
+        </tr>
+        {% else %}
+        <tr class="empty-row"><td colspan="11">Son {{ window_hours }} saatte hiç değerlendirme yok — bot çalışırken bu sayfa dolar</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if missing_symbols %}
+<div class="card">
+  <div class="section-title mb-16">Güncel verisi olmayan semboller</div>
+  <p class="text-muted text-sm mb-16">
+    Bu watchlist sembolleri için son {{ window_hours }} saatte değerlendirme kaydı yok
+    (bot kapalı olabilir ya da sembol yeni eklenmiş olabilir):
+  </p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    {% for symbol in missing_symbols %}
+    <span class="badge badge-neutral">{{ symbol }}</span>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

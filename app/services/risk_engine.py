@@ -230,13 +230,22 @@ class RiskEngine:
         if technical_block_reason:
             return self._block(request, technical_block_reason)
 
-        threshold = self.config.get_min_confidence(action.value)
-        confidence_ok = decision.confidence >= threshold
-
-        if not confidence_ok:
-            reasons.append(
-                f"Confidence {decision.confidence:.1f} < threshold {threshold:.0f}"
-            )
+        if action in (SignalAction.BUY, SignalAction.SELL):
+            threshold = self.config.get_min_confidence(action.value)
+            confidence_ok = decision.confidence >= threshold
+            if not confidence_ok:
+                reasons.append(
+                    f"Confidence {decision.confidence:.1f} < threshold {threshold:.0f}"
+                )
+        else:
+            # WAIT (or any non-BUY/SELL action) has no meaningful confidence
+            # gate — get_min_confidence()'s 100.0 fallback is for unknown
+            # action values, not a real threshold, and allow_order is forced
+            # false for WAIT regardless (see mode gates below). Attaching
+            # "Confidence X < threshold 100" to a WAIT reason was misleading:
+            # it implied a runaway 100%-confidence requirement that doesn't
+            # exist in any trade profile.
+            confidence_ok = True
 
         # ── 8. Mode-based allowOrder / requiresConfirmation ─────────
         if request.mode == SignalMode.PAPER:

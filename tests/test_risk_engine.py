@@ -443,6 +443,19 @@ class TestConfidenceThreshold:
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
 
+    def test_wait_decision_does_not_get_misleading_threshold_100_note(self):
+        """A WAIT decision has no meaningful confidence gate — get_min_confidence's
+        100.0 fallback (for unrecognized action values) must not leak into the
+        reason text as if a real 100%-confidence threshold were configured."""
+        engine = RiskEngine(_cfg(min_confidence_for_buy=75, min_confidence_for_sell=70))
+        req = _make_request(mode=SignalMode.LIVE)
+        dec = RiskDecision(action=SignalAction.WAIT, confidence=20.0, reason="No clear signal")
+        resp = engine.evaluate(req, dec)
+        assert resp.action == SignalAction.WAIT
+        assert resp.allow_order is False
+        assert "threshold" not in resp.reason
+        assert resp.reason == "No clear signal"
+
 
 class TestInvalidAction:
     """Check 8: Null/unknown action defaults to WAIT."""

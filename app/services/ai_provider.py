@@ -125,6 +125,14 @@ def _normalize_decision(raw: dict[str, Any]) -> dict[str, Any]:
         if field in raw:
             result[field] = raw[field]
 
+    # bear_case — informational only (persisted in raw_response, shown in the
+    # admin log detail view); never feeds RiskEngine. Without this pass-through
+    # the whitelist above would silently drop it.
+    for alias in ("bear_case", "bearCase"):
+        if alias in raw and raw[alias] is not None:
+            result["bear_case"] = str(raw[alias])
+            break
+
     return result
 
 
@@ -220,7 +228,10 @@ class DeepSeekProvider(AiProvider):
             "model": self.model,
             "messages": messages,
             "temperature": 0.3,
-            "max_tokens": 300,
+            # 500 (was 300): the mandatory bear_case field for BUYs adds 1-2
+            # sentences to the JSON output — a truncated response fails
+            # _extract_json and falls back to WAIT, so leave headroom.
+            "max_tokens": 500,
         }
 
         t0 = time.monotonic()

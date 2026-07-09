@@ -214,6 +214,33 @@ class TestNormalizeDecision:
         assert "entry_range" not in result
         assert "entryRange" not in result
 
+    def test_bear_case_snake_case_preserved(self):
+        """bear_case must survive normalization — it's persisted in
+        raw_response and shown in the admin log detail view. The whitelist
+        would otherwise silently drop it."""
+        result = _normalize_decision(
+            {
+                "action": "BUY",
+                "confidence": 80,
+                "bear_case": "Thesis fails if RSI breaks below 40 with volume.",
+            }
+        )
+        assert result["bear_case"] == "Thesis fails if RSI breaks below 40 with volume."
+
+    def test_bear_case_camel_case_preserved(self):
+        result = _normalize_decision(
+            {
+                "action": "BUY",
+                "confidence": 80,
+                "bearCase": "Fails on negative KAP filing.",
+            }
+        )
+        assert result["bear_case"] == "Fails on negative KAP filing."
+
+    def test_bear_case_absent_when_not_provided(self):
+        result = _normalize_decision({"action": "WAIT", "confidence": 50})
+        assert "bear_case" not in result
+
 
 # ── DeepSeek provider — async decide tests ─────────────────────────────────────
 

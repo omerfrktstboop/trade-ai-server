@@ -64,6 +64,27 @@ class TestTradingSystemPrompt:
         assert "pricesource" in prompt
         assert "stale" in prompt or "wait" in prompt
 
+    def test_asymmetric_risk_reward_persona(self):
+        """Persona: senior PM taking only asymmetric risk/reward trades."""
+        prompt = get_trading_system_prompt().lower()
+        assert "asymmetric" in prompt
+        assert "portfolio manager" in prompt
+        assert "hype" in prompt
+
+    def test_red_lines_rule(self):
+        """Rule 11: momentum/popularity alone never justifies BUY; theses
+        must cite concrete payload signals."""
+        prompt = get_trading_system_prompt().lower()
+        assert "momentum or popularity alone" in prompt
+        assert "two" in prompt and "independent" in prompt
+
+    def test_bear_case_rule_and_output_field(self):
+        """Rule 12: every BUY must include a bear_case field, and the
+        OUTPUT FORMAT documents it."""
+        prompt = get_trading_system_prompt()
+        assert "bear_case" in prompt
+        assert "refute" in prompt.lower() or "refutes" in prompt.lower()
+
     def test_allowed_symbols_rule(self):
         prompt = get_trading_system_prompt()
         assert "allowedsymbols" in prompt.lower()

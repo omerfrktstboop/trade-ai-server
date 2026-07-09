@@ -424,6 +424,43 @@ class TestOhlcReliableFlag:
         assert payload["ohlcReliable"] is None
 
 
+class TestQuoteReliableFlag:
+    """quoteReliable/priceSource must survive parsing and reach the
+    AI-facing payload — when the live quote feed is briefly unavailable,
+    Matriks substitutes its last known valid quote (up to 8h old) rather
+    than sending a raw zero, and flags this so the AI doesn't treat a
+    stale lastPrice as a fresh live tick."""
+
+    def test_signal_request_accepts_quote_reliable_alias(self):
+        req = _req(quoteReliable=False, priceSource="LAST_VALID")
+        assert req.quote_reliable is False
+        assert req.price_source == "LAST_VALID"
+
+    def test_signal_request_defaults_to_none(self):
+        req = _req()
+        assert req.quote_reliable is None
+        assert req.price_source is None
+        assert req.ohlc_source is None
+
+    def test_build_payload_includes_quote_reliable_and_sources(self):
+        from app.routers.signal import _build_payload
+
+        req = _req(quoteReliable=False, priceSource="ZERO_UNAVAILABLE", ohlcSource="QUOTE_FALLBACK")
+        payload = _build_payload(req)
+
+        assert payload["quoteReliable"] is False
+        assert payload["priceSource"] == "ZERO_UNAVAILABLE"
+        assert payload["ohlcSource"] == "QUOTE_FALLBACK"
+
+    def test_build_payload_includes_none_when_not_provided(self):
+        from app.routers.signal import _build_payload
+
+        req = _req()
+        payload = _build_payload(req)
+        assert payload["quoteReliable"] is None
+        assert payload["priceSource"] is None
+
+
 class TestDepthReliableFlag:
     def test_signal_request_accepts_depth_reliable_alias(self):
         req = _req(depthReliable=False, depthQueueDropPct=95.0)

@@ -119,6 +119,14 @@ class SignalRequest(BaseModel):
     # TradeAiAgenticBot.cs). When false, the AI must not treat the flat range
     # as evidence of real price action.
     ohlc_reliable: Optional[bool] = Field(None, alias="ohlcReliable")
+    ohlc_source: Optional[str] = Field(None, alias="ohlcSource")
+
+    # Data-quality flag for lastPrice itself: when the live quote is zero
+    # (feed hiccup), the bot falls back to the last known valid quote (up to
+    # 8h old — see ReadMarketQuote in TradeAiAgenticBot.cs) rather than
+    # sending a raw zero. When false, lastPrice is not a fresh live tick.
+    quote_reliable: Optional[bool] = Field(None, alias="quoteReliable")
+    price_source: Optional[str] = Field(None, alias="priceSource")
 
     # Technical indicators (optional — some timeframes / providers omit these)
     rsi: Optional[float] = None

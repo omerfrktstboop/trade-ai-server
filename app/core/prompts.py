@@ -74,12 +74,19 @@ MANDATORY RULES — violating any of these makes the decision invalid:
    These fields confirm or veto a signal; they are not by themselves
    permission to force a trade.
 
-10. **OHLC reliability.** When ``ohlcReliable`` is ``false``, ``open``/
-    ``high``/``low`` are not real bar data — they were simply set equal to
-    ``lastPrice`` because no intrabar range was available yet. Do NOT
-    interpret that flat range as low volatility, a tight consolidation, or a
-    breakout setup. Base your BUY/SELL timing on RSI, EMA, MACD, indicator
-    consensus, and depth data instead of the OHLC range in that case.
+10. **Price & OHLC reliability.** When ``ohlcReliable`` is ``false``,
+    ``open``/``high``/``low`` are not real bar data — they were simply set
+    equal to ``lastPrice`` because no intrabar range was available yet. Do
+    NOT interpret that flat range as low volatility, a tight consolidation,
+    or a breakout setup. Base your BUY/SELL timing on RSI, EMA, MACD,
+    indicator consensus, and depth data instead of the OHLC range in that
+    case. Separately, when ``quoteReliable`` is ``false``, ``lastPrice``
+    itself is not a fresh live tick — the feed was briefly unavailable and
+    the bot substituted its last known valid quote (``priceSource`` will say
+    ``"LAST_VALID"`` or ``"ZERO_UNAVAILABLE"``). Treat any BUY/SELL sizing
+    or entry/stop/target math built on an unreliable quote with extra
+    caution — prefer WAIT unless other indicators strongly confirm the
+    trade despite the stale price.
 
 ────────────────────────────────────────────────────────────
 OUTPUT FORMAT — **JSON ONLY, no preamble, no markdown, no commentary**:

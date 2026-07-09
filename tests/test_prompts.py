@@ -56,6 +56,14 @@ class TestTradingSystemPrompt:
         assert "depthreliable" in prompt
         assert "zero depth" in prompt or "unreliable" in prompt
 
+    def test_quote_reliability_rule(self):
+        """quoteReliable=false means lastPrice is a stale fallback, not a
+        fresh live tick — the AI should be extra cautious."""
+        prompt = get_trading_system_prompt().lower()
+        assert "quotereliable" in prompt
+        assert "pricesource" in prompt
+        assert "stale" in prompt or "wait" in prompt
+
     def test_allowed_symbols_rule(self):
         prompt = get_trading_system_prompt()
         assert "allowedsymbols" in prompt.lower()

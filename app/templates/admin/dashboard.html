@@ -58,7 +58,7 @@
           <td>{% if row.allow_order %}<span class="status status-ok">Evet</span>{% else %}<span class="status status-danger">Hayır</span>{% endif %}</td>
           <td><span class="badge {% if row.mode == 'LIVE' %}badge-live{% elif row.mode == 'PAPER' %}badge-paper{% else %}badge-manual{% endif %}">{{ row.mode }}</span></td>
           <td class="text-muted" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="{{ row.reason }}">{{ row.reason }}</td>
-          <td class="mono text-muted">{{ row.created_at }}</td>
+          <td class="mono text-muted">{{ row.created_at | local_time }}</td>
         </tr>
         {% else %}
         <tr class="empty-row"><td colspan="7">Henüz risk kararı yok</td></tr>
@@ -87,7 +87,7 @@
           <td>{{ row.qty }}</td>
           <td><span class="status {% if row.status == 'FILLED' %}status-ok{% elif row.status == 'REJECTED' %}status-danger{% else %}status-idle{% endif %}">{{ row.status }}</span></td>
           <td><span class="badge {% if row.mode == 'LIVE' %}badge-live{% elif row.mode == 'PAPER' %}badge-paper{% else %}badge-manual{% endif %}">{{ row.mode }}</span></td>
-          <td class="mono text-muted">{{ row.created_at }}</td>
+          <td class="mono text-muted">{{ row.created_at | local_time }}</td>
         </tr>
         {% else %}
         <tr class="empty-row"><td colspan="7">Henüz emir logu yok</td></tr>

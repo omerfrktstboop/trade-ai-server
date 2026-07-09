@@ -71,7 +71,7 @@
               <button class="btn btn-outline-danger btn-sm" type="submit">Uygula</button>
             </form>
           </td>
-          <td class="mono text-muted">{{ row.updated_at }}</td>
+          <td class="mono text-muted">{{ row.updated_at | local_time }}</td>
         </tr>
         {% else %}
         <tr class="empty-row"><td colspan="9">Aktif bot pozisyonu yok</td></tr>
@@ -96,7 +96,7 @@
           <td class="mono">{{ row.qty }}</td>
           <td class="mono">{{ row.avg_price }}</td>
           <td>{{ row.locked_by or '—' }}</td>
-          <td class="mono text-muted">{{ row.created_at }}</td>
+          <td class="mono text-muted">{{ row.created_at | local_time }}</td>
         </tr>
         {% else %}
         <tr class="empty-row"><td colspan="5">Kilitli pozisyon yok</td></tr>

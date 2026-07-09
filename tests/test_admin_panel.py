@@ -555,3 +555,35 @@ class TestLogDeletion:
                 return len((await session.execute(select(ConfigAuditLog))).scalars().all())
 
         assert asyncio.run(_count()) == 0
+
+
+class TestLocalTimeFilter:
+    """DB timestamps are stored as UTC (func.now()) but the admin panel must
+    display Europe/Istanbul local time — otherwise every row looks 3 hours
+    behind the real wall clock."""
+
+    def test_converts_naive_utc_to_istanbul(self):
+        from datetime import datetime
+        from app.routers.admin import _local_time
+
+        # SQLite returns naive datetimes for DateTime(timezone=True) columns
+        # written via func.now() — treated as UTC.
+        naive_utc = datetime(2026, 7, 9, 8, 49, 53)
+        assert _local_time(naive_utc) == "2026-07-09 11:49:53"
+
+    def test_converts_aware_utc_to_istanbul(self):
+        from datetime import UTC, datetime
+        from app.routers.admin import _local_time
+
+        aware_utc = datetime(2026, 7, 9, 8, 49, 53, tzinfo=UTC)
+        assert _local_time(aware_utc) == "2026-07-09 11:49:53"
+
+    def test_none_renders_dash(self):
+        from app.routers.admin import _local_time
+
+        assert _local_time(None) == "—"
+
+    def test_registered_as_jinja_filter(self):
+        from app.routers.admin import templates
+
+        assert "local_time" in templates.env.filters

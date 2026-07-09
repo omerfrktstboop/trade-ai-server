@@ -7,8 +7,10 @@ import hmac
 import json
 import logging
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -58,6 +60,22 @@ admin_api_router = APIRouter(tags=["Admin API"])
 templates = Jinja2Templates(
     directory=str(Path(__file__).resolve().parent.parent / "templates")
 )
+
+_DISPLAY_TZ = ZoneInfo("Europe/Istanbul")
+
+
+def _local_time(value: datetime | None) -> str:
+    """Render a DB timestamp (stored as UTC via func.now()) in Europe/Istanbul
+    local time for the admin panel — DB values stay UTC, only the display
+    layer converts, so sorting/comparisons elsewhere are unaffected."""
+    if value is None:
+        return "—"
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(_DISPLAY_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+templates.env.filters["local_time"] = _local_time
 
 logger = logging.getLogger(__name__)
 

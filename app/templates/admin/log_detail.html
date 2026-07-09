@@ -13,7 +13,7 @@
     <div><strong>Request ID:</strong> <span class="mono">{{ request_id }}</span></div>
     {% if snapshot %}
     <div class="mt-16"><strong>Symbol:</strong> {{ snapshot.symbol }} &nbsp; <strong>Timeframe:</strong> {{ snapshot.timeframe }} &nbsp; <strong>Mode:</strong> <span class="badge {% if snapshot.mode == 'LIVE' %}badge-live{% elif snapshot.mode == 'PAPER' %}badge-paper{% else %}badge-info{% endif %}">{{ snapshot.mode }}</span></div>
-    <div class="mt-16 text-muted">{{ snapshot.created_at }}</div>
+    <div class="mt-16 text-muted">{{ snapshot.created_at | local_time }}</div>
     {% else %}
     <div class="mt-16 text-muted">No market snapshot found for this request_id.</div>
     {% endif %}
@@ -135,7 +135,7 @@
           <td><span class="status {% if row.status == 'FILLED' %}status-ok{% elif row.status == 'REJECTED' %}status-danger{% else %}status-idle{% endif %}">{{ row.status }}</span></td>
           <td class="mono text-muted">{{ row.order_id or '—' }}</td>
           <td class="text-muted">{{ row.matrix_message or '—' }}</td>
-          <td class="mono text-muted">{{ row.created_at }}</td>
+          <td class="mono text-muted">{{ row.created_at | local_time }}</td>
         </tr>
         {% endfor %}
       </tbody>

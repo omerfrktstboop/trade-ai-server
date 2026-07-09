@@ -42,7 +42,7 @@
             </td>
             <td>{{ row.confidence if row.confidence is not none else '—' }}</td>
             <td class="text-muted">{{ row.model or '—' }}</td>
-            <td class="mono text-muted">{{ row.created_at }}</td>
+            <td class="mono text-muted">{{ row.created_at | local_time }}</td>
           </tr>
           {% else %}
           <tr class="empty-row"><td colspan="7">Henüz AI kararı yok</td></tr>
@@ -74,7 +74,7 @@
             </td>
             <td>{% if row.allow_order %}<span class="status status-ok">Evet</span>{% else %}<span class="status status-danger">Hayır</span>{% endif %}</td>
             <td class="text-muted" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;" title="{{ row.reason }}">{{ row.reason }}</td>
-            <td class="mono text-muted">{{ row.created_at }}</td>
+            <td class="mono text-muted">{{ row.created_at | local_time }}</td>
           </tr>
           {% else %}
           <tr class="empty-row"><td colspan="7">Henüz risk kararı yok</td></tr>
@@ -106,7 +106,7 @@
             </td>
             <td class="mono">{{ row.qty }}</td>
             <td><span class="status {% if row.status == 'FILLED' %}status-ok{% elif row.status == 'REJECTED' %}status-danger{% else %}status-idle{% endif %}">{{ row.status }}</span></td>
-            <td class="mono text-muted">{{ row.created_at }}</td>
+            <td class="mono text-muted">{{ row.created_at | local_time }}</td>
           </tr>
           {% else %}
           <tr class="empty-row"><td colspan="7">Henüz emir logu yok</td></tr>
@@ -136,7 +136,7 @@
             <td class="mono">{{ row.new_value }}</td>
             <td>{{ row.changed_by or '—' }}</td>
             <td class="text-muted" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="{{ row.reason }}">{{ row.reason }}</td>
-            <td class="mono text-muted">{{ row.created_at }}</td>
+            <td class="mono text-muted">{{ row.created_at | local_time }}</td>
           </tr>
           {% else %}
           <tr class="empty-row"><td colspan="7">Henüz config değişikliği yok</td></tr>

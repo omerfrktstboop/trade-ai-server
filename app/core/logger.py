@@ -7,14 +7,21 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
 LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "signal.log"
+
+# Timestamps are written in Europe/Istanbul local time (with an explicit
+# offset, so still unambiguous/machine-parseable) rather than UTC, since
+# this file exists for humans to read while debugging — a raw UTC stamp
+# reads 3 hours behind the wall clock for a BIST-only deployment.
+_LOG_TZ = ZoneInfo("Europe/Istanbul")
 
 
 def _ensure_log_dir() -> None:
@@ -37,7 +44,7 @@ def log_signal_evaluation(
     _ensure_log_dir()
 
     entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(_LOG_TZ).isoformat(),
         "requestId": request_id,
         "symbol": symbol,
         "mode": mode,

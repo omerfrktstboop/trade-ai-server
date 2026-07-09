@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.config import settings
 from app.db.session import async_session_factory
@@ -58,8 +59,18 @@ templates = Jinja2Templates(
     directory=str(Path(__file__).resolve().parent.parent / "templates")
 )
 
+logger = logging.getLogger(__name__)
+
 ADMIN_COOKIE_NAME = "trade_ai_admin"
 ADMIN_COOKIE_TTL_SECONDS = 8 * 60 * 60
+
+# Log tables deletable from /admin/logs, keyed by URL slug.
+LOG_TABLES: dict[str, Any] = {
+    "ai-decisions": AiDecision,
+    "risk-decisions": RiskDecision,
+    "order-logs": OrderLog,
+    "audit-logs": ConfigAuditLog,
+}
 
 
 def _split_csv_symbols(raw: str) -> set[str]:
@@ -619,9 +630,9 @@ async def admin_trade_profiles_delete(request: Request, code: str) -> Any:
     return RedirectResponse("/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER)
 
 
-@admin_router.get("/logs", response_class=HTMLResponse)
-async def admin_logs(request: Request) -> HTMLResponse:
-    identity = await require_admin(request)
+async def _logs_page(
+    request: Request, identity: str, *, error: str | None = None
+) -> HTMLResponse:
     async with async_session_factory() as session:
         ai_decisions = await _latest(session, AiDecision, 20)
         risk_decisions = await _latest(session, RiskDecision, 20)
@@ -639,9 +650,75 @@ async def admin_logs(request: Request) -> HTMLResponse:
             "risk_decisions": risk_decisions,
             "order_logs": order_logs,
             "audit_logs": audit_logs,
+            "confirmation": RISKY_CONFIRMATION,
+            "error": error,
             **status_ctx,
         },
     )
+
+
+@admin_router.get("/logs", response_class=HTMLResponse)
+async def admin_logs(request: Request) -> HTMLResponse:
+    identity = await require_admin(request)
+    return await _logs_page(request, identity)
+
+
+def _log_table_or_404(table: str) -> Any:
+    model = LOG_TABLES.get(table)
+    if model is None:
+        raise HTTPException(status_code=404, detail=f"Unknown log table: {table}")
+    return model
+
+
+@admin_router.post("/logs/{table}/delete-all")
+async def admin_logs_delete_all(request: Request, table: str) -> Any:
+    identity = await require_admin(request)
+    model = _log_table_or_404(table)
+    form = await request.form()
+    reason = str(form.get("reason") or "Delete all logs")
+    confirmation = str(form.get("confirmation") or "")
+
+    if confirmation != RISKY_CONFIRMATION:
+        return await _logs_page(
+            request, identity, error=f"delete-all requires confirmation={RISKY_CONFIRMATION}"
+        )
+
+    async with async_session_factory() as session:
+        result = await session.execute(delete(model))
+        await session.commit()
+
+    logger.warning(
+        "Admin %s deleted ALL %d rows from %s (reason: %s)",
+        identity, result.rowcount or 0, table, reason,
+    )
+    return RedirectResponse("/admin/logs", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@admin_router.post("/logs/{table}/delete-selected")
+async def admin_logs_delete_selected(request: Request, table: str) -> Any:
+    identity = await require_admin(request)
+    model = _log_table_or_404(table)
+    form = await request.form()
+    reason = str(form.get("reason") or "Delete selected logs")
+    confirmation = str(form.get("confirmation") or "")
+    ids = [int(raw) for raw in form.getlist("ids") if str(raw).strip().isdigit()]
+
+    if confirmation != RISKY_CONFIRMATION:
+        return await _logs_page(
+            request, identity, error=f"delete-selected requires confirmation={RISKY_CONFIRMATION}"
+        )
+    if not ids:
+        return await _logs_page(request, identity, error="Silinecek kayıt seçilmedi")
+
+    async with async_session_factory() as session:
+        result = await session.execute(delete(model).where(model.id.in_(ids)))
+        await session.commit()
+
+    logger.warning(
+        "Admin %s deleted %d selected rows from %s (reason: %s)",
+        identity, result.rowcount or 0, table, reason,
+    )
+    return RedirectResponse("/admin/logs", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @admin_router.get("/logs/{request_id}", response_class=HTMLResponse)

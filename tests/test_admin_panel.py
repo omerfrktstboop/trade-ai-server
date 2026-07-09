@@ -371,3 +371,187 @@ class TestLogsListBugFixes:
         assert resp.status_code == 200
         assert "killSwitchEnabled" in resp.text
         assert "test audit key rendering" in resp.text
+
+
+class TestLogDeletion:
+    async def _seed(self, rows: list) -> list[int]:
+        async with async_session_factory() as session:
+            session.add_all(rows)
+            await session.commit()
+            return [row.id for row in rows]
+
+    def _ai_decisions(self, n: int) -> list[AiDecision]:
+        return [
+            AiDecision(
+                request_id=f"del-ai-{i}", symbol="THYAO", provider="deepseek",
+                raw_request={"i": i}, raw_response={"action": "BUY"},
+                action="BUY", confidence=50.0, qty=10.0, reason="test",
+                model="test-model",
+            )
+            for i in range(n)
+        ]
+
+    def _risk_decisions(self, n: int) -> list[RiskDecision]:
+        return [
+            RiskDecision(
+                request_id=f"del-risk-{i}", symbol="THYAO", action="BUY",
+                confidence=50.0, risk_score=10.0, allow_order=True,
+                reason="test", qty=10.0, order_type="LIMIT", mode="PAPER",
+            )
+            for i in range(n)
+        ]
+
+    def _order_logs(self, n: int) -> list[OrderLog]:
+        return [
+            OrderLog(
+                request_id=f"del-order-{i}", symbol="THYAO", action="BUY",
+                qty=10.0, price=100.0, status="FILLED", mode="PAPER",
+            )
+            for i in range(n)
+        ]
+
+    def _audit_logs(self, n: int) -> list[ConfigAuditLog]:
+        return [
+            ConfigAuditLog(
+                key="killSwitchEnabled", old_value="false", new_value="true",
+                changed_by="admin", reason=f"test-{i}",
+            )
+            for i in range(n)
+        ]
+
+    def test_delete_all_requires_auth(self, client: TestClient):
+        resp = client.post("/admin/logs/ai-decisions/delete-all")
+        assert resp.status_code == 401
+
+    def test_delete_selected_requires_auth(self, client: TestClient):
+        resp = client.post("/admin/logs/ai-decisions/delete-selected")
+        assert resp.status_code == 401
+
+    def test_unknown_table_404s(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        resp = client.post(
+            "/admin/logs/not-a-real-table/delete-all",
+            headers=auth_headers,
+            data={"reason": "test", "confirmation": "CONFIRM"},
+        )
+        assert resp.status_code == 404
+
+    def test_delete_all_without_confirmation_leaves_rows(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        asyncio.run(self._seed(self._ai_decisions(3)))
+
+        resp = client.post(
+            "/admin/logs/ai-decisions/delete-all",
+            headers=auth_headers,
+            data={"reason": "test"},
+        )
+        assert "requires confirmation" in resp.text
+
+        async def _count() -> int:
+            async with async_session_factory() as session:
+                return len((await session.execute(select(AiDecision))).scalars().all())
+
+        assert asyncio.run(_count()) == 3
+
+    def test_delete_all_with_confirmation_wipes_table(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        asyncio.run(self._seed(self._ai_decisions(3)))
+
+        resp = client.post(
+            "/admin/logs/ai-decisions/delete-all",
+            headers=auth_headers,
+            data={"reason": "cleanup", "confirmation": "CONFIRM"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        async def _count() -> int:
+            async with async_session_factory() as session:
+                return len((await session.execute(select(AiDecision))).scalars().all())
+
+        assert asyncio.run(_count()) == 0
+
+    def test_delete_selected_without_confirmation_leaves_rows(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        ids = asyncio.run(self._seed(self._risk_decisions(2)))
+
+        resp = client.post(
+            "/admin/logs/risk-decisions/delete-selected",
+            headers=auth_headers,
+            data={"reason": "test", "ids": [str(ids[0])]},
+        )
+        assert "requires confirmation" in resp.text
+
+        async def _count() -> int:
+            async with async_session_factory() as session:
+                return len((await session.execute(select(RiskDecision))).scalars().all())
+
+        assert asyncio.run(_count()) == 2
+
+    def test_delete_selected_with_no_ids_shows_error(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        asyncio.run(self._seed(self._order_logs(1)))
+
+        resp = client.post(
+            "/admin/logs/order-logs/delete-selected",
+            headers=auth_headers,
+            data={"reason": "test", "confirmation": "CONFIRM"},
+        )
+        assert "Silinecek kayıt seçilmedi" in resp.text
+
+        async def _count() -> int:
+            async with async_session_factory() as session:
+                return len((await session.execute(select(OrderLog))).scalars().all())
+
+        assert asyncio.run(_count()) == 1
+
+    def test_delete_selected_only_removes_chosen_rows(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        ids = asyncio.run(self._seed(self._order_logs(3)))
+
+        resp = client.post(
+            "/admin/logs/order-logs/delete-selected",
+            headers=auth_headers,
+            data={
+                "reason": "remove first two",
+                "confirmation": "CONFIRM",
+                "ids": [str(ids[0]), str(ids[1])],
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        async def _remaining_ids() -> list[int]:
+            async with async_session_factory() as session:
+                rows = (await session.execute(select(OrderLog))).scalars().all()
+                return [row.id for row in rows]
+
+        remaining = asyncio.run(_remaining_ids())
+        assert remaining == [ids[2]]
+
+    def test_delete_all_audit_logs_allowed(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        """User explicitly chose to include Config Audit Logs in the
+        deletable set (no protected/exempt table)."""
+        asyncio.run(self._seed(self._audit_logs(2)))
+
+        resp = client.post(
+            "/admin/logs/audit-logs/delete-all",
+            headers=auth_headers,
+            data={"reason": "cleanup", "confirmation": "CONFIRM"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        async def _count() -> int:
+            async with async_session_factory() as session:
+                return len((await session.execute(select(ConfigAuditLog))).scalars().all())
+
+        assert asyncio.run(_count()) == 0

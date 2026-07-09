@@ -29,11 +29,15 @@ class TestTradingSystemPrompt:
         assert "social media" in prompt.lower()
 
     def test_uses_structured_contexts(self):
-        """Prompt instructs to use newsContext, fundContext, brokerFlowContext."""
+        """Prompt instructs to use newsContext. fundContext/brokerFlowContext
+        are intentionally NOT referenced — those services are disabled until
+        a real data source exists (see app/services/fund_scanner.py and
+        app/services/broker_flow_service.py); feeding the AI empty/UNKNOWN
+        placeholders would just be noise."""
         prompt = get_trading_system_prompt()
         assert "newscontext" in prompt.lower()
-        assert "fundcontext" in prompt.lower()
-        assert "brokerflowcontext" in prompt.lower()
+        assert "fundcontext" not in prompt.lower()
+        assert "brokerflowcontext" not in prompt.lower()
 
     def test_news_negativity_blocks_buy(self):
         """Rule 8: negative KAP/news blocks BUY."""
@@ -41,11 +45,11 @@ class TestTradingSystemPrompt:
         assert "negative" in prompt.lower() and "buy" in prompt.lower()
         assert "news context" in prompt.lower() or "newscontext" in prompt.lower()
 
-    def test_fund_broker_confidence_boost(self):
-        """Rule 9: fund + broker positivity adds confidence score."""
+    def test_ohlc_reliability_rule(self):
+        """Rule 10: don't treat a flat ohlcReliable=false range as real
+        price action."""
         prompt = get_trading_system_prompt()
-        assert "confidence" in prompt.lower()
-        assert "10-20" in prompt or "10‑20" in prompt
+        assert "ohlcreliable" in prompt.lower()
 
     def test_allowed_symbols_rule(self):
         prompt = get_trading_system_prompt()

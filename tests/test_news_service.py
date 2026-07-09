@@ -1,55 +1,240 @@
-"""Tests for the news service (mock) and its integration into signal endpoint."""
+"""Tests for the news service (Google News RSS integration) and its
+integration into signal endpoint payloads.
+
+The real network call (_fetch_rss) is always mocked here — these tests must
+never depend on external network availability. See _fetch_rss's own
+live-fetch behavior verified manually against the real feed during
+development; only pure parsing (_parse_rss) and the mocked orchestration
+logic are covered by the automated suite.
+"""
 
 from __future__ import annotations
 
-import pytest
+import asyncio
+import json
+from datetime import UTC, datetime, timedelta
 
-from app.services.news_service import get_news_context
+import pytest
+from sqlalchemy import update
+
+from app.db.init_db import drop_all, init_db
+from app.db.session import async_session_factory
+from app.models.db import NewsCache
+from app.services.news_service import _parse_rss, get_news_context
+
+
+@pytest.fixture(autouse=True)
+def _reset_db():
+    asyncio.run(drop_all())
+    asyncio.run(init_db())
+    yield
+    asyncio.run(drop_all())
+    asyncio.run(init_db())
+
+
+async def _mock_fetch(symbol: str) -> list[dict]:
+    return [
+        {
+            "title": f"{symbol} test headline",
+            "url": "https://example.com/1",
+            "source": "Test Source",
+            "publishedAt": datetime.now(UTC),
+        }
+    ]
+
+
+async def _failing_fetch(symbol: str) -> list[dict]:
+    raise RuntimeError("network error")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Unit: get_news_context
+# Unit: _parse_rss (pure function, no network)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_SAMPLE_RSS = """<?xml version="1.0"?>
+<rss version="2.0">
+<channel>
+  <item>
+    <title>THYAO hisse yorumu - Kaynak</title>
+    <link>https://news.google.com/rss/articles/abc</link>
+    <pubDate>Wed, 09 Jul 2026 08:00:00 GMT</pubDate>
+    <source url="https://example.com">Ornek Kaynak</source>
+  </item>
+  <item>
+    <title></title>
+    <link>https://news.google.com/rss/articles/empty-title</link>
+  </item>
+</channel>
+</rss>
+"""
+
+
+class TestParseRss:
+    def test_parses_title_link_source_date(self):
+        items = _parse_rss(_SAMPLE_RSS)
+
+        assert len(items) == 1  # the empty-title item is skipped
+        assert items[0]["title"] == "THYAO hisse yorumu - Kaynak"
+        assert items[0]["url"] == "https://news.google.com/rss/articles/abc"
+        assert items[0]["source"] == "Ornek Kaynak"
+        assert items[0]["publishedAt"] is not None
+        assert items[0]["publishedAt"].year == 2026
+
+    def test_no_items_returns_empty_list(self):
+        assert _parse_rss("<rss><channel></channel></rss>") == []
+
+    def test_malformed_xml_raises(self):
+        with pytest.raises(Exception):
+            _parse_rss("not xml at all <<<")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Unit: get_news_context (network mocked)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestGetNewsContext:
-    """Mock news service always returns empty lists and UNKNOWN sentiment."""
-
     @pytest.mark.asyncio
-    async def test_single_symbol_returns_empty_context(self):
+    async def test_single_symbol_returns_fetched_items(self, monkeypatch):
+        monkeypatch.setattr("app.services.news_service._fetch_rss", _mock_fetch)
+
         result = await get_news_context(["THYAO"])
 
         assert "THYAO" in result
-        assert result["THYAO"]["latestNews"] == []
+        assert len(result["THYAO"]["latestNews"]) == 1
+        assert result["THYAO"]["latestNews"][0]["title"] == "THYAO test headline"
         assert result["THYAO"]["kapNews"] == []
         assert result["THYAO"]["sentiment"] == "UNKNOWN"
 
     @pytest.mark.asyncio
-    async def test_multiple_symbols_each_get_separate_context(self):
+    async def test_multiple_symbols_each_get_separate_context(self, monkeypatch):
+        monkeypatch.setattr("app.services.news_service._fetch_rss", _mock_fetch)
+
         result = await get_news_context(["THYAO", "AKBNK", "SISE"])
 
         assert len(result) == 3
         for symbol in ("THYAO", "AKBNK", "SISE"):
             assert symbol in result
-            assert result[symbol] == {
-                "latestNews": [],
-                "kapNews": [],
-                "sentiment": "UNKNOWN",
-            }
+            assert result[symbol]["latestNews"][0]["title"] == f"{symbol} test headline"
 
     @pytest.mark.asyncio
-    async def test_empty_list_returns_empty_dict(self):
+    async def test_empty_list_returns_empty_dict(self, monkeypatch):
+        monkeypatch.setattr("app.services.news_service._fetch_rss", _mock_fetch)
         result = await get_news_context([])
         assert result == {}
 
     @pytest.mark.asyncio
-    async def test_context_is_serializable(self):
-        import json
+    async def test_context_is_serializable(self, monkeypatch):
+        monkeypatch.setattr("app.services.news_service._fetch_rss", _mock_fetch)
 
         result = await get_news_context(["THYAO"])
         dumped = json.dumps(result)
+
         assert '"THYAO"' in dumped
         assert '"UNKNOWN"' in dumped
+
+    @pytest.mark.asyncio
+    async def test_fetch_failure_degrades_to_empty(self, monkeypatch):
+        monkeypatch.setattr("app.services.news_service._fetch_rss", _failing_fetch)
+
+        result = await get_news_context(["THYAO"])
+
+        assert result["THYAO"] == {"latestNews": [], "kapNews": [], "sentiment": "UNKNOWN"}
+
+    @pytest.mark.asyncio
+    async def test_symbol_normalized_to_uppercase(self, monkeypatch):
+        monkeypatch.setattr("app.services.news_service._fetch_rss", _mock_fetch)
+
+        result = await get_news_context(["thyao"])
+
+        assert "THYAO" in result
+        assert "thyao" not in result
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Unit: caching behavior
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestNewsCaching:
+    @pytest.mark.asyncio
+    async def test_second_call_within_ttl_uses_cache_not_network(self, monkeypatch):
+        call_count = 0
+
+        async def _counting_fetch(symbol: str) -> list[dict]:
+            nonlocal call_count
+            call_count += 1
+            return [
+                {
+                    "title": "Cacheable headline",
+                    "url": "https://example.com/1",
+                    "source": "Test",
+                    "publishedAt": datetime.now(UTC),
+                }
+            ]
+
+        monkeypatch.setattr("app.services.news_service._fetch_rss", _counting_fetch)
+
+        await get_news_context(["THYAO"])
+        await get_news_context(["THYAO"])
+
+        assert call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_stale_cache_triggers_refetch(self, monkeypatch):
+        async with async_session_factory() as session:
+            row = NewsCache(
+                symbol="THYAO",
+                title="Old headline",
+                source="Old",
+                url="https://example.com/old",
+            )
+            session.add(row)
+            await session.commit()
+            await session.refresh(row)
+            await session.execute(
+                update(NewsCache)
+                .where(NewsCache.id == row.id)
+                .values(cached_at=datetime.now(UTC) - timedelta(hours=2))
+            )
+            await session.commit()
+
+        call_count = 0
+
+        async def _counting_fetch(symbol: str) -> list[dict]:
+            nonlocal call_count
+            call_count += 1
+            return [
+                {
+                    "title": "Fresh headline",
+                    "url": "https://example.com/new",
+                    "source": "New",
+                    "publishedAt": datetime.now(UTC),
+                }
+            ]
+
+        monkeypatch.setattr("app.services.news_service._fetch_rss", _counting_fetch)
+
+        result = await get_news_context(["THYAO"])
+
+        assert call_count == 1
+        assert result["THYAO"]["latestNews"][0]["title"] == "Fresh headline"
+
+    @pytest.mark.asyncio
+    async def test_db_cache_failure_falls_back_to_live_fetch(self, monkeypatch):
+        """If the cache table read/write fails (e.g. table doesn't exist
+        yet in a fresh environment), still return live-fetched results
+        instead of raising — the cache is optional infrastructure."""
+
+        def _boom():
+            raise RuntimeError("db unavailable")
+
+        monkeypatch.setattr("app.services.news_service.async_session_factory", _boom)
+        monkeypatch.setattr("app.services.news_service._fetch_rss", _mock_fetch)
+
+        result = await get_news_context(["THYAO"])
+
+        assert result["THYAO"]["latestNews"][0]["title"] == "THYAO test headline"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

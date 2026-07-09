@@ -114,6 +114,11 @@ class SignalRequest(BaseModel):
     high: float
     low: float
     volume: float
+    # Data-quality flag: Matriks intraday snapshots often lack real bar data,
+    # so open/high/low may just be lastPrice repeated (see BuildMarketData in
+    # TradeAiAgenticBot.cs). When false, the AI must not treat the flat range
+    # as evidence of real price action.
+    ohlc_reliable: Optional[bool] = Field(None, alias="ohlcReliable")
 
     # Technical indicators (optional — some timeframes / providers omit these)
     rsi: Optional[float] = None

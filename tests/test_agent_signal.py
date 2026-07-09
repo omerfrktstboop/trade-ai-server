@@ -733,3 +733,20 @@ def test_context_history_dedup_skips_already_collected_step(
     assert sess is not None
     keys = [(s.symbol.upper(), s.data_type.value) for s in sess.steps]
     assert keys == [("ANELE", "OHLCV"), ("THYAO", "DEPTH")], keys
+
+
+def test_agentic_bridge_maps_ohlc_reliable_flag() -> None:
+    """Matriks sets ohlcReliable=false when open/high/low are just lastPrice
+    repeated (no real bar data yet) — this must reach the built SignalRequest
+    so it can flow through to the AI payload."""
+    from app.models.signal import AgenticSignalRequest
+    from app.routers.signal import _agentic_to_signal_request
+
+    payload = _make_agentic_payload(
+        symbol="THYAO",
+        payload={**dict(_DEFAULT_OHLCV), "ohlcReliable": False},
+    )
+    request = AgenticSignalRequest(**payload)
+    signal_request = _agentic_to_signal_request(request, "sess-ohlc")
+
+    assert signal_request.ohlc_reliable is False

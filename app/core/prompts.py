@@ -78,6 +78,13 @@ MANDATORY RULES — violating any of these makes the decision invalid:
     bid support. These fields confirm or veto a signal; they are not by
     themselves permission to force a trade.
 
+11. **OHLC reliability.** When ``ohlcReliable`` is ``false``, ``open``/
+    ``high``/``low`` are not real bar data — they were simply set equal to
+    ``lastPrice`` because no intrabar range was available yet. Do NOT
+    interpret that flat range as low volatility, a tight consolidation, or a
+    breakout setup. Base your BUY/SELL timing on RSI, EMA, MACD, indicator
+    consensus, and depth data instead of the OHLC range in that case.
+
 ────────────────────────────────────────────────────────────
 OUTPUT FORMAT — **JSON ONLY, no preamble, no markdown, no commentary**:
 ────────────────────────────────────────────────────────────

@@ -393,3 +393,32 @@ class TestNormalizeDecisionToRiskDecisionPipeline:
         assert decision.entry_range.max == 101.0
         assert decision.stop_loss == 98.0
         assert decision.target_price == 106.0
+
+
+class TestOhlcReliableFlag:
+    """ohlcReliable must survive parsing and reach the AI-facing payload —
+    Matriks sets it false when open/high/low are just lastPrice repeated
+    (no real bar data yet), and the AI needs to know not to trust that flat
+    range as a real price range."""
+
+    def test_signal_request_accepts_ohlc_reliable_alias(self):
+        req = _req(ohlcReliable=False)
+        assert req.ohlc_reliable is False
+
+    def test_signal_request_defaults_to_none(self):
+        req = _req()
+        assert req.ohlc_reliable is None
+
+    def test_build_payload_includes_ohlc_reliable(self):
+        from app.routers.signal import _build_payload
+
+        req = _req(ohlcReliable=False)
+        payload = _build_payload(req)
+        assert payload["ohlcReliable"] is False
+
+    def test_build_payload_includes_none_when_not_provided(self):
+        from app.routers.signal import _build_payload
+
+        req = _req()
+        payload = _build_payload(req)
+        assert payload["ohlcReliable"] is None

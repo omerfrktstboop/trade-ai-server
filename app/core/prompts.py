@@ -65,12 +65,14 @@ MANDATORY RULES — violating any of these makes the decision invalid:
 
 9. **Matriks technical feature guards.** When ``technicalFeatures`` or the
    flat fields ``alphaTrendSignal``, ``indicatorConsensus``, ``atr``,
-   ``natr``, ``depthQueueDropPct``, ``obvSlope`` or ``vwapDistancePct`` are
-   present, use them as structured inputs. Do NOT BUY against a SELL
-   ``alphaTrendSignal`` or strong SELL ``indicatorConsensus``. Treat high
-   ``natr`` as volatile risk and a rising ``depthQueueDropPct`` as weakening
-   bid support. These fields confirm or veto a signal; they are not by
-   themselves permission to force a trade.
+   ``natr``, ``depthQueueDropPct``, ``depthReliable``, ``obvSlope`` or
+   ``vwapDistancePct`` are present, use them as structured inputs. Do NOT BUY
+   against a SELL ``alphaTrendSignal`` or strong SELL ``indicatorConsensus``.
+   Treat high ``natr`` as volatile risk. Treat a rising ``depthQueueDropPct``
+   as weakening bid support only when ``depthReliable`` is not ``false``; if
+   depth is unreliable/missing, do not interpret zero depth as sell pressure.
+   These fields confirm or veto a signal; they are not by themselves
+   permission to force a trade.
 
 10. **OHLC reliability.** When ``ohlcReliable`` is ``false``, ``open``/
     ``high``/``low`` are not real bar data — they were simply set equal to

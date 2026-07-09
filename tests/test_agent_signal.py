@@ -750,3 +750,18 @@ def test_agentic_bridge_maps_ohlc_reliable_flag() -> None:
     signal_request = _agentic_to_signal_request(request, "sess-ohlc")
 
     assert signal_request.ohlc_reliable is False
+
+
+def test_agentic_bridge_maps_depth_reliable_flag() -> None:
+    from app.models.signal import AgenticSignalRequest
+    from app.routers.signal import _agentic_to_signal_request
+
+    payload = _make_agentic_payload(
+        symbol="THYAO",
+        payload={**dict(_DEFAULT_OHLCV), "depthReliable": False, "depthQueueDropPct": 92.0},
+    )
+    request = AgenticSignalRequest(**payload)
+    signal_request = _agentic_to_signal_request(request, "sess-depth")
+
+    assert signal_request.depth_reliable is False
+    assert signal_request.depth_queue_drop_pct == 92.0

@@ -148,6 +148,7 @@ class SignalRequest(BaseModel):
     depth_bid1_size: Optional[float] = Field(None, alias="depthBid1Size")
     depth_bid1_max_size: Optional[float] = Field(None, alias="depthBid1MaxSize")
     depth_queue_drop_pct: Optional[float] = Field(None, alias="depthQueueDropPct")
+    depth_reliable: Optional[bool] = Field(None, alias="depthReliable")
     market_regime: Optional[str] = Field(None, alias="marketRegime")
 
     # Position context

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from app.core.risk_config import RiskConfig
-from app.models.signal import AgenticAction
-from app.services.agent_planner import plan_next
+from app.models.signal import AgenticAction, AgenticDataType
+from app.services.agent_planner import _DATA_PRIORITY, plan_next
 from app.services.session_store import SessionState
 
 
@@ -41,3 +41,12 @@ class TestPlanNextRiskConfigInjection:
 
         assert result.action == AgenticAction.WAIT
         assert result.proceed_to_ai is False
+
+
+class TestPlannerDataPriority:
+    def test_only_matriks_supported_live_fetch_types_are_requested(self):
+        assert [data_type for data_type, _reason in _DATA_PRIORITY] == [
+            AgenticDataType.DEPTH,
+            AgenticDataType.OHLCV,
+            AgenticDataType.TECHNICAL,
+        ]

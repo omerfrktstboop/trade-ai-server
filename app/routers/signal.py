@@ -163,6 +163,7 @@ def _build_payload(
         "low": req.low,
         "volume": req.volume,
         "ohlcReliable": req.ohlc_reliable,
+        "depthReliable": req.depth_reliable,
         "rsi": req.rsi,
         "ema20": req.ema20,
         "ema50": req.ema50,
@@ -206,8 +207,13 @@ def _build_technical_feature_payload(req: SignalRequest) -> dict[str, Any]:
         "depthBid1Size": req.depth_bid1_size,
         "depthBid1MaxSize": req.depth_bid1_max_size,
         "depthQueueDropPct": req.depth_queue_drop_pct,
+        "depthReliable": req.depth_reliable,
         "marketRegime": req.market_regime,
     }
+    if req.depth_reliable is False:
+        fields["depthBid1Size"] = None
+        fields["depthBid1MaxSize"] = None
+        fields["depthQueueDropPct"] = None
     result = {key: value for key, value in fields.items() if value is not None}
     if result:
         result["schemaVersion"] = "technical-features-v1"
@@ -539,6 +545,7 @@ def _agentic_to_signal_request(
         depthBid1Size=_payload_get(p, "depthBid1Size"),
         depthBid1MaxSize=_payload_get(p, "depthBid1MaxSize"),
         depthQueueDropPct=_payload_get(p, "depthQueueDropPct"),
+        depthReliable=_payload_get(p, "depthReliable"),
         marketRegime=_payload_get(p, "marketRegime"),
         botPositionQty=p.get("botPositionQty", 0),
         totalAccountQty=p.get("totalAccountQty", 0),

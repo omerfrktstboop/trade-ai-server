@@ -51,6 +51,11 @@ class TestTradingSystemPrompt:
         prompt = get_trading_system_prompt()
         assert "ohlcreliable" in prompt.lower()
 
+    def test_depth_reliability_rule(self):
+        prompt = get_trading_system_prompt().lower()
+        assert "depthreliable" in prompt
+        assert "zero depth" in prompt or "unreliable" in prompt
+
     def test_allowed_symbols_rule(self):
         prompt = get_trading_system_prompt()
         assert "allowedsymbols" in prompt.lower()

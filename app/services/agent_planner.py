@@ -28,12 +28,8 @@ RELATED_SYMBOLS: dict[str, str] = {
 # the related symbol's DEPTH has been collected).
 _DATA_PRIORITY: list[tuple[AgenticDataType, str]] = [
     (AgenticDataType.DEPTH, "Derinlik verisi gerekli"),
-    (AgenticDataType.AKD, "AKD (Açığa Kısa Dönüşüm) verisi gerekli"),
     (AgenticDataType.OHLCV, "OHLCV fiyat verisi gerekli"),
     (AgenticDataType.TECHNICAL, "Teknik indikatör verisi gerekli"),
-    (AgenticDataType.NEWS, "Haber/KAP verisi gerekli"),
-    (AgenticDataType.FUND, "Fon dağılımı gerekli"),
-    (AgenticDataType.BROKER_FLOW, "Broker işlem akışı gerekli"),
 ]
 
 

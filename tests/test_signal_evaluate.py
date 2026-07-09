@@ -422,3 +422,31 @@ class TestOhlcReliableFlag:
         req = _req()
         payload = _build_payload(req)
         assert payload["ohlcReliable"] is None
+
+
+class TestDepthReliableFlag:
+    def test_signal_request_accepts_depth_reliable_alias(self):
+        req = _req(depthReliable=False, depthQueueDropPct=95.0)
+        assert req.depth_reliable is False
+        assert req.depth_queue_drop_pct == 95.0
+
+    def test_unreliable_depth_omits_queue_drop_from_ai_payload(self):
+        from app.routers.signal import _build_payload
+
+        req = _req(depthReliable=False, depthQueueDropPct=95.0, depthBid1Size=0.0)
+        payload = _build_payload(req)
+
+        assert payload["depthReliable"] is False
+        assert "depthQueueDropPct" not in payload
+        assert payload["technicalFeatures"]["depthReliable"] is False
+        assert "depthQueueDropPct" not in payload["technicalFeatures"]
+
+    def test_reliable_depth_keeps_queue_drop_in_ai_payload(self):
+        from app.routers.signal import _build_payload
+
+        req = _req(depthReliable=True, depthQueueDropPct=12.0, depthBid1Size=500.0)
+        payload = _build_payload(req)
+
+        assert payload["depthReliable"] is True
+        assert payload["depthQueueDropPct"] == 12.0
+        assert payload["technicalFeatures"]["depthQueueDropPct"] == 12.0

@@ -172,3 +172,23 @@ def test_matriks_payload_includes_ai_server_technical_features():
         "_maxBid1SizeBySymbol",
     ):
         assert field in source
+
+
+def test_matriks_market_data_uses_cache_and_reliability_flags():
+    source = _bot_source()
+
+    for field in (
+        "_lastValidQuoteBySymbol",
+        "_lastOhlcvBySymbol",
+        "UpdateOhlcvSnapshotFromBarData(barData)",
+        "ReadMarketQuote(symbol)",
+        "ResolveOhlcvSnapshot(symbol, lastPrice, volume)",
+        'payload["ohlcSource"]',
+        'payload["priceSource"]',
+        'payload["quoteReliable"]',
+        'payload["depthReliable"]',
+        'features["depthReliable"]',
+        "if (depthReliable)",
+        "LogMarketDataWarning(symbol, \"QUOTE\"",
+    ):
+        assert field in source

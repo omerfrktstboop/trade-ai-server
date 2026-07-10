@@ -772,7 +772,7 @@ class TestEntryRangeParsing:
     """_parse_entry_range handles camelCase + snake_case dicts."""
 
     def test_camel_case_nested(self):
-        from app.routers.signal import _parse_entry_range
+        from app.services.evaluator import _parse_entry_range
 
         result = _parse_entry_range(
             {
@@ -784,7 +784,7 @@ class TestEntryRangeParsing:
         assert result.max == 105.0
 
     def test_snake_case_nested(self):
-        from app.routers.signal import _parse_entry_range
+        from app.services.evaluator import _parse_entry_range
 
         result = _parse_entry_range(
             {
@@ -796,7 +796,7 @@ class TestEntryRangeParsing:
         assert result.max == 103.0
 
     def test_camel_case_flat(self):
-        from app.routers.signal import _parse_entry_range
+        from app.services.evaluator import _parse_entry_range
 
         result = _parse_entry_range(
             {
@@ -809,7 +809,7 @@ class TestEntryRangeParsing:
         assert result.max == 100.0
 
     def test_snake_case_flat(self):
-        from app.routers.signal import _parse_entry_range
+        from app.services.evaluator import _parse_entry_range
 
         result = _parse_entry_range(
             {
@@ -822,14 +822,14 @@ class TestEntryRangeParsing:
         assert result.max == 104.0
 
     def test_no_entry_range_returns_none(self):
-        from app.routers.signal import _parse_entry_range
+        from app.services.evaluator import _parse_entry_range
 
         result = _parse_entry_range({"action": "BUY"})
         assert result is None
 
     def test_garbage_entry_range_returns_none(self):
         """Garbage values in entryRange don't raise."""
-        from app.routers.signal import _parse_entry_range
+        from app.services.evaluator import _parse_entry_range
 
         assert (
             _parse_entry_range(
@@ -842,7 +842,7 @@ class TestEntryRangeParsing:
 
     def test_entry_range_with_one_missing_returns_none(self):
         """If min present but max missing → None."""
-        from app.routers.signal import _parse_entry_range
+        from app.services.evaluator import _parse_entry_range
 
         assert (
             _parse_entry_range(
@@ -855,7 +855,7 @@ class TestEntryRangeParsing:
 
     def test_non_numeric_entry_range_returns_none(self):
         """String values that aren't numbers → None."""
-        from app.routers.signal import _parse_entry_range
+        from app.services.evaluator import _parse_entry_range
 
         assert (
             _parse_entry_range(

@@ -146,7 +146,7 @@ class TestFundamentalsInPayload:
         )
 
     def test_build_payload_includes_fundamentals_context(self):
-        from app.routers.signal import _build_payload
+        from app.services.evaluator import build_payload as _build_payload
 
         ctx = {"THYAO": {"period": "2026/Q2", "fcfGrowthPct": 12.5}}
         payload = _build_payload(self._req(), fundamentals_context=ctx)
@@ -154,7 +154,7 @@ class TestFundamentalsInPayload:
         assert payload["fundamentalsContext"] == ctx
 
     def test_build_payload_omits_empty_fundamentals_context(self):
-        from app.routers.signal import _build_payload
+        from app.services.evaluator import build_payload as _build_payload
 
         payload = _build_payload(self._req(), fundamentals_context={})
         assert "fundamentalsContext" not in payload

@@ -15,7 +15,9 @@ from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
 from app.main import app
 from app.models.db import BotPosition, SignalOverride
-from app.services.session_store import MAX_TOOL_CALLS_PER_SESSION, session_store
+from app.models.signal import SignalMode
+from app.services.evaluator import evaluate_symbol
+from app.services.matriks_gateway import MatriksGatewayClient
 from app.services.signal_override import (
     SELL_ALL_SENTINEL_QTY,
     create_override,
@@ -23,6 +25,7 @@ from app.services.signal_override import (
     list_pending_override_symbols,
     override_to_raw_decision,
 )
+from tests.fake_gateway import FakeGateway
 
 
 @pytest.fixture(autouse=True)
@@ -43,13 +46,6 @@ def _reset_db():
     yield
     asyncio.run(drop_all())
     asyncio.run(init_db())
-
-
-@pytest.fixture(autouse=True)
-def _clean_sessions() -> None:
-    session_store._store.clear()
-    yield
-    session_store._store.clear()
 
 
 @pytest.fixture
@@ -191,39 +187,38 @@ class TestOverrideToRawDecision:
 
 
 # ── Full pipeline integration tests ───────────────────────────────────────────
+#
+# The override is consumed inside evaluate_symbol (app/services/evaluator.py),
+# which is the live trading path now that /signal/evaluate-agent is gone.
+# Market data comes from a fake Matriks gateway rather than a request body.
 
 
-def _exhausted_session_id(symbol: str) -> str:
-    """Create a session and burn its tool-call budget so the next
-    evaluate-agent request proceeds straight to the AI/override step."""
-    sess = session_store.create_session(symbol)
-    for _ in range(MAX_TOOL_CALLS_PER_SESSION):
-        session_store.increment_tool_call(sess.session_id)
-    return sess.session_id
-
-
-def _agentic_payload(symbol: str, session_id: str, mode: str) -> dict[str, Any]:
-    return {
-        "requestId": f"override-test-{symbol}",
-        "symbol": symbol,
-        "mode": mode,
-        "sessionId": session_id,
-        "marketData": {
-            "symbol": symbol,
-            "dataType": "OHLCV",
-            "payload": {
-                "lastPrice": 100.0, "open": 99.0, "high": 102.0, "low": 98.0,
-                "volume": 1000.0, "botPositionQty": 500, "totalAccountQty": 500,
-                "lockedLongTermQty": 0, "dailyTradeCount": 0,
-            },
-        },
+def _override_gateway() -> MatriksGatewayClient:
+    """Fake gateway reporting a 500-lot THYAO position, no locked shares."""
+    fake = FakeGateway(symbols=["THYAO"])
+    fake.snapshot_overrides["THYAO"] = {
+        "lastPrice": 100.0,
+        "open": 99.0,
+        "high": 102.0,
+        "low": 98.0,
+        "volume": 1000.0,
+        "botPositionQty": 500.0,
+        "totalAccountQty": 500.0,
+        "lockedLongTermQty": 0.0,
     }
+    return MatriksGatewayClient(
+        base_url="http://fake-gateway", token=fake.token, transport=fake.transport
+    )
 
 
-class TestOverrideAppliedThroughEvaluateAgent:
-    def test_sell_override_produces_final_sell_with_clamped_qty(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ):
+def _evaluate(symbol: str, mode: SignalMode):
+    return asyncio.run(
+        evaluate_symbol(symbol, gateway=_override_gateway(), mode=mode)
+    )
+
+
+class TestOverrideAppliedThroughEvaluator:
+    def test_sell_override_produces_final_sell_with_clamped_qty(self):
         async def _seed():
             async with async_session_factory() as session:
                 await create_override(
@@ -232,26 +227,18 @@ class TestOverrideAppliedThroughEvaluateAgent:
                 )
 
         asyncio.run(_seed())
-        session_id = _exhausted_session_id("THYAO")
 
-        resp = client.post(
-            "/api/signal/evaluate-agent",
-            json=_agentic_payload("THYAO", session_id, "DEMO_LIVE"),
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        body = resp.json()
+        result = _evaluate("THYAO", SignalMode.DEMO_LIVE)
+        response = result.response
 
-        assert body["action"] == "SELL"
-        assert body["symbol"] == "THYAO"
-        assert body["allowOrder"] is True
-        # Clamped to the request's reported botPositionQty (500), not the
+        assert response.action.value == "SELL"
+        assert response.symbol == "THYAO"
+        assert response.allow_order is True
+        # Clamped to the gateway-reported botPositionQty (500), not the
         # 1e9 sentinel — proves the real RiskEngine SELL-qty clamp ran.
-        assert body["qty"] == 500.0
+        assert response.qty == 500.0
 
-    def test_real_live_mode_ignores_override(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ):
+    def test_real_live_mode_ignores_override(self):
         async def _seed():
             async with async_session_factory() as session:
                 await create_override(
@@ -260,19 +247,12 @@ class TestOverrideAppliedThroughEvaluateAgent:
                 )
 
         asyncio.run(_seed())
-        session_id = _exhausted_session_id("THYAO")
 
-        resp = client.post(
-            "/api/signal/evaluate-agent",
-            json=_agentic_payload("THYAO", session_id, "REAL_LIVE"),
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        body = resp.json()
+        result = _evaluate("THYAO", SignalMode.REAL_LIVE)
 
         # Mock provider (default AI_PROVIDER) always returns WAIT — proves
         # the override was NOT consumed/applied for REAL_LIVE.
-        assert body["action"] == "WAIT"
+        assert result.response.action.value == "WAIT"
 
         async def _check_still_pending():
             async with async_session_factory() as session:
@@ -281,18 +261,10 @@ class TestOverrideAppliedThroughEvaluateAgent:
 
         assert asyncio.run(_check_still_pending()) is not None
 
-    def test_no_override_falls_back_to_ai_provider(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ):
-        session_id = _exhausted_session_id("THYAO")
+    def test_no_override_falls_back_to_ai_provider(self):
+        result = _evaluate("THYAO", SignalMode.DEMO_LIVE)
 
-        resp = client.post(
-            "/api/signal/evaluate-agent",
-            json=_agentic_payload("THYAO", session_id, "DEMO_LIVE"),
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        assert resp.json()["action"] == "WAIT"  # mock provider default
+        assert result.response.action.value == "WAIT"  # mock provider default
 
 
 # ── Admin route tests ──────────────────────────────────────────────────────
@@ -371,24 +343,27 @@ class TestAdminForceOverrideRoutes:
         assert symbols == {"THYAO", "AKBNK"}
 
 
-# ── Pending-overrides fast-scan endpoint ──────────────────────────────────────
+# ── Pending overrides (scanner fast-scan trigger) ─────────────────────────────
+#
+# Bunlar eskiden GET /api/bot/pending-overrides endpoint'i üzerinden test
+# ediliyordu; bot artık sunucuyu sorgulamadığı için endpoint kaldırıldı.
+# Aynı fonksiyonu şimdi scanner her tick'te doğrudan çağırıyor, bu yüzden
+# testler servis seviyesine indi.
 
 
-class TestPendingOverridesEndpoint:
-    def test_requires_auth(self, client: TestClient):
-        resp = client.get("/api/bot/pending-overrides")
-        assert resp.status_code == 401
+def _pending() -> list[str]:
+    async def _run():
+        async with async_session_factory() as session:
+            return await list_pending_override_symbols(session)
 
-    def test_returns_empty_when_no_overrides(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ):
-        resp = client.get("/api/bot/pending-overrides", headers=auth_headers)
-        assert resp.status_code == 200
-        assert resp.json()["symbols"] == []
+    return asyncio.run(_run())
 
-    def test_returns_symbol_with_active_override(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ):
+
+class TestPendingOverrides:
+    def test_returns_empty_when_no_overrides(self):
+        assert _pending() == []
+
+    def test_returns_symbol_with_active_override(self):
         async def _seed():
             async with async_session_factory() as session:
                 await create_override(
@@ -398,13 +373,9 @@ class TestPendingOverridesEndpoint:
 
         asyncio.run(_seed())
 
-        resp = client.get("/api/bot/pending-overrides", headers=auth_headers)
-        assert resp.status_code == 200
-        assert resp.json()["symbols"] == ["THYAO"]
+        assert _pending() == ["THYAO"]
 
-    def test_excludes_expired_override(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ):
+    def test_excludes_expired_override(self):
         async def _seed_expired():
             async with async_session_factory() as session:
                 session.add(SignalOverride(
@@ -420,13 +391,9 @@ class TestPendingOverridesEndpoint:
 
         asyncio.run(_seed_expired())
 
-        resp = client.get("/api/bot/pending-overrides", headers=auth_headers)
-        assert resp.status_code == 200
-        assert resp.json()["symbols"] == []
+        assert _pending() == []
 
-    def test_consumed_override_no_longer_pending(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ):
+    def test_consumed_override_no_longer_pending(self):
         async def _seed_and_consume():
             async with async_session_factory() as session:
                 await create_override(
@@ -438,6 +405,4 @@ class TestPendingOverridesEndpoint:
 
         asyncio.run(_seed_and_consume())
 
-        resp = client.get("/api/bot/pending-overrides", headers=auth_headers)
-        assert resp.status_code == 200
-        assert resp.json()["symbols"] == []
+        assert _pending() == []

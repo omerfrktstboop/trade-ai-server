@@ -13,7 +13,14 @@ from app.config import settings
 from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
 from app.main import app
-from app.models.db import AiDecision, ConfigAuditLog, MarketSnapshot, OrderLog, RiskDecision
+from app.models.db import (
+    AiDecision,
+    BotPosition,
+    ConfigAuditLog,
+    MarketSnapshot,
+    OrderLog,
+    RiskDecision,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -204,14 +211,24 @@ class TestPositionsWatchlist:
         )
         assert login.status_code == 303
 
+    def _seed_position(self, symbol: str, qty: float) -> None:
+        """Seed bot_positions directly.
+
+        The old POST /api/bot/positions/sync endpoint is gone — the scanner
+        now pulls positions from the Matriks gateway (app/services/position_sync.py).
+        """
+
+        async def _run():
+            async with async_session_factory() as session:
+                session.add(BotPosition(symbol=symbol, qty=qty))
+                await session.commit()
+
+        asyncio.run(_run())
+
     def test_position_outside_allowed_symbols_shows_add_button(
         self, client: TestClient, auth_headers: dict[str, str]
     ):
-        client.post(
-            "/api/bot/positions/sync",
-            headers=auth_headers,
-            json={"positions": [{"symbol": "ASELS", "qty": 10.0}]},
-        )
+        self._seed_position("ASELS", 10.0)
         self._login(client)
 
         resp = client.get("/admin/positions")
@@ -222,11 +239,7 @@ class TestPositionsWatchlist:
     def test_add_to_watchlist_updates_allowed_symbols(
         self, client: TestClient, auth_headers: dict[str, str]
     ):
-        client.post(
-            "/api/bot/positions/sync",
-            headers=auth_headers,
-            json={"positions": [{"symbol": "ASELS", "qty": 10.0}]},
-        )
+        self._seed_position("ASELS", 10.0)
         self._login(client)
 
         resp = client.post(

@@ -167,7 +167,8 @@ class SignalRequest(BaseModel):
     # Daily trade count (fed by caller — e.g. Matriks IQ or DB)
     daily_trade_count: int = Field(0, alias="dailyTradeCount", ge=0)
 
-    # Agentic session (used only by /signal/evaluate-agent)
+    # Legacy field from the removed agentic protocol; retained so old
+    # clients posting sessionId to /signal/evaluate still validate.
     session_id: str = Field("", alias="sessionId")
 
     # Mode

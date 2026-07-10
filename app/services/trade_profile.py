@@ -193,8 +193,7 @@ def _builtin_profile_instance(code: str) -> TradeProfile:
 
 
 def get_static_default_profile() -> TradeProfile:
-    """Transient NORMAL profile for contexts with no DB access at all
-    (e.g. build_static_bot_runtime_config's DB-unreachable fallback)."""
+    """Transient NORMAL profile for contexts with no DB access at all."""
     return _builtin_profile_instance("NORMAL")
 
 

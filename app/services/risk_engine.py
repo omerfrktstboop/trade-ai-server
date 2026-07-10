@@ -145,11 +145,10 @@ class RiskEngine:
             )
 
         # ── 3.55. Trade-profile mode permission ──────────────────────
-        # Second enforcement layer for allow_real_live/allow_demo_live —
-        # bot config serving (app/services/bot_runtime_config.py) already
-        # downgrades the mode it hands out, but that only protects a bot
-        # running with fresh config. This gate is authoritative regardless
-        # of what mode the caller actually sent.
+        # Authoritative gate for allow_real_live/allow_demo_live, regardless
+        # of what mode the caller sent. The scanner and the Matriks gateway
+        # each apply their own mode checks too, but this is the layer every
+        # evaluation path passes through.
         if request.mode == SignalMode.REAL_LIVE and not self.config.real_live_mode_allowed:
             return self._block(
                 request,

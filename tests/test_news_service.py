@@ -247,7 +247,7 @@ class TestNewsInPayload:
 
     def test_build_payload_with_news_context(self):
         from app.models.signal import SignalMode, SignalRequest
-        from app.routers.signal import _build_payload
+        from app.services.evaluator import build_payload as _build_payload
 
         req = SignalRequest(
             requestId="test-1",
@@ -274,7 +274,7 @@ class TestNewsInPayload:
 
     def test_build_payload_without_news_context_still_works(self):
         from app.models.signal import SignalMode, SignalRequest
-        from app.routers.signal import _build_payload
+        from app.services.evaluator import build_payload as _build_payload
 
         req = SignalRequest(
             requestId="test-1",
@@ -298,7 +298,7 @@ class TestNewsInPayload:
 
     def test_build_payload_with_none_news_context_excluded(self):
         from app.models.signal import SignalMode, SignalRequest
-        from app.routers.signal import _build_payload
+        from app.services.evaluator import build_payload as _build_payload
 
         req = SignalRequest(
             requestId="test-1",
@@ -321,7 +321,7 @@ class TestNewsInPayload:
 
     def test_build_payload_includes_technical_features_when_present(self):
         from app.models.signal import SignalMode, SignalRequest
-        from app.routers.signal import _build_payload
+        from app.services.evaluator import build_payload as _build_payload
 
         req = SignalRequest(
             requestId="test-technical-1",

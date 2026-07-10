@@ -130,17 +130,18 @@ Aşağıdaki adımları **LIVE** moda geçmeden önce mutlaka tamamlayın:
 |--------|-------------------------|----------|--------------------------|
 | GET    | `/`                     | —        | Root (docs links)        |
 | GET    | `/api/health`           | —        | Health check             |
-| POST   | `/api/signal/evaluate`  | Bearer   | Evaluate trading signal (single-turn) |
-| POST   | `/api/signal/evaluate-agent` | Bearer | Evaluate trading signal (stateful, multi-turn agentic — used by the Matriks bot) |
-| POST   | `/api/order-result`     | Bearer   | Receive order result     |
-| GET    | `/api/bot/tradeable-symbols` | Bearer | Admin-managed symbol universe for the bot to scan |
-| POST   | `/api/bot/positions/sync` | Bearer | Bot reports its full position snapshot |
+| POST   | `/api/signal/evaluate`  | Bearer   | Evaluate trading signal (caller supplies market data; manual testing / debugging) |
+| POST   | `/api/order-result`     | Bearer   | Receive order result from the Matriks gateway |
 | GET    | `/admin`                | Admin    | Admin dashboard          |
 | GET    | `/admin/config`         | Admin    | Runtime risk config UI   |
 | GET    | `/admin/emergency`      | Admin    | Kill switch controls     |
 | GET    | `/api/admin/config`     | Bearer   | Runtime config API       |
 | GET    | `/docs`                 | —        | Swagger UI               |
 | GET    | `/redoc`                | —        | ReDoc                    |
+
+> The live trading path does **not** go through these endpoints. The server's
+> background scanner pulls market data from the Matriks gateway and evaluates
+> in-process — see [Architecture](#architecture) below.
 
 ### Admin Panel MVP
 
@@ -238,53 +239,53 @@ curl -X POST http://localhost:8000/api/signal/evaluate \
 | `stopLoss` | float\|null | Önerilen zarar-kes |
 | `targetPrice` | float\|null | Önerilen hedef fiyat |
 
-### Agentic Signal Evaluate
+## Architecture
 
-`/api/signal/evaluate-agent` is the stateful, multi-turn version of Signal
-Evaluate — this is the endpoint the Matriks bot actually calls
-(`SendEvaluateAsync` in `matriks/TradeAiAgenticBot.cs`). Instead of always
-deciding from a single OHLCV snapshot, it can ask the caller (Matriks) for
-additional data (`action: "FETCH_DATA"` with `targetSymbol` /
-`requiredDataType`) across several requests sharing the same `sessionId`,
-before returning a final `WAIT` / `BUY` / `SELL` decision. Every response —
-`FETCH_DATA`, hard-stop `WAIT`, and the final decision — includes a
-top-level `symbol` field matching the request's root symbol.
+The server is the brain; Matriks IQ is a data-and-order gateway. Both run on
+the same Windows machine, and the gateway listens on loopback only.
+
+```
+FastAPI server (this repo)                Matriks IQ (matriks/TradeAiGateway.cs)
+  scanner.py  ── every N min ──┐
+    │                          ├─→ GET  127.0.0.1:8787/health
+    │                          ├─→ GET  /snapshot?symbol=THYAO
+    │                          ├─→ GET  /positions
+    ├─ evaluator.py            │
+    │    AI provider           │
+    │    RiskEngine            │
+    └─ order decision ─────────┴─→ POST /order   (LIMIT only)
+                                        │
+       /api/order-result ←──────────────┘  OnOrderUpdate reports fills
+```
+
+**Why this shape.** Matriks can expose a local HTTP port, so the server can
+ask for data instead of waiting to be told. That removed the whole
+multi-turn `FETCH_DATA` session protocol the old bot needed, along with
+~1000 lines of session/planner code, and moved every trading decision into
+Python where it can be tested.
+
+**Safety is layered.** The scanner decides *whether* to send an order; the
+gateway decides *whether it is allowed to*. The gateway's limits are fixed
+in its algo parameters and cannot be raised by the server: LIMIT orders
+only (it has no notion of MARKET), max qty and value per order, daily order
+caps, locked long-term lots that can never be sold, and demo/real account
+confirmation flags. Two independent brakes, one in each process.
+
+Two environment switches gate the automation, both defaulting to off:
+`SCANNER_ENABLED` starts the scan loop at all, and `SCANNER_ALLOW_ORDERS`
+lets decisions become orders. With orders disabled every decision is forced
+to PAPER regardless of the admin panel's trading mode.
+
+The Matriks-side gateway is configured through its algo parameters
+(`Port`, `ApiToken`, `SymbolsCsv`, `LockedLongTermCsv`, `ServerBaseUrl`,
+`ServerApiToken`, plus the order limits). `ApiToken` must match the
+server's `MATRIKS_GATEWAY_TOKEN`.
+
+Verify the gateway end-to-end with:
 
 ```bash
-curl -X POST http://localhost:8000/api/signal/evaluate-agent \
-  -H "Authorization: Bearer ***" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "requestId": "agent-001",
-    "symbol": "THYAO",
-    "mode": "PAPER",
-    "marketData": {
-      "symbol": "THYAO",
-      "dataType": "OHLCV",
-      "payload": {"lastPrice": 71.5, "open": 71.0, "high": 72.0, "low": 70.8, "volume": 12000}
-    }
-  }'
+python scripts/gateway_smoke.py
 ```
-
-**Response (200) — needs more data:**
-```json
-{
-  "requestId": "agent-001",
-  "sessionId": "8f2c1a...",
-  "symbol": "THYAO",
-  "action": "FETCH_DATA",
-  "targetSymbol": "THYAO",
-  "requiredDataType": "DEPTH",
-  "allowOrder": false,
-  "requiresConfirmation": false,
-  "reason": "Derinlik verisi gerekli"
-}
-```
-
-Matriks then re-posts with the requested data plus `sessionId` +
-`contextHistory` until the planner has enough context to proceed to the
-AI/RiskEngine and return a final `WAIT`/`BUY`/`SELL` (same response shape as
-`/api/signal/evaluate`).
 
 ### Order Result
 
@@ -387,17 +388,22 @@ RISK_MAX_DEPTH_QUEUE_DROP_PCT_FOR_BUY=35
 ```
 trade-ai-server/
 ├── app/
-│   ├── main.py          # FastAPI entry point
-│   ├── config.py        # Pydantic settings (.env)
-│   ├── core/            # Core utilities
-│   ├── db/              # Database layer
-│   ├── models/          # Pydantic / SQLAlchemy models
-│   ├── routers/         # API route handlers
-│   │   └── health.py    # Health check endpoint
-│   └── services/        # Business logic
+│   ├── main.py               # FastAPI entry point (starts the scanner)
+│   ├── config.py             # Pydantic settings (.env)
+│   ├── core/                 # Core utilities
+│   ├── db/                   # Database layer
+│   ├── models/               # Pydantic / SQLAlchemy models
+│   ├── routers/              # API route handlers
+│   └── services/
+│       ├── scanner.py        # Background scan loop → evaluator → orders
+│       ├── evaluator.py      # The brain: snapshot → AI → RiskEngine
+│       ├── matriks_gateway.py# HTTP client for the Matriks gateway
+│       ├── position_sync.py  # Gateway positions → bot_positions
+│       └── risk_engine.py    # Safety gates
+├── matriks/
+│   └── TradeAiGateway.cs     # Matriks IQ algo: data + order gateway
+├── scripts/gateway_smoke.py  # End-to-end gateway check
 ├── requirements.txt
 ├── .env.example
-├── .gitignore
-├── docker-compose.yml
 └── README.md
 ```

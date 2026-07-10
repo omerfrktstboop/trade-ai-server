@@ -12,9 +12,9 @@ from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
 from app.models.db import OrderLog, RiskDecision
 from app.models.signal import SignalMode, SignalRequest
-from app.routers.signal import (
+from app.services.evaluator import (
     _has_explicit_daily_trade_count,
-    _with_resolved_daily_trade_count,
+    with_resolved_daily_trade_count as _with_resolved_daily_trade_count,
 )
 from app.services.daily_trade_count import TRADING_TIMEZONE, get_today_trade_counts
 

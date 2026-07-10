@@ -107,6 +107,24 @@ class Settings(BaseSettings):
 
     default_mode: Mode = Mode.PAPER
 
+    # ── Matriks gateway (full-inversion mimarisi) ─────────────────────────
+
+    matriks_gateway_url: str = "http://127.0.0.1:8787"
+    matriks_gateway_token: str = ""
+    matriks_gateway_timeout: float = 10.0
+
+    # ── Scanner (server-side tarama döngüsü) ──────────────────────────────
+    # Default kapalı: testler ve API-only kurulumlar yanlışlıkla tarama
+    # başlatmasın. Sunucuda .env ile açılır. Acil durumda false yapmak tüm
+    # otomasyonu keser (kill switch'e ek ikinci fren).
+    scanner_enabled: bool = False
+    scanner_tick_seconds: float = 60.0
+    # false → tüm kararlar PAPER'a sabitlenir, emir yolu tamamen kapalı
+    # (Phase 1 davranışı). true → mode admin panelden gelir ve DEMO_LIVE
+    # kararları gateway'e emir olarak gönderilir. REAL_LIVE scanner'da
+    # Phase 2 boyunca kod seviyesinde bloklu.
+    scanner_allow_orders: bool = False
+
     # ── Paths ─────────────────────────────────────────────────────────────
 
     base_dir: Path = Field(

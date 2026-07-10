@@ -193,7 +193,7 @@ class TestDictToRiskDecisionDefense:
 
     def test_invalid_action_hold_fallback_wait(self):
         """raw action 'HOLD' → WAIT with fallback reason."""
-        from app.routers.signal import _dict_to_risk_decision
+        from app.services.evaluator import dict_to_risk_decision as _dict_to_risk_decision
 
         decision = _dict_to_risk_decision(
             {"action": "HOLD", "confidence": 80, "reason": "hold signal"},
@@ -207,7 +207,7 @@ class TestDictToRiskDecisionDefense:
 
     def test_null_action_fallback_wait(self):
         """raw action None/null → WAIT."""
-        from app.routers.signal import _dict_to_risk_decision
+        from app.services.evaluator import dict_to_risk_decision as _dict_to_risk_decision
 
         decision = _dict_to_risk_decision(
             {"action": None, "confidence": 80, "reason": "null action"},
@@ -217,7 +217,7 @@ class TestDictToRiskDecisionDefense:
 
     def test_empty_action_string_fallback_wait(self):
         """raw action '' → WAIT."""
-        from app.routers.signal import _dict_to_risk_decision
+        from app.services.evaluator import dict_to_risk_decision as _dict_to_risk_decision
 
         decision = _dict_to_risk_decision(
             {"action": "", "confidence": 80, "reason": "empty"},
@@ -227,7 +227,7 @@ class TestDictToRiskDecisionDefense:
 
     def test_missing_action_field_fallback_wait(self):
         """No 'action' key → WAIT (default)."""
-        from app.routers.signal import _dict_to_risk_decision
+        from app.services.evaluator import dict_to_risk_decision as _dict_to_risk_decision
 
         decision = _dict_to_risk_decision(
             {"confidence": 80, "reason": "no action"},
@@ -239,7 +239,7 @@ class TestDictToRiskDecisionDefense:
 
     def test_invalid_confidence_string_defaults_zero(self):
         """confidence='high' → 0.0."""
-        from app.routers.signal import _dict_to_risk_decision
+        from app.services.evaluator import dict_to_risk_decision as _dict_to_risk_decision
 
         decision = _dict_to_risk_decision(
             {"action": "BUY", "confidence": "high", "reason": "string conf"},
@@ -250,7 +250,7 @@ class TestDictToRiskDecisionDefense:
 
     def test_non_numeric_qty_defaults_zero(self):
         """qty='many' → 0.0."""
-        from app.routers.signal import _dict_to_risk_decision
+        from app.services.evaluator import dict_to_risk_decision as _dict_to_risk_decision
 
         decision = _dict_to_risk_decision(
             {"action": "SELL", "confidence": 70, "qty": "many", "reason": "bad qty"},
@@ -260,7 +260,7 @@ class TestDictToRiskDecisionDefense:
 
     def test_garbage_stop_loss_defaults_none(self):
         """stop_loss='n/a' → None."""
-        from app.routers.signal import _dict_to_risk_decision
+        from app.services.evaluator import dict_to_risk_decision as _dict_to_risk_decision
 
         decision = _dict_to_risk_decision(
             {"action": "BUY", "confidence": 85, "stop_loss": "n/a", "reason": "bad sl"},
@@ -270,7 +270,7 @@ class TestDictToRiskDecisionDefense:
 
     def test_completely_empty_dict(self):
         """Empty dict → WAIT with all defaults."""
-        from app.routers.signal import _dict_to_risk_decision
+        from app.services.evaluator import dict_to_risk_decision as _dict_to_risk_decision
 
         decision = _dict_to_risk_decision({}, _req())
         assert decision.action == SignalAction.WAIT
@@ -280,7 +280,7 @@ class TestDictToRiskDecisionDefense:
 
     def test_valid_buy_still_works(self):
         """Valid BUY with all fields still parses correctly."""
-        from app.routers.signal import _dict_to_risk_decision
+        from app.services.evaluator import dict_to_risk_decision as _dict_to_risk_decision
 
         decision = _dict_to_risk_decision(
             {
@@ -306,7 +306,7 @@ class TestDictToRiskDecisionDefense:
 
     def test_valid_sell_still_works(self):
         """Valid SELL still parses correctly."""
-        from app.routers.signal import _dict_to_risk_decision
+        from app.services.evaluator import dict_to_risk_decision as _dict_to_risk_decision
 
         decision = _dict_to_risk_decision(
             {"action": "SELL", "confidence": 90, "reason": "overbought"},
@@ -319,7 +319,7 @@ class TestDictToRiskDecisionDefense:
         """Full pipeline: garbage AI dict → WAIT, no exception."""
         engine = RiskEngine(_cfg())
 
-        from app.routers.signal import _dict_to_risk_decision
+        from app.services.evaluator import dict_to_risk_decision as _dict_to_risk_decision
 
         garbage = {
             "action": "NONE",
@@ -348,7 +348,7 @@ class TestNormalizeDecisionToRiskDecisionPipeline:
 
     def test_camel_case_buy_response_keeps_entry_range_stop_loss_target_price(self):
         from app.services.ai_provider import _normalize_decision
-        from app.routers.signal import _dict_to_risk_decision
+        from app.services.evaluator import dict_to_risk_decision as _dict_to_risk_decision
 
         raw = {
             "action": "BUY",
@@ -374,7 +374,7 @@ class TestNormalizeDecisionToRiskDecisionPipeline:
     def test_documented_snake_case_buy_response_keeps_entry_range(self):
         """The system prompt asks the model for snake_case — that must also work."""
         from app.services.ai_provider import _normalize_decision
-        from app.routers.signal import _dict_to_risk_decision
+        from app.services.evaluator import dict_to_risk_decision as _dict_to_risk_decision
 
         raw = {
             "action": "BUY",
@@ -410,14 +410,14 @@ class TestOhlcReliableFlag:
         assert req.ohlc_reliable is None
 
     def test_build_payload_includes_ohlc_reliable(self):
-        from app.routers.signal import _build_payload
+        from app.services.evaluator import build_payload as _build_payload
 
         req = _req(ohlcReliable=False)
         payload = _build_payload(req)
         assert payload["ohlcReliable"] is False
 
     def test_build_payload_includes_none_when_not_provided(self):
-        from app.routers.signal import _build_payload
+        from app.services.evaluator import build_payload as _build_payload
 
         req = _req()
         payload = _build_payload(req)
@@ -443,7 +443,7 @@ class TestQuoteReliableFlag:
         assert req.ohlc_source is None
 
     def test_build_payload_includes_quote_reliable_and_sources(self):
-        from app.routers.signal import _build_payload
+        from app.services.evaluator import build_payload as _build_payload
 
         req = _req(quoteReliable=False, priceSource="ZERO_UNAVAILABLE", ohlcSource="QUOTE_FALLBACK")
         payload = _build_payload(req)
@@ -453,7 +453,7 @@ class TestQuoteReliableFlag:
         assert payload["ohlcSource"] == "QUOTE_FALLBACK"
 
     def test_build_payload_includes_none_when_not_provided(self):
-        from app.routers.signal import _build_payload
+        from app.services.evaluator import build_payload as _build_payload
 
         req = _req()
         payload = _build_payload(req)
@@ -468,7 +468,7 @@ class TestDepthReliableFlag:
         assert req.depth_queue_drop_pct == 95.0
 
     def test_unreliable_depth_omits_queue_drop_from_ai_payload(self):
-        from app.routers.signal import _build_payload
+        from app.services.evaluator import build_payload as _build_payload
 
         req = _req(depthReliable=False, depthQueueDropPct=95.0, depthBid1Size=0.0)
         payload = _build_payload(req)
@@ -479,7 +479,7 @@ class TestDepthReliableFlag:
         assert "depthQueueDropPct" not in payload["technicalFeatures"]
 
     def test_reliable_depth_keeps_queue_drop_in_ai_payload(self):
-        from app.routers.signal import _build_payload
+        from app.services.evaluator import build_payload as _build_payload
 
         req = _req(depthReliable=True, depthQueueDropPct=12.0, depthBid1Size=500.0)
         payload = _build_payload(req)

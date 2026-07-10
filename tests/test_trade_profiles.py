@@ -338,6 +338,32 @@ class TestAdminTradeProfilesRoutes:
         for code in ("CONSERVATIVE", "NORMAL", "AGGRESSIVE", "HIGH_RISK"):
             assert code in resp.text
 
+    def test_create_profile(self, client: TestClient):
+        self._login(client)
+        resp = client.post(
+            "/admin/trade-profiles/create",
+            data={
+                "code": "CUSTOM",
+                "name": "Custom Profile",
+                "description": "Created from admin",
+                "risk_level": "LOW",
+                "max_orders_per_day": "3",
+            },
+            follow_redirects=False,
+        )
+
+        assert resp.status_code == 303
+
+        async def _get_created():
+            async with async_session_factory() as session:
+                return await get_profile(session, "CUSTOM")
+
+        profile = _run(_get_created())
+        assert profile.name == "Custom Profile"
+        assert profile.description == "Created from admin"
+        assert profile.risk_level == "LOW"
+        assert profile.max_orders_per_day == 3
+
     def test_activate_without_confirmation_shows_error(self, client: TestClient):
         self._login(client)
         resp = client.post(

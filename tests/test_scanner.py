@@ -158,6 +158,18 @@ class TestScannerTick:
         assert result == ["THYAO"]
         assert evaluated_symbols == ["THYAO", "AKBNK", "THYAO"]
 
+    async def test_pending_portfolio_symbol_outside_watchlist_is_evaluated(
+        self, evaluated_symbols, runtime_stubs
+    ):
+        runtime_stubs["overrides"] = ["OPT25F"]
+        fake = FakeGateway()
+        scanner = SymbolScanner(gateway=make_gateway_client(fake))
+
+        result = await scanner.tick()
+
+        assert result == ["THYAO", "AKBNK", "OPT25F"]
+        assert evaluated_symbols == ["THYAO", "AKBNK", "OPT25F"]
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Güvenlik kapıları

@@ -44,6 +44,7 @@ from app.services.fundamentals_service import (
     list_fundamentals,
     upsert_fundamental,
 )
+from app.services.matriks_gateway import GatewayError, GatewayUnavailable, gateway_client
 from app.services.signal_override import SELL_ALL_SENTINEL_QTY, create_override
 from app.services.trade_profile import (
     EDITABLE_FIELDS,
@@ -68,6 +69,14 @@ templates = Jinja2Templates(
 )
 
 _DISPLAY_TZ = ZoneInfo("Europe/Istanbul")
+
+
+async def _notify_gateway_config_reload() -> None:
+    """Best-effort push; gateway also polls every 60 seconds."""
+    try:
+        await gateway_client.reload_config()
+    except (GatewayUnavailable, GatewayError) as exc:
+        logger.warning("Gateway config reload notification failed: %s", exc)
 
 
 def _local_time(value: datetime | None) -> str:
@@ -334,6 +343,7 @@ async def admin_config_update(request: Request) -> Any:
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
+    await _notify_gateway_config_reload()
     return RedirectResponse("/admin/config", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -564,6 +574,8 @@ async def admin_trade_profiles_create(request: Request) -> Any:
     description = str(form.get("description") or "")
     risk_level = str(form.get("risk_level") or "MEDIUM").strip().upper()
     changes = _parse_profile_form_fields(form)
+    for field in ("name", "description", "risk_level"):
+        changes.pop(field, None)
 
     try:
         async with async_session_factory() as session:
@@ -621,6 +633,7 @@ async def admin_trade_profiles_activate(request: Request, code: str) -> Any:
     except ValueError as exc:
         return await _trade_profiles_page(request, identity, error=str(exc))
 
+    await _notify_gateway_config_reload()
     return RedirectResponse("/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -1108,6 +1121,7 @@ async def admin_api_update_config(
             )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _notify_gateway_config_reload()
     return _config_dict(item)
 
 
@@ -1248,6 +1262,7 @@ async def admin_api_activate_trade_profile(
             )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _notify_gateway_config_reload()
     return _trade_profile_dict(profile, code)
 
 

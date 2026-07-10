@@ -48,8 +48,8 @@ class TestSyncPositions:
 
         synced = await sync_positions_from_gateway(make_client(fake))
 
-        assert synced == 2
-        assert await _positions() == {"THYAO": 0.0, "AKBNK": 25.0}
+        assert synced == 1
+        assert await _positions() == {"AKBNK": 25.0}
 
     async def test_updates_existing_rows(self):
         fake = FakeGateway()
@@ -62,8 +62,8 @@ class TestSyncPositions:
         synced = await sync_positions_from_gateway(client)
 
         assert synced == 1
-        # THYAO gateway tarafından bildirilmedi → silinmemeli
-        assert await _positions() == {"THYAO": 0.0, "AKBNK": 99.0}
+        # Tam snapshot'ta bulunmayan THYAO artık stale kabul edilip silinir.
+        assert await _positions() == {"AKBNK": 99.0}
 
     async def test_positions_not_loaded_is_skipped(self):
         fake = FakeGateway()
@@ -98,3 +98,16 @@ class TestSyncPositions:
 
         assert synced == 1
         assert await _positions() == {"THYAO": 12.0}
+
+    async def test_closed_and_stale_positions_are_removed(self):
+        fake = FakeGateway()
+        client = make_client(fake)
+        await sync_positions_from_gateway(client)
+
+        fake.positions = [
+            {"symbol": "AKBNK", "botQty": 0.0, "lockedLongTermQty": 0.0, "totalQty": 0.0}
+        ]
+        synced = await sync_positions_from_gateway(client)
+
+        assert synced == 0
+        assert await _positions() == {}

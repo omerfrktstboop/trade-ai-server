@@ -49,6 +49,7 @@ from app.services.fundamentals_service import (
 from app.services.matriks_gateway import GatewayError, GatewayUnavailable, gateway_client
 from app.services.notifications import notification_service
 from app.services.scanner import scanner
+from app.services.replay import replay_batch
 from app.services.signal_override import SELL_ALL_SENTINEL_QTY, create_override
 from app.services.trade_profile import (
     EDITABLE_FIELDS,
@@ -319,6 +320,30 @@ async def admin_why_blocked(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "admin/why_blocked.html", {"identity": identity,
         "active": "why-blocked", "rows": rows, "summary": summary,
         "filters": {"symbol": symbol, "category": category, "action": action, "only_blocked": only_blocked}, **status_ctx})
+
+
+@admin_router.get("/replay", response_class=HTMLResponse)
+async def admin_replay(request: Request) -> HTMLResponse:
+    identity = await require_admin(request)
+    async with async_session_factory() as session:
+        profiles = await list_profiles(session)
+        status_ctx = await _status_strip_context(session)
+    return templates.TemplateResponse(request, "admin/replay.html", {"identity": identity, "active": "replay", "profiles": profiles, "result": None, **status_ctx})
+
+
+@admin_router.post("/replay/run", response_class=HTMLResponse)
+async def admin_replay_run(request: Request) -> HTMLResponse:
+    identity = await require_admin(request)
+    form = await request.form()
+    profile_code = str(form.get("profile_code") or "") or None
+    mode = str(form.get("mode") or "PAPER")
+    symbols = [s.strip().upper() for s in str(form.get("symbols") or "").split(",") if s.strip()]
+    limit = min(200, max(1, int(form.get("limit") or 100)))
+    result = await replay_batch(profile_code=profile_code, symbols=symbols or None, limit=limit, mode=mode)
+    async with async_session_factory() as session:
+        profiles = await list_profiles(session)
+        status_ctx = await _status_strip_context(session)
+    return templates.TemplateResponse(request, "admin/replay.html", {"identity": identity, "active": "replay", "profiles": profiles, "result": result, **status_ctx})
 
 
 @admin_router.get("/config", response_class=HTMLResponse)

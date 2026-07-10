@@ -1515,10 +1515,7 @@ namespace Matriks.Lean.Algotrader
             {
                 string symbol = NormalizeSymbol(GetBarEventSymbol(barData));
                 if (string.IsNullOrWhiteSpace(symbol))
-                {
-                    SafeDebug("OnDataUpdate: BarDataEventArgs symbol is empty; skipped");
                     return;
-                }
 
                 var barDataModel = GetBarData();
                 int index = barData.BarDataIndex;

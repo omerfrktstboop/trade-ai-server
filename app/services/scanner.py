@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 # Aynı uyarıyı her tick'te loglamamak için susturma süresi.
 _WARN_SUPPRESS = timedelta(minutes=5)
+_ORDER_COOLDOWN = timedelta(minutes=15)
 
 
 class SymbolScanner:
@@ -66,6 +67,7 @@ class SymbolScanner:
         self._stop_event = asyncio.Event()
         self._last_scan_by_symbol: dict[str, datetime] = {}
         self._last_warn_by_key: dict[str, datetime] = {}
+        self._last_order_sent_at: dict[tuple[str, SignalAction], datetime] = {}
         self._last_discovery_by_symbol: dict[str, datetime] = {}
         self._last_discovery_run: datetime | None = None
 
@@ -342,6 +344,20 @@ class SymbolScanner:
             )
             return
 
+        cooldown_key = (response.symbol.strip().upper(), response.action)
+        last_sent = self._last_order_sent_at.get(cooldown_key)
+        now = datetime.now(timezone.utc)
+        if last_sent is not None and now - last_sent < _ORDER_COOLDOWN:
+            remaining = _ORDER_COOLDOWN - (now - last_sent)
+            logger.warning(
+                "Order skipped: cooldown active symbol=%s side=%s remaining=%ss requestId=%s",
+                response.symbol,
+                response.action.value,
+                max(1, int(remaining.total_seconds())),
+                response.request_id,
+            )
+            return
+
         try:
             outcome = await self._gateway.send_order(
                 request_id=response.request_id,
@@ -353,6 +369,8 @@ class SymbolScanner:
             )
             status = str(outcome.get("status", "UNKNOWN"))
             reason = str(outcome.get("reason", ""))
+            if outcome.get("accepted"):
+                self._last_order_sent_at[cooldown_key] = now
             logger.info(
                 "Order %s symbol=%s side=%s qty=%s price=%s requestId=%s reason=%s",
                 status,

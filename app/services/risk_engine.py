@@ -112,7 +112,10 @@ class RiskEngine:
         reasons: list[str] = []
 
         # ── 1. Unknown symbol ────────────────────────────────────────
-        if not self.config.is_symbol_allowed(request.symbol):
+        liquidation_sell = (
+            decision.action == SignalAction.SELL and request.bot_position_qty > 0
+        )
+        if not self.config.is_symbol_allowed(request.symbol) and not liquidation_sell:
             return self._block(
                 request,
                 f"Symbol {request.symbol} is not in the allowed list",
@@ -213,14 +216,22 @@ class RiskEngine:
 
         # ── 6. Max position value check ──────────────────────────────
         if action == SignalAction.BUY and qty > 0:
-            position_value = qty * request.last_price
-            if position_value > self.config.max_position_value_per_symbol:
+            current_qty = max(
+                0.0,
+                request.bot_position_qty,
+                request.total_account_qty,
+            )
+            projected_qty = current_qty + qty
+            projected_value = projected_qty * request.last_price
+            if projected_value > self.config.max_position_value_per_symbol:
                 reasons.append(
-                    f"BUY value {position_value:.0f} > max {self.config.max_position_value_per_symbol:.0f}"
+                    f"Projected BUY value {projected_value:.0f} > max "
+                    f"{self.config.max_position_value_per_symbol:.0f}"
                 )
                 return self._block(
                     request,
-                    f"BUY blocked: position value {position_value:.0f} exceeds max "
+                    f"BUY blocked: projected position {projected_qty:g} shares / "
+                    f"{projected_value:.0f} value exceeds max "
                     f"{self.config.max_position_value_per_symbol:.0f}",
                 )
 

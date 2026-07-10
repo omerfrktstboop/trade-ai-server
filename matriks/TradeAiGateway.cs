@@ -915,6 +915,22 @@ namespace Matriks.Lean.Algotrader
                 return bySymbolSide;
             }
 
+            // Some Matriks builds stringify OrderSide as a numeric/enum value
+            // that NormalizeOrderSide cannot map to BUY/SELL. A single pending
+            // order for this symbol is still an unambiguous match.
+            var symbolMatches = _pendingOrdersBySymbolSide.Values
+                .Where(x => NormalizeSymbol(x.Symbol) == NormalizeSymbol(symbol))
+                .ToList();
+            if (symbolMatches.Count == 1)
+            {
+                PendingOrderContext bySymbol = symbolMatches[0];
+                if (!string.IsNullOrWhiteSpace(orderId))
+                {
+                    _pendingOrdersByOrderId[orderId] = bySymbol;
+                }
+                return bySymbol;
+            }
+
             return null;
         }
 

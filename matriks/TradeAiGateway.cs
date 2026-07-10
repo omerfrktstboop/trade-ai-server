@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Matriks.Data.Symbol;
 using Matriks.Engines;
 using Matriks.Indicators;
+using Matriks.Enumeration;
 using Matriks.Lean.Algotrader.AlgoBase;
 using Matriks.Lean.Algotrader.Models;
 using Matriks.Lean.Algotrader.Trading;
@@ -116,6 +117,7 @@ namespace Matriks.Lean.Algotrader
         private readonly ConcurrentDictionary<string, MOV> _ema20BySymbol = new ConcurrentDictionary<string, MOV>();
         private readonly ConcurrentDictionary<string, MOV> _ema50BySymbol = new ConcurrentDictionary<string, MOV>();
         private readonly ConcurrentDictionary<string, MACD> _macdBySymbol = new ConcurrentDictionary<string, MACD>();
+        private readonly ConcurrentQueue<NewsSnapshot> _recentNews = new ConcurrentQueue<NewsSnapshot>();
 
         private readonly object _closeLock = new object();
         private readonly object _dailyCounterLock = new object();
@@ -165,6 +167,7 @@ namespace Matriks.Lean.Algotrader
                 }
                 AddSymbolMarketData(normalized);
                 AddSymbolMarketDepth(normalized);
+                AddNewsSymbol(normalized);
                 InitializeIndicators(normalized);
 
                 _botPositionQtyBySymbol[normalized] = 0m;
@@ -221,6 +224,30 @@ namespace Matriks.Lean.Algotrader
         {
             UpdatePositionCache(position, "OnRealPositionUpdate");
             LoadRealPositionsSnapshot();
+        }
+
+        public override void OnNewsReceived(AlgoNewsModel newsModel)
+        {
+            if (newsModel == null)
+                return;
+
+            _recentNews.Enqueue(new NewsSnapshot
+            {
+                NewsId = newsModel.NewsId,
+                Header = newsModel.Header,
+                DateTime = newsModel.DateTime,
+                Categories = newsModel.Categories ?? new List<string>(),
+                Symbols = newsModel.Symbols ?? new List<string>(),
+                Sources = newsModel.Source ?? new List<string>(),
+                FilterType = newsModel.FilterType,
+                MatchedFilters = newsModel.MatchedFilters ?? new List<string>(),
+                HasAttachments = newsModel.HasAttachments,
+                HasDetail = newsModel.HasDetail,
+                DailyNewsNo = newsModel.DailyNewsNo
+            });
+
+            while (_recentNews.Count > 500)
+                _recentNews.TryDequeue(out _);
         }
 
         /// <summary>
@@ -427,6 +454,42 @@ namespace Matriks.Lean.Algotrader
             if (request.Method == "GET" && request.Path == "/positions")
             {
                 await HandlePositionsAsync(stream);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/capabilities")
+            {
+                await HandleCapabilitiesAsync(stream);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/depth")
+            {
+                await HandleDepthAsync(stream, request);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/indicators")
+            {
+                await HandleIndicatorsAsync(stream, request);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/news")
+            {
+                await HandleNewsAsync(stream, request);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/institutions")
+            {
+                await HandleInstitutionsAsync(stream, request);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/mkk")
+            {
+                await HandleMkkAsync(stream);
                 return;
             }
 
@@ -655,6 +718,145 @@ namespace Matriks.Lean.Algotrader
         }
 
         // ── Order path (Phase 2 — kilitler TradeAiAgenticBot'tan) ───
+
+        private async Task HandleCapabilitiesAsync(NetworkStream stream)
+        {
+            await WriteJsonAsync(stream, 200, new
+            {
+                ok = true,
+                capabilities = new
+                {
+                    quotes = true, ohlcv = true, nativeIndicators = true,
+                    marketDepth = true, maxDepthLevels = 25, news = true,
+                    institutionDistribution = true,
+                    institutionDistributionRequiresLicense = true,
+                    mkkCustody = false,
+                    mkkReason = "No documented AlgoTrader C# access method"
+                }
+            });
+        }
+
+        private async Task HandleDepthAsync(NetworkStream stream, HttpRequest request)
+        {
+            string symbol = NormalizeSymbol(request.GetQueryValue("symbol"));
+            if (!IsAllowedSymbol(symbol))
+            {
+                await WriteJsonAsync(stream, 400, new { ok = false, error = "symbol not allowed", symbol = symbol });
+                return;
+            }
+            int levels = 25;
+            int parsed;
+            if (int.TryParse(request.GetQueryValue("levels"), out parsed))
+                levels = Math.Max(1, Math.Min(25, parsed));
+            try
+            {
+                var depth = GetMarketDepth(symbol);
+                var bids = depth == null || depth.BidRows == null ? new List<object>()
+                    : depth.BidRows.Take(levels).Select((row, index) => (object)new
+                    { level = index + 1, price = ToDouble(row.Price), size = ToDouble(row.Size), orderCount = row.OrderCount }).ToList();
+                var asks = depth == null || depth.AskRows == null ? new List<object>()
+                    : depth.AskRows.Take(levels).Select((row, index) => (object)new
+                    { level = index + 1, price = ToDouble(row.Price), size = ToDouble(row.Size), orderCount = row.OrderCount }).ToList();
+                decimal totalBid = depth == null || depth.BidRows == null ? 0m : depth.BidRows.Take(levels).Sum(x => x.Size);
+                decimal totalAsk = depth == null || depth.AskRows == null ? 0m : depth.AskRows.Take(levels).Sum(x => x.Size);
+                decimal total = totalBid + totalAsk;
+                await WriteJsonAsync(stream, 200, new
+                {
+                    ok = true, symbol = symbol, levels = levels,
+                    available = bids.Count > 0 || asks.Count > 0,
+                    bids = bids, asks = asks,
+                    analysis = new
+                    {
+                        totalBidSize = ToDouble(totalBid), totalAskSize = ToDouble(totalAsk),
+                        imbalanceRatio = total > 0m ? ToDouble((totalBid - totalAsk) / total) : 0.0,
+                        bidAskSizeRatio = totalAsk > 0m ? ToDouble(totalBid / totalAsk) : 0.0
+                    },
+                    timestamp = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz")
+                });
+            }
+            catch (Exception ex)
+            {
+                await WriteJsonAsync(stream, 200, new { ok = true, symbol = symbol, available = false, error = ex.Message });
+            }
+        }
+
+        private async Task HandleIndicatorsAsync(NetworkStream stream, HttpRequest request)
+        {
+            string symbol = NormalizeSymbol(request.GetQueryValue("symbol"));
+            if (!IsAllowedSymbol(symbol))
+            {
+                await WriteJsonAsync(stream, 400, new { ok = false, error = "symbol not allowed", symbol = symbol });
+                return;
+            }
+            MarketDataPayload market = BuildMarketData(symbol, "INDICATORS");
+            string[] keys = { "rsi", "ema20", "ema50", "macd", "macdSignal", "indicatorSource", "technicalFeatures", "ohlcReliable", "ohlcSource" };
+            var indicators = market.Payload.Where(x => keys.Contains(x.Key)).ToDictionary(x => x.Key, x => x.Value);
+            await WriteJsonAsync(stream, 200, new { ok = true, symbol = symbol, indicators = indicators, timestamp = market.Timestamp });
+        }
+
+        private async Task HandleNewsAsync(NetworkStream stream, HttpRequest request)
+        {
+            string symbol = NormalizeSymbol(request.GetQueryValue("symbol"));
+            int limit = 50;
+            int parsed;
+            if (int.TryParse(request.GetQueryValue("limit"), out parsed))
+                limit = Math.Max(1, Math.Min(200, parsed));
+            IEnumerable<NewsSnapshot> query = _recentNews.ToArray().Reverse();
+            if (!string.IsNullOrWhiteSpace(symbol))
+                query = query.Where(x => x.Symbols.Any(s => NormalizeSymbol(s) == symbol));
+            await WriteJsonAsync(stream, 200, new
+            {
+                ok = true, symbol = string.IsNullOrWhiteSpace(symbol) ? null : symbol,
+                news = query.Take(limit).ToList(), cacheSize = _recentNews.Count,
+                note = "Only live news received after gateway startup is cached."
+            });
+        }
+
+        private async Task HandleInstitutionsAsync(NetworkStream stream, HttpRequest request)
+        {
+            string symbol = NormalizeSymbol(request.GetQueryValue("symbol"));
+            if (!IsAllowedSymbol(symbol))
+            {
+                await WriteJsonAsync(stream, 400, new { ok = false, error = "symbol not allowed", symbol = symbol });
+                return;
+            }
+            int limit = 5;
+            int parsed;
+            if (int.TryParse(request.GetQueryValue("limit"), out parsed))
+                limit = Math.Max(1, Math.Min(20, parsed));
+            try
+            {
+                var buyers = new List<object>();
+                var sellers = new List<object>();
+                for (int rank = 1; rank <= limit; rank++)
+                {
+                    var buyer = GetBestInstitution(symbol, TransactionDataField.Size, TransactionSide.Net, BestBuyerSellerOrder.NetBuyerLot, MoneyIncomePeriod.Daily, rank, true);
+                    var seller = GetBestInstitution(symbol, TransactionDataField.Size, TransactionSide.Net, BestBuyerSellerOrder.NetSellerLot, MoneyIncomePeriod.Daily, rank, true);
+                    if (buyer != null) buyers.Add(new { id = buyer.Id, name = buyer.Name, rank = buyer.Rank, value = ToDouble(buyer.Value) });
+                    if (seller != null) sellers.Add(new { id = seller.Id, name = seller.Name, rank = seller.Rank, value = ToDouble(seller.Value) });
+                }
+                await WriteJsonAsync(stream, 200, new
+                {
+                    ok = true, available = buyers.Count > 0 || sellers.Count > 0,
+                    symbol = symbol, period = "DAILY", buyers = buyers, sellers = sellers,
+                    requiresLicense = "AKDE/AKD for equities; VAKD for VIOP end-of-day data"
+                });
+            }
+            catch (Exception ex)
+            {
+                await WriteJsonAsync(stream, 200, new { ok = true, available = false, symbol = symbol, error = ex.Message, requiresLicense = "AKDE/AKD or VAKD" });
+            }
+        }
+
+        private async Task HandleMkkAsync(NetworkStream stream)
+        {
+            await WriteJsonAsync(stream, 200, new
+            {
+                ok = true, supported = false, available = false,
+                reason = "No public AlgoTrader C# method for MKK/Takas data is documented by Matriks IQ.",
+                alternative = "Use a separately licensed/exported Matriks source when an official API is supplied."
+            });
+        }
 
         private async Task HandleOrderAsync(NetworkStream stream, HttpRequest request)
         {
@@ -1424,6 +1626,7 @@ namespace Matriks.Lean.Algotrader
                     AddSymbol(symbol, IndicatorPeriod);
                 AddSymbolMarketData(symbol);
                 AddSymbolMarketDepth(symbol);
+                AddNewsSymbol(symbol);
                 InitializeIndicators(symbol);
 
                 AllowedSymbols = AllowedSymbols.Concat(new[] { symbol }).ToArray();
@@ -2284,6 +2487,21 @@ namespace Matriks.Lean.Algotrader
             public string DataType { get; set; }
             public Dictionary<string, object> Payload { get; set; }
             public string Timestamp { get; set; }
+        }
+
+        private struct NewsSnapshot
+        {
+            public int NewsId { get; set; }
+            public string Header { get; set; }
+            public DateTime DateTime { get; set; }
+            public List<string> Categories { get; set; }
+            public List<string> Symbols { get; set; }
+            public List<string> Sources { get; set; }
+            public string FilterType { get; set; }
+            public List<string> MatchedFilters { get; set; }
+            public bool HasAttachments { get; set; }
+            public bool HasDetail { get; set; }
+            public int DailyNewsNo { get; set; }
         }
 
         private struct OrderRequest

@@ -279,6 +279,19 @@ Verify the gateway end-to-end with:
 python scripts/gateway_smoke.py
 ```
 
+Additional authenticated gateway data endpoints:
+
+- `GET /capabilities` — supported/licensed data surface metadata
+- `GET /depth?symbol=THYAO&levels=25` — up to 25 bid/ask levels and imbalance
+- `GET /indicators?symbol=THYAO` — RSI, EMA20/50, MACD and technical features
+- `GET /news?symbol=THYAO&limit=50` — live news cached after gateway startup
+- `GET /institutions?symbol=THYAO&limit=5` — ranked daily AKD buyers/sellers
+- `GET /mkk` — explicit MKK/Takas capability status
+
+AKD data requires the relevant Matriks licence. Matriks documents MKK/Takas
+as a terminal analysis screen but does not currently publish an AlgoTrader C#
+access method, so `/mkk` reports `supported=false` instead of fabricating data.
+
 ## Windows Server Deployment
 
 The production target is a single Windows machine that already runs

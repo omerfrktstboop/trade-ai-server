@@ -88,6 +88,47 @@ class MatriksGatewayClient:
         """
         return await self._get("/positions")
 
+    async def get_capabilities(self) -> dict[str, Any]:
+        """Return the data surfaces supported by the running gateway."""
+        return await self._get("/capabilities")
+
+    async def get_depth(self, symbol: str, levels: int = 25) -> dict[str, Any]:
+        """Return up to 25 bid/ask levels plus aggregate imbalance metrics."""
+        return await self._get(
+            "/depth",
+            params={
+                "symbol": symbol.strip().upper(),
+                "levels": str(max(1, min(25, levels))),
+            },
+        )
+
+    async def get_indicators(self, symbol: str) -> dict[str, Any]:
+        """Return native/fallback technical indicators for one symbol."""
+        return await self._get(
+            "/indicators", params={"symbol": symbol.strip().upper()}
+        )
+
+    async def get_news(self, symbol: str | None = None, limit: int = 50) -> dict[str, Any]:
+        """Return live Matriks news cached since gateway startup."""
+        params = {"limit": str(max(1, min(200, limit)))}
+        if symbol:
+            params["symbol"] = symbol.strip().upper()
+        return await self._get("/news", params=params)
+
+    async def get_institutions(self, symbol: str, limit: int = 5) -> dict[str, Any]:
+        """Return daily ranked AKD buyers/sellers when licensed."""
+        return await self._get(
+            "/institutions",
+            params={
+                "symbol": symbol.strip().upper(),
+                "limit": str(max(1, min(20, limit))),
+            },
+        )
+
+    async def get_mkk(self) -> dict[str, Any]:
+        """Return explicit MKK/Takas capability status from the gateway."""
+        return await self._get("/mkk")
+
     async def send_order(
         self,
         *,

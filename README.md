@@ -4,6 +4,10 @@ Modular FastAPI backend for AI-powered trading. Clean, typed, and extensible.
 
 ## Quick Start
 
+Runs natively — no Docker. The production target is a Windows machine
+running Matriks IQ, so the server, PostgreSQL, and the Matriks gateway all
+run as native processes on the same box (see [Architecture](#architecture)).
+
 ```bash
 # 1. Clone and enter
 git clone https://github.com/YOUR_USER/trade-ai-server.git
@@ -11,7 +15,7 @@ cd trade-ai-server
 
 # 2. Create virtual environment
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
 # 3. Install dependencies
 pip install -r requirements.txt
@@ -23,6 +27,9 @@ cp .env.example .env
 # 5. Run the server
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+For a permanent Windows deployment, run uvicorn as a service (e.g. via NSSM
+or Task Scheduler) so it survives reboots and RDP disconnects.
 
 ## Environment Variables
 
@@ -36,7 +43,10 @@ Copy `.env.example` → `.env` and fill in the required values:
 | `DEEPSEEK_API_KEY`  | *        | —                       | Required when `AI_PROVIDER=deepseek`     |
 | `DEEPSEEK_MODEL`    | No       | `deepseek-chat`         | Model name                               |
 | `DATABASE_URL`      | Prod     | `sqlite+aiosqlite:///./dev.db` (dev) | PostgreSQL for production, SQLite auto for dev |
-| `POSTGRES_PASSWORD`  | Prod    | —                       | PostgreSQL password (used by docker compose) |
+| `MATRIKS_GATEWAY_URL` | Yes    | `http://127.0.0.1:8787` | Matriks gateway address — always loopback  |
+| `MATRIKS_GATEWAY_TOKEN` | Prod | —                     | Must match the gateway's `ApiToken` parameter |
+| `SCANNER_ENABLED`   | No       | `false`                 | Starts the background scan loop            |
+| `SCANNER_ALLOW_ORDERS` | No    | `false`                 | Lets scanner decisions become DEMO_LIVE orders |
 | `TELEGRAM_BOT_TOKEN`| No       | —                       | Telegram bot token                       |
 | `TELEGRAM_CHAT_ID`  | No       | —                       | Default chat ID                          |
 | `DEFAULT_MODE`      | No       | `paper`                 | `paper` / `live` / `demo_live` / `real_live` — fallback mode used when a request doesn't specify one. `manual` is only valid as a **per-request** `mode` field, not as `DEFAULT_MODE`. |
@@ -52,29 +62,9 @@ Copy `.env.example` → `.env` and fill in the required values:
 **Database:** In development, `DATABASE_URL` can be left empty — the server
 auto-creates a SQLite database (`dev.db`) on first request. No PostgreSQL
 setup needed for local development. In production, PostgreSQL is required:
-`DATABASE_URL` must be set and must not be SQLite.
-
-## Docker
-
-`docker compose up` starts both the API server and a **PostgreSQL** database
-(postgres:16-alpine). It is the recommended way to run the full stack for
-staging and production.
-
-```bash
-# Copy env template and set a DB password
-cp .env.example .env
-# Edit .env → set POSTGRES_PASSWORD and uncomment the production DATABASE_URL
-
-# Start both API + PostgreSQL
-docker compose up --build
-```
-
-| Service    | Port | Credentials                      |
-|------------|------|----------------------------------|
-| API        | 8000 | Bearer token: `API_TOKEN`        |
-| PostgreSQL | 5432 | `trade_ai` / `trade_ai` / from `.env` |
-
-The API waits for PostgreSQL to be healthy before starting (`depends_on` + healthcheck).
+`DATABASE_URL` must be set and must not be SQLite. Install PostgreSQL
+natively on Windows (no Docker) and point `DATABASE_URL` at it, e.g.
+`postgresql+asyncpg://trade_ai:***@localhost:5432/trade_ai`.
 
 ## Running Modes
 
@@ -119,7 +109,9 @@ Aşağıdaki adımları **LIVE** moda geçmeden önce mutlaka tamamlayın:
 | 7 | **Günlük limit** | `RISK_MAX_DAILY_TRADE_COUNT=3` doğru mu? | Aşılınca BUY/SELL bloklanır |
 | 8 | **Cutoff saati** | `RISK_DISABLE_TRADING_AFTER=17:30`, `RISK_TIMEZONE=Europe/Istanbul` doğru mu? | Sonrası sadece WAIT |
 | 9 | **PostgreSQL** | `DATABASE_URL=postgresql+asyncpg://...` ayarlandı mı? | Production'da SQLite çalışmaz |
-| 10 | **Docker healtcheck** | `docker compose up --build` + `/api/health` → 200 | Tüm servisler ayakta |
+| 10 | **Gateway sağlığı** | `python scripts/gateway_smoke.py` | Tüm kontroller geçer |
+| 11 | **Scanner önce PAPER'da** | `SCANNER_ENABLED=true`, `SCANNER_ALLOW_ORDERS=false` ile birkaç gün çalıştır | Kararlar `ai_decisions`'a düşer, emir gitmez |
+| 12 | **Emir yolu DEMO_LIVE'da** | `SCANNER_ALLOW_ORDERS=true` + admin panelden `tradingMode=DEMO_LIVE` | Gateway `order_logs`'a `SENT_PENDING` yazar |
 
 > **⚠️ LIVE mod gerçek emir gönderir.** Sadece PAPER → MANUAL → LIVE sırasıyla
 > test ettikten ve tüm kontrolleri tamamladıktan sonra aktif edin.

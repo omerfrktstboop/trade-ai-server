@@ -1,6 +1,12 @@
 # Matriks IQ → POST /api/signal/evaluate
 
-Matriks IQ (C# tarafı) teknik indikatör sinyali aldığında `POST /api/signal/evaluate`
+> **Not:** Bu endpoint canlı trading akışının parçası değildir — server artık
+> kendi `scanner.py`'siyle `matriks/TradeAiGateway.cs`'ten veri çekip
+> in-process karar üretiyor (bkz. README.md → Architecture). Bu doküman
+> `/api/signal/evaluate`'i elle test/debug için tarif eder; caller kendi
+> market verisini gönderir, server bunu sorgulamaz.
+
+Bir client teknik indikatör sinyali aldığında `POST /api/signal/evaluate`
 endpoint'ine JSON istek atar. Sunucu isteği AI + Risk Engine'den geçirip BUY/SELL/WAIT
 kararıyla döner.
 

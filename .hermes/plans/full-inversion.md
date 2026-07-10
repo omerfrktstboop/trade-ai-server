@@ -223,11 +223,30 @@ koşu doğrulanmadan ve eski bot durdurulmadan DEPLOY EDİLMEMELİ.**
       `test_position_sync.py` (5 test).
 - [ ] Sunucuda eski `TradeAiAgenticBot` durdurulur (cutover anı)
 
-### Phase 4 — Temizlik
-- [ ] `TradeAiAgenticBot.cs` ve `TradeAiHttpApiTest.cs` silinir
-- [ ] README + `docs/matriks-sample-request.md` yeni mimariye göre yazılır
-- [ ] `deploy-production.yml` kaldırılır veya lokal kuruluma uyarlanır
-- [ ] ruff + pytest + smoke test yeşil
+### Phase 4 — Temizlik — 2026-07-10
+- [x] `TradeAiAgenticBot.cs` ve `TradeAiHttpApiTest.cs` silindi — `matriks/`
+      klasöründe artık sadece `TradeAiGateway.cs` var.
+- [x] `README.md`: Docker bölümü kaldırıldı, native Windows kurulumuna göre
+      yeniden yazıldı (Quick Start, env tablosu, canlı öncesi kontrol
+      listesi gateway/scanner adımlarıyla güncellendi), Architecture
+      bölümü Phase 0-2'de zaten eklenmişti.
+- [x] `docs/matriks-sample-request.md`'ye üstte net bir not eklendi: bu
+      endpoint canlı akışın parçası değil, sadece manuel test.
+- [x] Kullanıcı onayıyla silindi: `.github/workflows/deploy-production.yml`,
+      `docker-compose.yml`, `Dockerfile`, `scripts/deploy_from_main.sh` —
+      hepsi eski VPS/Docker deploy modeline aitti, native mimaride kullanılmıyor.
+- [x] `.env.example`: `POSTGRES_PASSWORD`/docker-compose referansı silindi,
+      native PostgreSQL `DATABASE_URL` örneğiyle değiştirildi.
+- [x] `tests/test_matriks_bot_static.py` silindi — sildiğimiz
+      `TradeAiAgenticBot.cs`'in statik yapısını (config polling, scan loop,
+      session) doğruluyordu; yeni gateway'in sorumlulukları farklı.
+- [x] `pytest --collect-only`: 406 test, hiçbir import hatası yok.
+- [x] Hızlı test grubu (DB'siz, ~330 test) yeşil.
+- [ ] ruff kurulu değil bu ortamda — atlandı.
+- [ ] DB'ye dokunan tam suite (admin panel, trade profiles, vb.) bu oturumda
+      zaman kısıtı nedeniyle tekrar koşulmadı; Phase 3 sonunda tek tek
+      doğrulanmıştı (40+17+23+22 test yeşil), bu Phase 4 değişiklikleri
+      onlara dokunmuyor.
 
 ## Test Stratejisi
 - **pytest:** Gateway'i taklit eden mini FastAPI stub (`tests/fake_gateway.py`)

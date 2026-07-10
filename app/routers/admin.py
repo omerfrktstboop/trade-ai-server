@@ -45,6 +45,7 @@ from app.services.fundamentals_service import (
     upsert_fundamental,
 )
 from app.services.matriks_gateway import GatewayError, GatewayUnavailable, gateway_client
+from app.services.scanner import scanner
 from app.services.signal_override import SELL_ALL_SENTINEL_QTY, create_override
 from app.services.trade_profile import (
     EDITABLE_FIELDS,
@@ -259,13 +260,7 @@ async def admin_logout() -> RedirectResponse:
 @admin_router.get("/", response_class=HTMLResponse)
 async def admin_dashboard(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
-    async with async_session_factory() as session:
-        configs = await _config_lookup(session)
-        active_profile = await get_active_profile(session)
-        today_counts = await get_today_trade_counts(session, "*")
-        latest_risk = await _latest(session, RiskDecision, 20)
-        latest_orders = await _latest(session, OrderLog, 20)
-        status_ctx = await _status_strip_context(session, configs=configs, profile=active_profile)
+    dashboard = await _dashboard_context()
 
     return templates.TemplateResponse(
         request,
@@ -273,12 +268,7 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
         {
             "identity": identity,
             "active": "dashboard",
-            "configs": configs,
-            "active_profile": active_profile,
-            "today_trade_count": today_counts.bot_count,
-            "latest_risk": latest_risk,
-            "latest_orders": latest_orders,
-            **status_ctx,
+            **dashboard,
         },
     )
 
@@ -1104,6 +1094,13 @@ async def admin_api_dashboard(request: Request) -> dict[str, Any]:
     }
 
 
+@admin_api_router.get("/bot-status")
+async def admin_api_bot_status(request: Request) -> dict[str, Any]:
+    """Return best-effort runtime status without making the admin API fragile."""
+    await require_admin(request)
+    return await _bot_status()
+
+
 @admin_api_router.get("/config")
 async def admin_api_config(request: Request) -> list[dict[str, Any]]:
     await require_admin(request)
@@ -1398,6 +1395,112 @@ async def _status_strip_context(
         "status_profile_code": profile.code,
         "status_profile_risk_level": profile.risk_level,
     }
+
+
+async def _dashboard_context() -> dict[str, Any]:
+    """Load dashboard data defensively so operational visibility survives DB issues."""
+    try:
+        async with async_session_factory() as session:
+            configs = await _config_lookup(session)
+            active_profile = await get_active_profile(session)
+            today_counts = await get_today_trade_counts(session, "*")
+            latest_risk = await _latest(session, RiskDecision, 20)
+            latest_orders = await _latest(session, OrderLog, 20)
+            status_ctx = await _status_strip_context(
+                session, configs=configs, profile=active_profile
+            )
+        db_error = None
+    except Exception as exc:
+        logger.exception("Admin dashboard DB query failed")
+        configs = {}
+        active_profile = None
+        today_trade_count = 0
+        latest_risk = []
+        latest_orders = []
+        status_ctx = {
+            "status_mode": "UNKNOWN",
+            "status_kill_switch": False,
+            "status_profile_code": "UNKNOWN",
+            "status_profile_risk_level": "UNKNOWN",
+        }
+        db_error = str(exc)
+    else:
+        today_trade_count = today_counts.bot_count
+    return {
+        "configs": configs,
+        "active_profile": active_profile,
+        "today_trade_count": today_trade_count,
+        "latest_risk": latest_risk,
+        "latest_orders": latest_orders,
+        "bot_status": await _bot_status(db_error=db_error),
+        "dashboard_db_error": db_error,
+        **status_ctx,
+    }
+
+
+async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
+    """Collect gateway, scanner and runtime state; every source is optional."""
+    result: dict[str, Any] = {
+        "gateway": {"reachable": False, "health": None, "error": None},
+        "scanner": scanner.get_status(),
+        "runtime": {"dbAvailable": db_error is None, "dbError": db_error},
+    }
+    try:
+        health = await gateway_client.health()
+        result["gateway"] = {
+            "reachable": True,
+            "health": health,
+            "positionsLoaded": health.get("positionsLoaded"),
+            "subscriptionsInitialized": health.get("subscriptionsInitialized"),
+            "requestCount": health.get("requestCount"),
+            "symbols": health.get("symbols") or [],
+            "quoteAgeSeconds": health.get("quoteAgeSeconds"),
+            "orderLimits": health.get("orderLimits"),
+            "profileCode": health.get("profileCode"),
+            "mode": health.get("mode"),
+            "error": None,
+        }
+    except (GatewayUnavailable, GatewayError) as exc:
+        result["gateway"]["error"] = str(exc)
+    except Exception as exc:
+        logger.warning("Gateway status query failed: %s", exc)
+        result["gateway"]["error"] = str(exc)
+
+    if db_error is not None:
+        return result
+    try:
+        async with async_session_factory() as session:
+            configs = await _config_lookup(session)
+            profile = await get_active_profile(session)
+            counts = await get_today_trade_counts(session, "*")
+            latest_risk = await _latest(session, RiskDecision, 1)
+            latest_order = await _latest(session, OrderLog, 1)
+        config_values = {key: item.value for key, item in configs.items()}
+        config_hash = hashlib.sha256(
+            json.dumps(config_values, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:16]
+        result["runtime"].update(
+            {
+                "tradingMode": config_values.get("tradingMode", "UNKNOWN"),
+                "botMode": config_values.get("botMode", "UNKNOWN"),
+                "killSwitchEnabled": config_values.get("killSwitchEnabled") == "true",
+                "activeTradeProfile": {
+                    "code": profile.code,
+                    "name": profile.name,
+                    "riskLevel": profile.risk_level,
+                },
+                "todayTradeCount": counts.bot_count,
+                "latestRiskDecision": _row_dict(latest_risk[0]) if latest_risk else None,
+                "latestOrderLog": _row_dict(latest_order[0]) if latest_order else None,
+                "configHash": config_hash,
+                "profileCode": profile.code,
+                "symbolsCount": len(_split_csv_symbols(config_values.get("allowedSymbols", ""))),
+            }
+        )
+    except Exception as exc:
+        logger.warning("Bot status DB query failed: %s", exc)
+        result["runtime"].update({"dbAvailable": False, "dbError": str(exc)})
+    return result
 
 
 async def _apply_emergency_action(

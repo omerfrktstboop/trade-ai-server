@@ -75,6 +75,8 @@ class SymbolScanner:
         self._last_discovery_by_symbol: dict[str, datetime] = {}
         self._last_discovery_run: datetime | None = None
         self._last_portfolio_scan: datetime | None = None
+        self._last_tick_at: datetime | None = None
+        self._last_evaluated_symbols: list[str] = []
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -102,6 +104,23 @@ class SymbolScanner:
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    def get_status(self) -> dict[str, object]:
+        """Return a read-only runtime snapshot for the admin status view."""
+        return {
+            "enabled": settings.scanner_enabled,
+            "allowOrders": settings.scanner_allow_orders,
+            "running": self.running,
+            "tickSeconds": self._tick_seconds,
+            "lastTickAt": self._last_tick_at.isoformat() if self._last_tick_at else None,
+            "lastEvaluatedSymbols": list(self._last_evaluated_symbols),
+            "lastDiscoveryRunAt": (
+                self._last_discovery_run.isoformat() if self._last_discovery_run else None
+            ),
+            "lastPortfolioScanAt": (
+                self._last_portfolio_scan.isoformat() if self._last_portfolio_scan else None
+            ),
+        }
+
     # ── Loop ───────────────────────────────────────────────────────────────
 
     async def _run_loop(self) -> None:
@@ -119,6 +138,8 @@ class SymbolScanner:
                 pass
 
     async def tick(self) -> list[str]:
+        self._last_tick_at = datetime.now(timezone.utc)
+        self._last_evaluated_symbols = []
         """Tek tarama turu. Değerlendirilen sembollerin listesini döndürür (test için)."""
         # ── Runtime config (kill switch, cutoff, semboller, interval) ──────
         kill_switch = False
@@ -242,6 +263,7 @@ class SymbolScanner:
             await self._run_discovery()
             await self._run_portfolio_scan(pending_overrides)
 
+        self._last_evaluated_symbols = list(evaluated)
         return evaluated
 
     async def _run_discovery(self) -> None:

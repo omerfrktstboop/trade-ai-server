@@ -5,6 +5,7 @@
 
 {% include "admin/_auto_refresh.html" %}
 
+{% if configs %}
 <div class="stat-grid">
   <div class="card">
     <div class="card-header">İşlem Modu</div>
@@ -32,10 +33,22 @@
   <div class="card">
     <div class="card-header">Aktif Trade Profile</div>
     <div class="card-value" style="font-size:20px">
-      {{ active_profile.name }}
-      <span class="badge {% if active_profile.risk_level in ['HIGH', 'EXTREME'] %}badge-sell{% elif active_profile.risk_level == 'LOW' %}badge-buy{% else %}badge-wait{% endif %}" style="margin-left:6px">{{ active_profile.risk_level }}</span>
+      {{ active_profile.name if active_profile else 'Bilinmiyor' }}
+      <span class="badge {% if active_profile and active_profile.risk_level in ['HIGH', 'EXTREME'] %}badge-sell{% elif active_profile and active_profile.risk_level == 'LOW' %}badge-buy{% else %}badge-wait{% endif %}" style="margin-left:6px">{{ active_profile.risk_level if active_profile else 'UNKNOWN' }}</span>
     </div>
     <div class="mt-16" style="font-size:12px;color:var(--text-muted)"><a href="/admin/trade-profiles" class="log-link">Profilleri yönet →</a></div>
+  </div>
+</div>
+{% endif %}
+
+<div class="mb-24">
+  <div class="flex-between mb-16"><h2 class="section-title">Bot Status</h2><a class="log-link" href="/api/admin/bot-status">JSON</a></div>
+  {% if dashboard_db_error %}<div class="status status-danger">DB status unavailable: {{ dashboard_db_error }}</div>{% endif %}
+  <div class="stat-grid">
+    <div class="card"><div class="card-header">Gateway</div><div class="card-value">{% if bot_status.gateway.reachable %}<span class="status status-ok">Reachable</span>{% else %}<span class="status status-danger">Unavailable</span>{% endif %}</div><div class="mt-16 text-sm text-muted">positions: {{ bot_status.gateway.positionsLoaded | default('n/a') }}, subscriptions: {{ bot_status.gateway.subscriptionsInitialized | default('n/a') }}<br>quote age: {{ bot_status.gateway.quoteAgeSeconds | default('n/a') }} s<br>{{ bot_status.gateway.error | default('') }}</div></div>
+    <div class="card"><div class="card-header">Scanner</div><div class="card-value">{% if bot_status.scanner.running %}<span class="status status-ok">Running</span>{% else %}<span class="status status-idle">Stopped</span>{% endif %}</div><div class="mt-16 text-sm text-muted">enabled: {{ bot_status.scanner.enabled }}, orders: {{ bot_status.scanner.allowOrders }}<br>tick: {{ bot_status.scanner.tickSeconds }}s<br>last: {{ bot_status.scanner.lastTickAt | default('never') }}</div></div>
+    <div class="card"><div class="card-header">Runtime</div><div class="card-value">{{ bot_status.runtime.tradingMode | default('UNKNOWN') }}</div><div class="mt-16 text-sm text-muted">kill switch: {{ bot_status.runtime.killSwitchEnabled | default(false) }}<br>profile: {{ bot_status.runtime.profileCode | default('UNKNOWN') }}<br>today trades: {{ bot_status.runtime.todayTradeCount | default(0) }}</div></div>
+    <div class="card"><div class="card-header">Config</div><div class="card-value mono" style="font-size:16px">{{ bot_status.runtime.configHash | default('n/a') }}</div><div class="mt-16 text-sm text-muted">symbols: {{ bot_status.runtime.symbolsCount | default(0) }}<br>evaluated: {{ bot_status.scanner.lastEvaluatedSymbols | join(', ') or 'none' }}<br>discovery: {{ bot_status.scanner.lastDiscoveryRunAt | default('never') }}</div></div>
   </div>
 </div>
 

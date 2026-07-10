@@ -339,6 +339,30 @@ class TestAdminDashboard:
         assert "Aktif Trade Profile" in resp.text
         assert "NORMAL" in resp.text
 
+    def test_bot_status_is_safe_when_gateway_is_unavailable(
+        self, client: TestClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ):
+        from app.routers import admin
+        from app.services.matriks_gateway import GatewayUnavailable
+
+        class UnavailableGateway:
+            async def health(self):
+                raise GatewayUnavailable("offline")
+
+        monkeypatch.setattr(admin, "gateway_client", UnavailableGateway())
+        response = client.get("/api/admin/bot-status", headers=auth_headers)
+
+        assert response.status_code == 200
+        assert response.json()["gateway"]["reachable"] is False
+
+    def test_scanner_status_has_safe_defaults(self):
+        from app.services.scanner import SymbolScanner
+
+        status = SymbolScanner(tick_seconds=7).get_status()
+        assert status["running"] is False
+        assert status["lastTickAt"] is None
+        assert status["lastEvaluatedSymbols"] == []
+
 
 class TestLogsListBugFixes:
     """Regression coverage for two field-name mismatches that made the

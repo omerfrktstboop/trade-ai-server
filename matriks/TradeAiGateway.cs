@@ -497,7 +497,12 @@ namespace Matriks.Lean.Algotrader
 
             if (request.Method == "POST" && request.Path == "/config/reload")
             {
+                SafeDebug("Server config reload requested");
                 bool loaded = await FetchAndApplyServerConfigAsync(true);
+                SafeDebug("Server config reload completed ok=" + loaded
+                    + " profile=" + ActiveProfileCode
+                    + " mode=" + RuntimeMode
+                    + " symbols=" + string.Join(",", AllowedSymbols));
                 await WriteJsonAsync(stream, loaded ? 200 : 503, new
                 {
                     ok = loaded,

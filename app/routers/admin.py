@@ -74,7 +74,13 @@ _DISPLAY_TZ = ZoneInfo("Europe/Istanbul")
 async def _notify_gateway_config_reload() -> None:
     """Best-effort push; gateway also polls every 60 seconds."""
     try:
-        await gateway_client.reload_config()
+        response = await gateway_client.reload_config()
+        logger.info(
+            "Gateway config reload notified profile=%s ok=%s symbols=%s",
+            response.get("profileCode"),
+            response.get("ok"),
+            ",".join(response.get("symbols") or []),
+        )
     except (GatewayUnavailable, GatewayError) as exc:
         logger.warning("Gateway config reload notification failed: %s", exc)
 

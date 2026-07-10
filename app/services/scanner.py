@@ -24,6 +24,8 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import select
+
 from app.config import settings
 from app.core.risk_config import risk_config
 from app.db.session import async_session_factory
@@ -347,6 +349,33 @@ class SymbolScanner:
         cooldown_key = (response.symbol.strip().upper(), response.action)
         last_sent = self._last_order_sent_at.get(cooldown_key)
         now = datetime.now(timezone.utc)
+        if last_sent is None:
+            try:
+                async with async_session_factory() as session:
+                    stmt = (
+                        select(OrderLog.created_at)
+                        .where(
+                            OrderLog.symbol == cooldown_key[0],
+                            OrderLog.action == response.action.value,
+                            OrderLog.status.in_(
+                                ("SENT_PENDING", "NEW", "A", "PARTIALLY_FILLED", "FILLED")
+                            ),
+                            OrderLog.created_at >= now - _ORDER_COOLDOWN,
+                        )
+                        .order_by(OrderLog.created_at.desc())
+                        .limit(1)
+                    )
+                    last_sent = (await session.execute(stmt)).scalar_one_or_none()
+                if last_sent is not None and last_sent.tzinfo is None:
+                    last_sent = last_sent.replace(tzinfo=timezone.utc)
+                if last_sent is not None:
+                    self._last_order_sent_at[cooldown_key] = last_sent
+            except Exception:
+                logger.exception(
+                    "Failed to read persistent order cooldown symbol=%s side=%s",
+                    response.symbol,
+                    response.action.value,
+                )
         if last_sent is not None and now - last_sent < _ORDER_COOLDOWN:
             remaining = _ORDER_COOLDOWN - (now - last_sent)
             logger.warning(

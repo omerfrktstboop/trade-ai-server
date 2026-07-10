@@ -1515,7 +1515,7 @@ namespace Matriks.Lean.Algotrader
                 string symbol = NormalizeSymbol(GetBarEventSymbol(barData));
                 if (string.IsNullOrWhiteSpace(symbol))
                 {
-                    LogMarketDataWarning("UNKNOWN", "BAR", "BarDataEventArgs symbol is empty; OHLC cache not updated");
+                    SafeDebug("OnDataUpdate: BarDataEventArgs symbol is empty; skipped");
                     return;
                 }
 

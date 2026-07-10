@@ -29,7 +29,12 @@ from app.core.risk_config import risk_config
 from app.db.session import async_session_factory
 from app.models.db import OrderLog
 from app.models.signal import OrderType, SignalAction, SignalMode
-from app.services.admin_config import build_runtime_risk_config, is_kill_switch_enabled
+from app.services.admin_config import (
+    build_runtime_risk_config,
+    get_admin_config_value,
+    is_kill_switch_enabled,
+    set_admin_config_value,
+)
 from app.services.evaluator import EvaluationResult, evaluate_symbol
 from app.services.matriks_gateway import (
     GatewayError,
@@ -61,6 +66,8 @@ class SymbolScanner:
         self._stop_event = asyncio.Event()
         self._last_scan_by_symbol: dict[str, datetime] = {}
         self._last_warn_by_key: dict[str, datetime] = {}
+        self._last_discovery_by_symbol: dict[str, datetime] = {}
+        self._last_discovery_run: datetime | None = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -208,7 +215,82 @@ class SymbolScanner:
             )
             await self._maybe_send_order(result)
 
+        # ── Dinamik watchlist keşfi ────────────────────────────────────────
+        await self._run_discovery(runtime_cfg)
+
         return evaluated
+
+    async def _run_discovery(self, runtime_cfg) -> None:
+        """BIST keşif evrenini tara; BUY sinyali gelen sembolleri watchlist'e ekle."""
+        if not settings.discovery_symbols:
+            return
+
+        interval = timedelta(minutes=max(5, settings.discovery_interval_minutes))
+        now = datetime.now(timezone.utc)
+
+        # Keşif döngüsü hız sınırı: tüm evren interval'den önce tekrar taranmaz.
+        if self._last_discovery_run and (now - self._last_discovery_run) < interval:
+            return
+        self._last_discovery_run = now
+
+        # Zaten watchlist'te olan sembolleri atla.
+        current_symbols = {
+            s.strip().upper()
+            for s in runtime_cfg.allowed_symbols.split(",")
+            if s.strip()
+        }
+        discovery_universe = [
+            s.strip().upper()
+            for s in settings.discovery_symbols.split(",")
+            if s.strip() and s.strip().upper() not in current_symbols
+        ]
+
+        if not discovery_universe:
+            return
+
+        logger.info("Discovery scan starting universe_size=%d", len(discovery_universe))
+        added: list[str] = []
+
+        for symbol in discovery_universe:
+            if self._stop_event.is_set():
+                break
+            try:
+                result = await evaluate_symbol(symbol, force_paper=True)
+            except (GatewayUnavailable, GatewayError):
+                break
+            except Exception:
+                logger.debug("Discovery eval failed symbol=%s", symbol)
+                continue
+
+            if result is None:
+                continue
+
+            if (
+                result.response.action == SignalAction.BUY
+                and result.response.confidence_score >= 40
+            ):
+                added.append(symbol)
+                logger.info(
+                    "Discovery BUY signal symbol=%s confidence=%s — adding to watchlist",
+                    symbol,
+                    result.response.confidence_score,
+                )
+
+        if not added:
+            return
+
+        # allowedSymbols'e ekle (DB'ye yaz).
+        try:
+            async with async_session_factory() as session:
+                current_raw = await get_admin_config_value(session, "allowedSymbols")
+                existing = {s.strip().upper() for s in current_raw.split(",") if s.strip()}
+                new_set = existing | set(added)
+                new_value = ",".join(sorted(new_set))
+                await set_admin_config_value(session, "allowedSymbols", new_value)
+                await session.commit()
+            logger.info("Watchlist updated added=%s new_list=%s", added, new_value)
+        except Exception:
+            logger.exception("Failed to update allowedSymbols with discovery results")
 
     # ── Order path (Phase 2) ───────────────────────────────────────────────
 

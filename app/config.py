@@ -125,6 +125,15 @@ class Settings(BaseSettings):
     # Phase 2 boyunca kod seviyesinde bloklu.
     scanner_allow_orders: bool = False
 
+    # Dinamik watchlist keşif evreni — gateway'de kayıtlı olmayan bu semboller
+    # periyodik olarak taranır; BUY sinyali gelince allowedSymbols'e eklenir.
+    discovery_symbols: str = (
+        "GARAN,ISCTR,VAKBN,HALKB,YKBNK,FROTO,TOASO,PGSUS,TAVHL,TCELL,"
+        "TTKOM,BIMAS,MGROS,ULKER,ARCLK,VESTL,OTKAR,EKGYO,PETKM,EREGL,"
+        "ASELS,BRSAN,ALARK,DOAS,SAHOL,GUBRF,CIMSA,ZOREN,MAVI,ODAS"
+    )
+    discovery_interval_minutes: int = 30
+
     # ── Paths ─────────────────────────────────────────────────────────────
 
     base_dir: Path = Field(

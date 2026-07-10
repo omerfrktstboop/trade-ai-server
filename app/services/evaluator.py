@@ -49,6 +49,7 @@ from app.services.admin_config import (
     get_trading_mode_override,
     is_kill_switch_enabled,
 )
+from app.services.broker_flow_service import get_broker_flow_context
 from app.services.daily_trade_count import get_today_trade_counts
 from app.services.fundamentals_service import get_fundamentals_context
 from app.services.matriks_gateway import (
@@ -102,12 +103,11 @@ def build_payload(
 ) -> dict:
     """Convert a SignalRequest into a plain dict for the AI provider.
 
-    fund_context/broker_flow_context are accepted but currently never passed
-    by any live caller — app/services/fund_scanner.py and
-    app/services/broker_flow_service.py still only return empty/UNKNOWN
-    placeholders, and feeding that to the AI would just be structured noise.
-    Kept here, disconnected rather than removed, so wiring in a real data
-    source later is a one-line change at the call sites.
+    ``news_context``, ``broker_flow_context`` (smart-money / AKD flow) and
+    ``fundamentals_context`` are live: the scanner/evaluate flow fetches them
+    per symbol and passes them here. ``fund_context`` (fund_scanner) is still
+    a placeholder and normally not passed — kept in the signature so wiring a
+    real source later is a one-line change at the call site.
     """
     config = active_config or risk_config
     payload = {
@@ -634,13 +634,15 @@ async def evaluate_symbol(
         await persist_evaluation(sig_req, payload, raw, response)
         return EvaluationResult(response=response, mode=sig_req.mode)
 
-    # ── 5. Dış bağlam (haber + admin fundamentals) ───────────────────────
+    # ── 5. Dış bağlam (haber + akıllı para + admin fundamentals) ─────────
     news_context = await get_news_context([sig_req.symbol])
+    broker_flow_context = await get_broker_flow_context([sig_req.symbol])
     fundamentals_context = await get_fundamentals_context([sig_req.symbol])
 
     payload = build_payload(
         sig_req,
         news_context=news_context,
+        broker_flow_context=broker_flow_context,
         fundamentals_context=fundamentals_context,
         active_config=runtime_engine.config,
     )

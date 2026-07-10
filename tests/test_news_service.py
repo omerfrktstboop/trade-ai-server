@@ -32,6 +32,23 @@ def _reset_db():
     asyncio.run(init_db())
 
 
+@pytest.fixture(autouse=True)
+def _disable_fulltext(monkeypatch):
+    """Keep the suite hermetic: never let full-text enrichment hit the network.
+
+    _fetch_rss is mocked per-test, but _get_or_refresh also calls
+    _enrich_with_fulltext, which would otherwise make real HTTP requests to the
+    mock item URLs. Replace it with an identity passthrough.
+    """
+
+    async def _identity(items):
+        return items
+
+    monkeypatch.setattr(
+        "app.services.news_service._enrich_with_fulltext", _identity
+    )
+
+
 async def _mock_fetch(symbol: str) -> list[dict]:
     return [
         {

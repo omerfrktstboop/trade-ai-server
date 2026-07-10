@@ -1,15 +1,18 @@
 """News service — provides news context for AI trading decisions.
 
 Fetches recent headlines per symbol from Google News RSS (free, no API key
-or registration) and caches them in ``news_cache`` for a short window so
-every evaluation cycle doesn't re-hit the feed. Any fetch, parse, or DB
-error falls back to an empty/UNKNOWN context for that symbol — news is a
-decision INPUT, never something that should block or fail an evaluation.
+or registration), cleans the HTML summary out of each item, and — on a cache
+miss only — makes a bounded best-effort attempt to pull the article body so
+the AI reads more than just a headline. Results are cached in ``news_cache``
+for a short window so every evaluation cycle doesn't re-hit the feed. Any
+fetch, parse, or DB error falls back to an empty/UNKNOWN context for that
+symbol — news is a decision INPUT, never something that should block or fail
+an evaluation.
 
 We deliberately do NOT classify sentiment ourselves: the AI reads the raw
-headline text and judges negativity per the system prompt's own rules
-(regulatory warnings, investigations, profit warnings, etc.) — pre-labeling
-sentiment here would just be a second, unverified guess layered on top.
+headline + summary text and judges negativity per the system prompt's own
+rules (regulatory warnings, investigations, profit warnings, etc.) —
+pre-labeling sentiment here would just be a second, unverified guess.
 
 ``kapNews`` (KAP-specific regulatory disclosures) stays empty for now —
 Google News search results aren't reliably tagged as KAP filings vs. general
@@ -19,7 +22,10 @@ press coverage. A future upgrade can populate it from Matriks' own
 
 from __future__ import annotations
 
+import asyncio
+import html
 import logging
+import re
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -37,7 +43,22 @@ logger = logging.getLogger(__name__)
 _RSS_URL = "https://news.google.com/rss/search?q={query}&hl=tr&gl=TR&ceid=TR:tr"
 _CACHE_TTL = timedelta(minutes=30)
 _MAX_ITEMS_PER_SYMBOL = 5
+# En önemli N haber, AI payload'una son 24 saatlik pencereden verilir.
+_PAYLOAD_WINDOW = timedelta(hours=24)
+_PAYLOAD_TOP_N = 3
 _FETCH_TIMEOUT_SECONDS = 8
+
+# Tam metin çekimi: sadece cache-miss'te ve en fazla ilk N haber için denenir,
+# yani TTL başına sembol başına birkaç istek. Başarısızlık → özet metne düşer.
+_FULLTEXT_ENABLED = True
+_FULLTEXT_TIMEOUT_SECONDS = 6
+_FULLTEXT_MAX_CHARS = 1500
+_FULLTEXT_TOP_N = 3
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+# <script>/<style> blokları içeriğiyle birlikte silinmeli.
+_SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 
 
 # ── Public interface ───────────────────────────────────────────────────────────
@@ -50,8 +71,9 @@ async def get_news_context(symbols: list[str]) -> dict[str, Any]:
         symbols: List of trading symbols (e.g. ``["THYAO", "AKBNK"]``).
 
     Returns:
-        Dict keyed by symbol, each with ``latestNews`` (recent real
-        headlines), ``kapNews`` (currently always empty — see module
+        Dict keyed by symbol, each with ``latestNews`` (the most important
+        recent items — title/summary/content/source/url within the last 24h,
+        capped at 3), ``kapNews`` (currently always empty — see module
         docstring), and ``sentiment`` (always ``"UNKNOWN"`` — the AI judges
         this itself from ``latestNews`` text).
     """
@@ -63,8 +85,9 @@ async def get_news_context(symbols: list[str]) -> dict[str, Any]:
         except Exception:
             logger.exception("Failed to load news context for %s", normalized)
             items = []
+        top = _select_top_recent(items)
         news[normalized] = {
-            "latestNews": [_serialize_item(item) for item in items],
+            "latestNews": [_serialize_item(item) for item in top],
             "kapNews": [],
             "sentiment": "UNKNOWN",
         }
@@ -80,6 +103,8 @@ async def _get_or_refresh(symbol: str) -> list[dict[str, Any]]:
         return cached
 
     fetched = await _fetch_rss(symbol)
+    # Tam metin zenginleştirme yalnızca taze çekimde (cache-miss) yapılır.
+    fetched = await _enrich_with_fulltext(fetched)
     await _store_cache(symbol, fetched)
     return fetched
 
@@ -104,7 +129,13 @@ async def _load_fresh_cache(symbol: str) -> list[dict[str, Any]] | None:
     if not rows:
         return None
     return [
-        {"title": row.title, "url": row.url, "source": row.source, "publishedAt": row.published_at}
+        {
+            "title": row.title,
+            "content": row.content,
+            "url": row.url,
+            "source": row.source,
+            "publishedAt": row.published_at,
+        }
         for row in rows
     ]
 
@@ -119,6 +150,7 @@ async def _store_cache(symbol: str, items: list[dict[str, Any]]) -> None:
                     NewsCache(
                         symbol=symbol,
                         title=item["title"],
+                        content=item.get("content"),
                         source=item.get("source"),
                         url=item.get("url"),
                         published_at=item.get("publishedAt"),
@@ -129,10 +161,34 @@ async def _store_cache(symbol: str, items: list[dict[str, Any]]) -> None:
         logger.exception("News cache write failed for %s — continuing without cache", symbol)
 
 
+def _select_top_recent(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pick the most important items for the AI payload.
+
+    "Importance" here = recency: prefer items published within the last 24h,
+    newest first, capped at 3. If nothing falls inside the 24h window (weekend,
+    thinly-covered symbol) fall back to the most recent items available so the
+    AI is not starved of context.
+    """
+    def _pub(item: dict[str, Any]) -> datetime:
+        value = item.get("publishedAt")
+        if not isinstance(value, datetime):
+            return datetime.min.replace(tzinfo=UTC)
+        # SQLite (and some feeds) hand back naive datetimes — treat as UTC so
+        # the comparison against an aware cutoff never raises.
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+    ordered = sorted(items, key=_pub, reverse=True)
+    cutoff = datetime.now(UTC) - _PAYLOAD_WINDOW
+    recent = [item for item in ordered if _pub(item) >= cutoff]
+    selected = recent or ordered
+    return selected[:_PAYLOAD_TOP_N]
+
+
 def _serialize_item(item: dict[str, Any]) -> dict[str, Any]:
     published = item.get("publishedAt")
     return {
         "title": item["title"],
+        "content": item.get("content"),
         "source": item.get("source"),
         "url": item.get("url"),
         "publishedAt": published.isoformat() if isinstance(published, datetime) else published,
@@ -153,10 +209,12 @@ async def _fetch_rss(symbol: str) -> list[dict[str, Any]]:
 
 
 def _parse_rss(xml_text: str) -> list[dict[str, Any]]:
-    """Parse a Google News RSS feed into title/url/source/publishedAt items.
+    """Parse a Google News RSS feed into title/summary/url/source/publishedAt items.
 
     Never raises on malformed individual items — a bad <item> is skipped,
-    not fatal to the rest of the feed.
+    not fatal to the rest of the feed. The ``<description>`` field is HTML
+    (a snippet / list of related links); we strip tags to a plain-text
+    summary stored under ``content``.
     """
     items: list[dict[str, Any]] = []
     root = ET.fromstring(xml_text)
@@ -167,9 +225,13 @@ def _parse_rss(xml_text: str) -> list[dict[str, Any]]:
         link = (item.findtext("link") or "").strip() or None
         source_el = item.find("source")
         source = source_el.text.strip() if source_el is not None and source_el.text else None
+        summary = _strip_html(item.findtext("description"))
         items.append(
             {
                 "title": title,
+                # RSS aşamasında content = temizlenmiş özet; tam metin varsa
+                # sonradan _enrich_with_fulltext üzerine yazar.
+                "content": summary or None,
                 "url": link,
                 "source": source,
                 "publishedAt": _parse_pub_date(item.findtext("pubDate")),
@@ -185,3 +247,68 @@ def _parse_pub_date(raw: str | None) -> datetime | None:
         return parsedate_to_datetime(raw.strip())
     except (TypeError, ValueError):
         return None
+
+
+# ── HTML temizleme + tam metin çekimi ───────────────────────────────────────────
+
+
+def _strip_html(raw: str | None) -> str:
+    """Strip tags/entities from an HTML fragment, returning collapsed plain text.
+
+    Robust against script/style blocks and malformed markup — used for both the
+    RSS ``<description>`` snippet and full article bodies. Never raises.
+    """
+    if not raw:
+        return ""
+    text = _SCRIPT_STYLE_RE.sub(" ", raw)
+    text = _HTML_TAG_RE.sub(" ", text)
+    text = html.unescape(text)
+    return _WS_RE.sub(" ", text).strip()
+
+
+async def _enrich_with_fulltext(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Best-effort: replace the RSS summary with real article text where possible.
+
+    Bounded to the first ``_FULLTEXT_TOP_N`` items and only runs on a cache
+    miss, so the hot scan path stays cheap. Any per-article failure keeps the
+    existing summary — full text is a "nice to have", never required.
+    """
+    if not _FULLTEXT_ENABLED or not items:
+        return items
+
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=_FULLTEXT_TIMEOUT_SECONDS),
+        headers={"User-Agent": "Mozilla/5.0 (compatible; trade-ai-server/1.0)"},
+    ) as session:
+        tasks = [
+            _fetch_article_text(session, item.get("url"))
+            for item in items[:_FULLTEXT_TOP_N]
+        ]
+        bodies = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for item, body in zip(items, bodies):
+        if isinstance(body, str) and len(body) > len(item.get("content") or ""):
+            item["content"] = body[:_FULLTEXT_MAX_CHARS]
+    return items
+
+
+async def _fetch_article_text(
+    session: aiohttp.ClientSession, url: str | None
+) -> str:
+    """Fetch one article URL and return cleaned plain text (may be empty)."""
+    if not url:
+        return ""
+    try:
+        async with session.get(url, allow_redirects=True) as resp:
+            if resp.status != 200:
+                return ""
+            ctype = resp.headers.get("Content-Type", "")
+            if "html" not in ctype and "xml" not in ctype:
+                return ""
+            body = await resp.text()
+    except (aiohttp.ClientError, asyncio.TimeoutError, UnicodeDecodeError):
+        return ""
+    except Exception:  # noqa: BLE001 — third-party HTML is unpredictable; never fatal
+        logger.debug("Full-text fetch failed url=%s", url, exc_info=True)
+        return ""
+    return _strip_html(body)

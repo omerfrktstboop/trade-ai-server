@@ -29,15 +29,24 @@ class TestTradingSystemPrompt:
         assert "social media" in prompt.lower()
 
     def test_uses_structured_contexts(self):
-        """Prompt instructs to use newsContext. fundContext/brokerFlowContext
-        are intentionally NOT referenced — those services are disabled until
-        a real data source exists (see app/services/fund_scanner.py and
-        app/services/broker_flow_service.py); feeding the AI empty/UNKNOWN
-        placeholders would just be noise."""
+        """Prompt instructs to use newsContext and brokerFlowContext (smart
+        money / AKD flow — live since the gateway /institutions integration).
+        fundContext is intentionally NOT referenced — fund_scanner is still a
+        placeholder; feeding the AI empty/UNKNOWN placeholders would be noise."""
         prompt = get_trading_system_prompt()
         assert "newscontext" in prompt.lower()
+        assert "brokerflowcontext" in prompt.lower()
         assert "fundcontext" not in prompt.lower()
-        assert "brokerflowcontext" not in prompt.lower()
+
+    def test_smart_money_rule(self):
+        """Rule 14: smart-money STRONG_BUY confirms an asymmetric long;
+        STRONG_SELL vetoes a BUY into strength (distribution trap)."""
+        prompt = get_trading_system_prompt().lower()
+        assert "smartmoneyflow" in prompt
+        assert "strong_buy" in prompt
+        assert "strong_sell" in prompt
+        assert "distribution" in prompt
+        assert "netsmartlot" in prompt
 
     def test_news_negativity_blocks_buy(self):
         """Rule 8: negative KAP/news blocks BUY."""

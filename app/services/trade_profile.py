@@ -277,6 +277,19 @@ async def create_profile(
     if unknown:
         raise ValueError(f"Unknown trade profile fields: {sorted(unknown)}")
 
+    # Formdan gelmeyen zorunlu limit alanlarını NORMAL profilinin dengeli
+    # değerleriyle doldur — kısmi bir admin formu NOT NULL ihlaliyle
+    # patlamak yerine güvenli varsayılanlarla oluşturulur. Meta alanlar
+    # (name/description/risk_level/is_default) ayrı keyword'lerle geldiği
+    # için buradan dışlanır.
+    _meta_fields = {"name", "description", "risk_level", "is_default"}
+    normal_defaults = {
+        key: value
+        for key, value in BUILTIN_PROFILES["NORMAL"].items()
+        if key in EDITABLE_FIELDS and key not in _meta_fields
+    }
+    fields = {**normal_defaults, **fields}
+
     profile = TradeProfile(
         code=code,
         name=name,

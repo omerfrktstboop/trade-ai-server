@@ -422,7 +422,7 @@ class TestAdminTradeProfilesApi:
 
 class TestBotConfigIntegration:
     def test_active_profile_change_changes_config_hash(self, client: TestClient, auth_headers: dict[str, str]):
-        before = client.get("/api/bot/config", headers=auth_headers).json()
+        before = client.get("/api/gateway/config", headers=auth_headers).json()
 
         activate = client.post(
             "/api/admin/trade-profiles/AGGRESSIVE/activate",
@@ -431,7 +431,7 @@ class TestBotConfigIntegration:
         )
         assert activate.status_code == 200
 
-        after = client.get("/api/bot/config", headers=auth_headers).json()
+        after = client.get("/api/gateway/config", headers=auth_headers).json()
         assert after["configHash"] != before["configHash"]
         assert after["maxOrderValueTl"] == BUILTIN_PROFILES["AGGRESSIVE"]["max_order_value_tl"]
         assert after["scanIntervalMinutes"] == BUILTIN_PROFILES["AGGRESSIVE"]["scan_interval_minutes"]
@@ -439,7 +439,7 @@ class TestBotConfigIntegration:
 
     def test_high_risk_profile_disallows_real_live_mode(self, client: TestClient, auth_headers: dict[str, str]):
         """HIGH_RISK has allow_real_live=False — even if botMode were set to
-        REAL_LIVE, /api/bot/config must downgrade it to PAPER."""
+        REAL_LIVE, /api/gateway/config must downgrade it to PAPER."""
         client.post(
             "/api/admin/trade-profiles/HIGH_RISK/activate",
             json={"reason": "test", "confirmation": "CONFIRM"},
@@ -451,7 +451,7 @@ class TestBotConfigIntegration:
             headers=auth_headers,
         )
 
-        config = client.get("/api/bot/config", headers=auth_headers).json()
+        config = client.get("/api/gateway/config", headers=auth_headers).json()
         assert config["mode"] == "PAPER"
 
 

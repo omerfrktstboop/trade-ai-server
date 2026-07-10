@@ -220,6 +220,7 @@ namespace Matriks.Lean.Algotrader
         public override void OnRealPositionUpdate(AlgoTraderPosition position)
         {
             UpdatePositionCache(position, "OnRealPositionUpdate");
+            LoadRealPositionsSnapshot();
         }
 
         /// <summary>
@@ -710,6 +711,8 @@ namespace Matriks.Lean.Algotrader
                 rejection = "qty <= 0";
             else if (!IsAllowedSymbol(symbol))
                 rejection = "symbol not allowed: " + symbol;
+            else if (!_realPositionsLoadedFromSnapshot)
+                rejection = "real positions are not loaded yet";
             else if (orderValue > MaxOrderValueTl)
                 rejection = "orderValue exceeds MaxOrderValueTl: " + orderValue;
             else if (qty > MaxQtyPerOrder)
@@ -1333,16 +1336,21 @@ namespace Matriks.Lean.Algotrader
         {
             try
             {
-                if (!PositionReceiveComplated)
-                {
-                    SafeDebug("Real position snapshot not ready yet; waiting for OnRealPositionUpdate.");
-                    return;
-                }
-
                 var positions = GetRealPositions();
                 if (positions == null)
                 {
                     SafeDebug("GetRealPositions returned null.");
+                    return;
+                }
+
+                // Some Matriks/demo-account builds keep PositionReceiveComplated
+                // false even though GetRealPositions already contains the full
+                // portfolio. A non-empty snapshot is authoritative; an empty
+                // snapshot is accepted only after Matriks reports completion.
+                if (!PositionReceiveComplated && positions.Count == 0)
+                {
+                    SafeDebug("Real position snapshot not ready yet; "
+                        + "PositionReceiveComplated=false and GetRealPositions is empty.");
                     return;
                 }
 
@@ -1513,27 +1521,27 @@ namespace Matriks.Lean.Algotrader
         {
             try
             {
-                string symbol = NormalizeSymbol(GetBarEventSymbol(barData));
+                string symbol = ResolveBarEventSymbol(barData.SymbolId);
                 if (string.IsNullOrWhiteSpace(symbol))
                     return;
 
-                var barDataModel = GetBarData();
-                int index = barData.BarDataIndex;
-                decimal close = ReadIndexedDecimal(barDataModel, "Close", index);
+                var subscribedBarData = GetBarData(symbol, IndicatorPeriod);
+                if (subscribedBarData == null || subscribedBarData.PeriodInfo != barData.PeriodInfo)
+                    return;
+
+                // The event carries the current bar. Reading it directly avoids
+                // GetBarData() selecting another symbol in a multi-symbol algo.
+                decimal close = barData.BarData.Close;
                 if (close <= 0m)
                 {
                     LogMarketDataWarning(symbol, "BAR", "Bar close <= 0; OHLC cache not updated");
                     return;
                 }
 
-                decimal open = ReadIndexedDecimal(barDataModel, "Open", index);
-                decimal high = ReadIndexedDecimal(barDataModel, "High", index);
-                decimal low = ReadIndexedDecimal(barDataModel, "Low", index);
-                decimal volume = ReadIndexedDecimal(barDataModel, "Volume", index);
-                if (volume <= 0m)
-                {
-                    volume = ReadIndexedDecimal(barDataModel, "Vol", index);
-                }
+                decimal open = barData.BarData.Open;
+                decimal high = barData.BarData.High;
+                decimal low = barData.BarData.Low;
+                decimal volume = barData.BarData.Volume;
 
                 if (open <= 0m) open = close;
                 if (high <= 0m) high = close;
@@ -1559,56 +1567,15 @@ namespace Matriks.Lean.Algotrader
             }
         }
 
-        private static string GetBarEventSymbol(BarDataEventArgs barData)
+        private string ResolveBarEventSymbol(int symbolId)
         {
-            object value = TryGetPropertyValue(barData, "Symbol")
-                ?? TryGetPropertyValue(barData, "SymbolName")
-                ?? TryGetPropertyValue(barData, "SymbolCode");
-            return NormalizeSymbol(Convert.ToString(value));
-        }
-
-        private static decimal ReadIndexedDecimal(object owner, string propertyName, int index)
-        {
-            object series = TryGetPropertyValue(owner, propertyName);
-            if (series == null)
-                return 0m;
-
-            try
+            foreach (string symbolRaw in AllowedSymbols)
             {
-                if (series is Array array)
-                {
-                    object arrayValue = array.GetValue(index);
-                    return arrayValue == null ? 0m : Convert.ToDecimal(arrayValue);
-                }
-
-                var itemProperty = series.GetType().GetProperty("Item");
-                if (itemProperty != null)
-                {
-                    object itemValue = itemProperty.GetValue(series, new object[] { index });
-                    return itemValue == null ? 0m : Convert.ToDecimal(itemValue);
-                }
+                string symbol = NormalizeSymbol(symbolRaw);
+                if (GetSymbolId(symbol) == symbolId)
+                    return symbol;
             }
-            catch
-            {
-                return 0m;
-            }
-            return 0m;
-        }
-
-        private static object TryGetPropertyValue(object owner, string propertyName)
-        {
-            if (owner == null)
-                return null;
-
-            try
-            {
-                var property = owner.GetType().GetProperty(propertyName);
-                return property == null ? null : property.GetValue(owner, null);
-            }
-            catch
-            {
-                return null;
-            }
+            return "";
         }
 
         private void LogMarketDataWarning(string symbol, string field, string message)

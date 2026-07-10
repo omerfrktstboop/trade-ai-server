@@ -146,9 +146,17 @@ class SymbolScanner:
             return []
 
         # ── Gateway sağlık kontrolü — Matriks kapalıysa tur atlanır ────────
-        if not await self._gateway.is_available():
+        try:
+            gateway_health = await self._gateway.health()
+        except (GatewayUnavailable, GatewayError):
             self._warn_throttled(
                 "gateway", "Matriks gateway unavailable; skipping scan cycle"
+            )
+            return []
+        if not gateway_health.get("positionsLoaded"):
+            self._warn_throttled(
+                "positions",
+                "Matriks positions are not loaded; skipping scan cycle",
             )
             return []
 

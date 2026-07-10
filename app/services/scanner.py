@@ -157,6 +157,11 @@ class SymbolScanner:
             for s in runtime_cfg.allowed_symbols.split(",")
             if s.strip()
         ]
+        # Manual BUY/SELL overrides must run even when the symbol is not in
+        # the regular scan watchlist (for example an existing portfolio
+        # position such as OPT25F). Preserve watchlist order, then append the
+        # pending symbols deterministically.
+        symbols.extend(sorted(pending_overrides.difference(symbols)))
         interval = timedelta(minutes=max(1, scan_interval_minutes))
         now = datetime.now(timezone.utc)
 

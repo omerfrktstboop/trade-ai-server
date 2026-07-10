@@ -18,6 +18,7 @@ using Matriks.Trader.Core;
 using Matriks.Trader.Core.Fields;
 using Matriks.Trader.Core.TraderModels;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 
@@ -62,13 +63,6 @@ namespace Matriks.Lean.Algotrader
         [Parameter("BURAYA_GATEWAY_TOKEN")]
         public string ApiToken;
 
-        [Parameter("THYAO,AKBNK,SISE,KCHOL,TUPRS,ANELE")]
-        public string SymbolsCsv;
-
-        // "SEMBOL:LOT" çiftleri — kilitli uzun vade lotlar (asla satılmaz).
-        [Parameter("THYAO:100,ASELS:50")]
-        public string LockedLongTermCsv;
-
         // ── Order path parameters (Phase 2) ─────────────────────────
         // Emir sonuçlarının raporlandığı FastAPI server (aynı makine).
         [Parameter("http://127.0.0.1:8000")]
@@ -77,34 +71,19 @@ namespace Matriks.Lean.Algotrader
         [Parameter("BURAYA_SERVER_TOKEN")]
         public string ServerApiToken;
 
-        // Güvenlik bayrakları — hepsi default KAPALI/temkinli.
-        [Parameter(false)]
-        public bool EnableDemoOrders;
-
-        [Parameter(false)]
-        public bool EnableRealOrders;
-
-        [Parameter(true)]
-        public bool RequireDemoAccount;
-
-        [Parameter(false)]
-        public bool DemoAccountConfirmed;
-
-        // Sabit üst sınırlar — server'ın istekleri bu sınırları aşamaz.
-        [Parameter(1000)]
-        public decimal MaxOrderValueTl;
-
-        [Parameter(1)]
-        public decimal MaxQtyPerOrder;
-
-        [Parameter(1)]
-        public int MaxOrdersPerDay;
-
-        [Parameter(1)]
-        public int MaxOrdersPerSymbolPerDay;
-
-        [Parameter("Day")]
-        public string OrderTimeInForce;
+        // Server config gelene kadar bütün emir kapıları fail-closed.
+        private bool EnableDemoOrders;
+        private bool EnableRealOrders;
+        private bool RequireDemoAccount = true;
+        private bool DemoAccountConfirmed;
+        private decimal MaxOrderValueTl;
+        private decimal MaxQtyPerOrder;
+        private int MaxOrdersPerDay;
+        private int MaxOrdersPerSymbolPerDay;
+        private string OrderTimeInForce = "Day";
+        private string RuntimeMode = "PAPER";
+        private string ActiveProfileCode = "UNAVAILABLE";
+        private DateTime _lastConfigFetchUtc = DateTime.MinValue;
 
         private SymbolPeriod IndicatorPeriod = SymbolPeriod.Min5;
 
@@ -158,6 +137,8 @@ namespace Matriks.Lean.Algotrader
         private bool? _autoOrderEnabled;
         private bool? _testAutoOrderEnabled;
         private bool _subscriptionsInitialized;
+        private readonly object _symbolSubscriptionLock = new object();
+        private readonly SemaphoreSlim _configFetchLock = new SemaphoreSlim(1, 1);
 
         // ── Matriks lifecycle ───────────────────────────────────────
 
@@ -165,8 +146,14 @@ namespace Matriks.Lean.Algotrader
         {
             _startedAt = DateTime.Now;
 
-            AllowedSymbols = ParseSymbolsCsv(SymbolsCsv);
-            LockedLongTermQty = ParseLockedCsv(LockedLongTermCsv);
+            _http = new HttpClient
+            {
+                BaseAddress = new Uri(ServerBaseUrl.TrimEnd('/') + "/"),
+                Timeout = TimeSpan.FromSeconds(15)
+            };
+            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ServerApiToken);
+
+            FetchAndApplyServerConfigAsync().GetAwaiter().GetResult();
 
             foreach (string symbol in AllowedSymbols)
             {
@@ -188,13 +175,6 @@ namespace Matriks.Lean.Algotrader
             SetTimerInterval(60);
             LogTradeUserInfo();
             LoadRealPositionsSnapshot();
-
-            _http = new HttpClient
-            {
-                BaseAddress = new Uri(ServerBaseUrl.TrimEnd('/') + "/"),
-                Timeout = TimeSpan.FromSeconds(15)
-            };
-            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ServerApiToken);
 
             _cts = new CancellationTokenSource();
             try
@@ -229,6 +209,8 @@ namespace Matriks.Lean.Algotrader
         {
             ResetDailyCachesIfNeeded();
             RefreshCloseHistoryFromMarketData();
+            if ((DateTime.UtcNow - _lastConfigFetchUtc).TotalSeconds >= 60)
+                _ = FetchAndApplyServerConfigAsync();
             if (!_realPositionsLoadedFromSnapshot)
             {
                 LoadRealPositionsSnapshot();
@@ -447,6 +429,18 @@ namespace Matriks.Lean.Algotrader
                 return;
             }
 
+            if (request.Method == "POST" && request.Path == "/config/reload")
+            {
+                bool loaded = await FetchAndApplyServerConfigAsync();
+                await WriteJsonAsync(stream, loaded ? 200 : 503, new
+                {
+                    ok = loaded,
+                    profileCode = ActiveProfileCode,
+                    symbols = AllowedSymbols
+                });
+                return;
+            }
+
             if (request.Method == "POST" && request.Path == "/order")
             {
                 await HandleOrderAsync(stream, request);
@@ -457,6 +451,85 @@ namespace Matriks.Lean.Algotrader
         }
 
         // ── Endpoint handlers ────────────────────────────────────────
+
+        private async Task<bool> FetchAndApplyServerConfigAsync()
+        {
+            if (!await _configFetchLock.WaitAsync(0))
+                return true;
+            try
+            {
+                using (var result = await _http.GetAsync("api/gateway/config"))
+                {
+                    string body = await result.Content.ReadAsStringAsync();
+                    if (!result.IsSuccessStatusCode)
+                    {
+                        SafeDebug("Server config fetch failed HTTP " + (int)result.StatusCode + " body=" + body);
+                        return false;
+                    }
+
+                    JObject cfg = JObject.Parse(body);
+                    if (!(cfg.Value<bool?>("ok") ?? false))
+                        return false;
+
+                    string[] symbols = (cfg["symbols"] as JArray ?? new JArray())
+                        .Select(x => NormalizeSymbol(Convert.ToString(x)))
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Distinct()
+                        .ToArray();
+                    IndicatorPeriod = ParseSymbolPeriod(cfg.Value<string>("indicatorPeriod"));
+                    if (_subscriptionsInitialized)
+                    {
+                        foreach (string symbol in symbols)
+                            EnsurePortfolioSymbolSubscribed(symbol);
+                    }
+                    AllowedSymbols = symbols;
+
+                    LockedLongTermQty = cfg["lockedLongTermQty"] != null
+                        ? cfg["lockedLongTermQty"].ToObject<Dictionary<string, decimal>>()
+                        : new Dictionary<string, decimal>();
+                    RuntimeMode = NormalizeMode(cfg.Value<string>("mode"));
+                    EnableDemoOrders = cfg.Value<bool?>("enableDemoOrders") ?? false;
+                    EnableRealOrders = cfg.Value<bool?>("enableRealOrders") ?? false;
+                    RequireDemoAccount = cfg.Value<bool?>("requireDemoAccount") ?? true;
+                    DemoAccountConfirmed = cfg.Value<bool?>("demoAccountConfirmed") ?? false;
+                    MaxOrderValueTl = cfg.Value<decimal?>("maxOrderValueTl") ?? 0m;
+                    MaxQtyPerOrder = cfg.Value<decimal?>("maxQtyPerOrder") ?? 0m;
+                    MaxOrdersPerDay = cfg.Value<int?>("maxOrdersPerDay") ?? 0;
+                    MaxOrdersPerSymbolPerDay = cfg.Value<int?>("maxOrdersPerSymbolPerDay") ?? 0;
+                    OrderTimeInForce = cfg.Value<string>("orderTimeInForce") ?? "Day";
+                    ActiveProfileCode = cfg.Value<string>("profileCode") ?? "UNKNOWN";
+                    _lastConfigFetchUtc = DateTime.UtcNow;
+
+                    SafeDebug("Server config applied profile=" + ActiveProfileCode
+                        + " mode=" + RuntimeMode
+                        + " symbols=" + string.Join(",", AllowedSymbols)
+                        + " enableDemoOrders=" + EnableDemoOrders
+                        + " enableRealOrders=" + EnableRealOrders
+                        + " maxOrderValueTl=" + MaxOrderValueTl
+                        + " maxQtyPerOrder=" + MaxQtyPerOrder);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                SafeDebug("Server config fetch failed: " + ex.Message);
+                return false;
+            }
+            finally
+            {
+                _configFetchLock.Release();
+            }
+        }
+
+        private static SymbolPeriod ParseSymbolPeriod(string raw)
+        {
+            if (string.Equals(raw, "Min", StringComparison.OrdinalIgnoreCase)) return SymbolPeriod.Min;
+            if (string.Equals(raw, "Min15", StringComparison.OrdinalIgnoreCase)) return SymbolPeriod.Min15;
+            if (string.Equals(raw, "Min30", StringComparison.OrdinalIgnoreCase)) return SymbolPeriod.Min30;
+            if (string.Equals(raw, "Hour", StringComparison.OrdinalIgnoreCase)) return SymbolPeriod.Hour;
+            if (string.Equals(raw, "Day", StringComparison.OrdinalIgnoreCase)) return SymbolPeriod.Day;
+            return SymbolPeriod.Min5;
+        }
 
         private async Task HandleHealthAsync(NetworkStream stream)
         {
@@ -483,6 +556,12 @@ namespace Matriks.Lean.Algotrader
                 requestCount = _requestCount,
                 symbols = AllowedSymbols,
                 subscriptionsInitialized = _subscriptionsInitialized,
+                configLoaded = _lastConfigFetchUtc != DateTime.MinValue,
+                configAgeSeconds = _lastConfigFetchUtc == DateTime.MinValue
+                    ? (double?)null
+                    : Math.Round((DateTime.UtcNow - _lastConfigFetchUtc).TotalSeconds, 1),
+                profileCode = ActiveProfileCode,
+                runtimeMode = RuntimeMode,
                 positionsLoaded = _realPositionsLoadedFromSnapshot,
                 autoOrderEnabled = _autoOrderEnabled,
                 testAutoOrderEnabled = _testAutoOrderEnabled,
@@ -1290,11 +1369,42 @@ namespace Matriks.Lean.Algotrader
                 return;
 
             decimal qty = position.QtyAvailable != 0m ? position.QtyAvailable : position.QtyNet;
+            if (qty != 0m)
+                EnsurePortfolioSymbolSubscribed(symbol);
             _botPositionQtyBySymbol[symbol] = qty;
             SafeDebug(source + " position symbol=" + symbol
                 + " qtyAvailable=" + position.QtyAvailable
                 + " qtyNet=" + position.QtyNet
                 + " cachedQty=" + qty);
+        }
+
+        /// <summary>
+        /// A portfolio symbol may not be part of the configured market-data
+        /// watchlist.  Manual SELL must still be able to obtain its price and
+        /// pass the gateway allow-list, so subscribe it when a real position
+        /// is discovered.
+        /// </summary>
+        private void EnsurePortfolioSymbolSubscribed(string symbol)
+        {
+            if (IsAllowedSymbol(symbol))
+                return;
+
+            lock (_symbolSubscriptionLock)
+            {
+                if (IsAllowedSymbol(symbol))
+                    return;
+
+                AddSymbol(symbol, SymbolPeriod.Min);
+                if (IndicatorPeriod != SymbolPeriod.Min)
+                    AddSymbol(symbol, IndicatorPeriod);
+                AddSymbolMarketData(symbol);
+                AddSymbolMarketDepth(symbol);
+                InitializeIndicators(symbol);
+
+                AllowedSymbols = AllowedSymbols.Concat(new[] { symbol }).ToArray();
+                _closeHistoryBySymbol.TryAdd(symbol, new List<decimal>());
+                SafeDebug("Portfolio symbol subscribed symbol=" + symbol);
+            }
         }
 
         private void LogTradeUserInfo()

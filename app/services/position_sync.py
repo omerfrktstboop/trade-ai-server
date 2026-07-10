@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.db.session import async_session_factory
 from app.models.db import BotPosition
@@ -29,9 +29,8 @@ logger = logging.getLogger(__name__)
 async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
     """Gateway'deki pozisyon anlık görüntüsünü ``bot_positions``'a upsert et.
 
-    Gateway'in bildirmediği semboller silinmez — Matriks yalnızca kendi
-    izlediği sembolleri raporlar ve eksik bir sembol "pozisyon kapandı"
-    anlamına gelmez.
+    ``positionsLoaded=true`` yanıtı tam snapshot kabul edilir. Sıfır lotlu
+    izleme sembolleri saklanmaz; snapshot'ta bulunmayan eski kayıtlar silinir.
 
     Returns:
         Yazılan/güncellenen satır sayısı. Gateway ulaşılamıyorsa veya isteği
@@ -48,15 +47,23 @@ async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
         return 0
 
     entries = snapshot.get("positions") or []
+    positions: dict[str, float] = {}
+    for entry in entries:
+        symbol = str(entry.get("symbol", "")).strip().upper()
+        if not symbol:
+            continue
+        try:
+            qty = float(entry.get("botQty", 0.0))
+        except (TypeError, ValueError):
+            logger.warning("Position sync ignored invalid qty symbol=%s", symbol)
+            continue
+        if qty > 0:
+            positions[symbol] = qty
+
     synced = 0
     try:
         async with async_session_factory() as session:
-            for entry in entries:
-                symbol = str(entry.get("symbol", "")).strip().upper()
-                if not symbol:
-                    continue
-
-                qty = float(entry.get("botQty", 0.0))
+            for symbol, qty in positions.items():
                 row = (
                     await session.execute(
                         select(BotPosition).where(BotPosition.symbol == symbol)
@@ -68,6 +75,12 @@ async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
                 else:
                     row.qty = qty
                 synced += 1
+            if positions:
+                await session.execute(
+                    delete(BotPosition).where(BotPosition.symbol.not_in(positions))
+                )
+            else:
+                await session.execute(delete(BotPosition))
             await session.commit()
     except Exception:
         logger.exception("Failed to persist positions from gateway")

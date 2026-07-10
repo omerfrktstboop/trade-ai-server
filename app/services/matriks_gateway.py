@@ -137,6 +137,20 @@ class MatriksGatewayClient:
 
         return data
 
+    async def reload_config(self) -> dict[str, Any]:
+        """Ask the running gateway to immediately re-fetch server config."""
+        client = self._ensure_client()
+        try:
+            response = await client.post("/config/reload")
+        except (httpx.TransportError, asyncio.TimeoutError) as exc:
+            raise GatewayUnavailable(f"Gateway config reload failed: {exc}") from exc
+        if response.status_code != 200:
+            raise GatewayError(response.status_code, response.text)
+        data = response.json()
+        if not isinstance(data, dict) or not data.get("ok"):
+            raise GatewayError(response.status_code, str(data))
+        return data
+
     async def is_available(self) -> bool:
         """Gateway ayakta ve sağlıklı mı? Exception fırlatmaz."""
         try:

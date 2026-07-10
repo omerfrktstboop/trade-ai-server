@@ -51,7 +51,9 @@ from app.services.admin_config import (
 )
 from app.services.broker_flow_service import get_broker_flow_context
 from app.services.daily_trade_count import get_today_trade_counts
+from app.services.decision_gate import decision_cache, preflight_wait_reason
 from app.services.fundamentals_service import get_fundamentals_context
+from app.services.market_regime import get_index_regime
 from app.services.matriks_gateway import (
     GatewayError,
     MatriksGatewayClient,
@@ -661,14 +663,42 @@ async def evaluate_symbol(
         except Exception:
             logger.exception("Failed to check signal override for %s", sig_req.symbol)
 
+    # ── 6.5. Token-cost kapıları (LLM'e gitmeden karar) ──────────────────
+    # Sıra: admin override > pre-flight gate > karar cache'i > LLM.
+    if raw is None:
+        gate_reason = preflight_wait_reason(
+            symbol=sig_req.symbol,
+            indicator_consensus=sig_req.indicator_consensus,
+            bot_position_qty=sig_req.bot_position_qty,
+            news_context=news_context,
+        )
+        if gate_reason is not None:
+            raw = {
+                "action": "WAIT",
+                "confidence": 0.0,
+                "risk_score": 0.0,
+                "reason": gate_reason,
+            }
+            payload["decisionSource"] = "preflight-gate"
+
+    if raw is None:
+        cached = decision_cache.get(sig_req.symbol, sig_req.last_price, news_context)
+        if cached is not None:
+            raw = cached
+            payload["decisionSource"] = "cache"
+
     if raw is None:
         provider = provider or get_default_provider()
         raw = await provider.decide(payload)
+        payload["decisionSource"] = "llm"
+        # Yalnızca gerçek LLM cevapları cache'lenir — kapı WAIT'leri değil.
+        decision_cache.put(sig_req.symbol, sig_req.last_price, news_context, raw)
 
-    # ── 7. RiskEngine ────────────────────────────────────────────────────
+    # ── 7. RiskEngine (makro rejim filtresiyle) ──────────────────────────
+    market_regime = await get_index_regime(gateway)
     decision = dict_to_risk_decision(raw, sig_req)
     sig_req = await with_resolved_daily_trade_count(sig_req)
-    response = runtime_engine.evaluate(sig_req, decision)
+    response = runtime_engine.evaluate(sig_req, decision, market_regime=market_regime)
 
     # ── 8. Log + persist ─────────────────────────────────────────────────
     _log_evaluation(sig_req, response)

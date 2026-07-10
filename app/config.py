@@ -125,6 +125,10 @@ class Settings(BaseSettings):
     # Phase 2 boyunca kod seviyesinde bloklu.
     scanner_allow_orders: bool = False
 
+    # Makro filtre: piyasa geneli rejim bu endeks sembolünden okunur.
+    # Boş string makro filtreyi tamamen kapatır.
+    market_index_symbol: str = "XU100"
+
     # Dinamik watchlist keşif evreni — gateway'de kayıtlı olmayan bu semboller
     # periyodik olarak taranır; BUY sinyali gelince allowedSymbols'e eklenir.
     discovery_symbols: str = (

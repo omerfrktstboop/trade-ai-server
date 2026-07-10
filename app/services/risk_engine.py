@@ -90,12 +90,15 @@ class RiskEngine:
         self,
         request: SignalRequest,
         decision: RiskDecision | None = None,
+        market_regime: str | None = None,
     ) -> SignalResponse:
         """Run all risk checks and return a safe ``SignalResponse``.
 
         Checks (ordered):
         1.  Symbol — allowed list
         2.  Action — normalisation
+        2.5 Macro regime filter — index DOWNTREND blocks BUY;
+            HIGH_VOLATILITY tightens the confidence threshold (+15)
         3.  Long‑term locked symbols (SELL blocked unless override)
         4.  Cutoff time (BUY/SELL blocked after disable_trading_after)
         5.  Daily trade count (BUY/SELL blocked when dailyTradeCount >= maxDailyTradeCount)
@@ -105,11 +108,21 @@ class RiskEngine:
         9.  Confidence threshold
         10. Mode gates (PAPER / MANUAL / LIVE / DEMO_LIVE / REAL_LIVE)
         11. BUY pre-flight (entryRange, stopLoss, targetPrice required)
+
+        Args:
+            market_regime: Endeks (XU100) makro rejimi — ``DOWNTREND`` /
+                ``HIGH_VOLATILITY`` / diğerleri. ``None``/``UNKNOWN`` iken
+                makro filtre uygulanmaz (fail-open: endeks verisi yok diye
+                sistem durmaz). SELL hiçbir rejimde bloklanmaz.
         """
         if decision is None:
             decision = DEFAULT_WAIT
 
         reasons: list[str] = []
+
+        # Makro rejime göre güven eşiği sertleştirme (aşağıda 7. adımda
+        # threshold'a eklenir).
+        confidence_penalty = 0.0
 
         # ── 1. Unknown symbol ────────────────────────────────────────
         liquidation_sell = (
@@ -126,6 +139,23 @@ class RiskEngine:
         if not isinstance(action, SignalAction):
             action = SignalAction.WAIT
             reasons.append("Unknown action — defaulting to WAIT")
+
+        # ── 2.5. Macro regime filter (index-level) ───────────────────
+        # Ayı piyasasında yeni pozisyon açılmaz; SELL (çıkış) her zaman
+        # serbesttir. Yüksek volatilitede BUY tamamen bloklanmaz ama güven
+        # eşiği sertleşir — sadece en net sinyaller geçer.
+        regime = (market_regime or "").strip().upper()
+        if regime == "DOWNTREND" and action == SignalAction.BUY:
+            return self._block(
+                request,
+                "BUY blocked: market index is in DOWNTREND (bear regime) — "
+                "no new long positions while the broad market falls",
+            )
+        if regime == "HIGH_VOLATILITY" and action == SignalAction.BUY:
+            confidence_penalty = 15.0
+            reasons.append(
+                "Market index HIGH_VOLATILITY — BUY confidence threshold +15"
+            )
 
         # ── 3. Long-term lock blocks SELL ────────────────────────────
         if action == SignalAction.SELL and self.config.is_long_term_locked(
@@ -241,7 +271,7 @@ class RiskEngine:
             return self._block(request, technical_block_reason)
 
         if action in (SignalAction.BUY, SignalAction.SELL):
-            threshold = self.config.get_min_confidence(action.value)
+            threshold = self.config.get_min_confidence(action.value) + confidence_penalty
             confidence_ok = decision.confidence >= threshold
             if not confidence_ok:
                 reasons.append(

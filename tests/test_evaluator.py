@@ -35,6 +35,20 @@ def make_gateway_client(fake: FakeGateway) -> MatriksGatewayClient:
     )
 
 
+@pytest.fixture(autouse=True)
+def _disable_preflight_gate(monkeypatch):
+    """Bu suite provider'a ulaşan payload'ı doğrular; pre-flight token kapısı
+    (NEUTRAL konsensüs + haber yok → LLM'siz WAIT) araya girmesin. Kapının
+    kendi davranışı tests/test_decision_gate.py'de ayrıca test edilir."""
+
+    def _no_gate(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.evaluator.preflight_wait_reason", _no_gate
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Temel akış
 # ═══════════════════════════════════════════════════════════════════════════════

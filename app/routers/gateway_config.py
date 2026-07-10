@@ -17,6 +17,7 @@ import json
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
+from app.config import settings
 from app.core.auth import verify_token
 from app.db.session import async_session_factory
 from app.models.db import BotPosition, LockedPosition
@@ -54,6 +55,11 @@ async def gateway_runtime_config() -> dict:
         if value.strip()
     }
     symbols.update(row.symbol.strip().upper() for row in portfolio if row.qty > 0)
+    # Makro filtre endeksi (XU100) veri aboneliği için listeye girer; emir
+    # yolu RiskEngine'in allowedSymbols kontrolünden geçtiği için endekse
+    # emir gidemez — bu yalnızca gateway'in snapshot vermesini sağlar.
+    if settings.market_index_symbol.strip():
+        symbols.add(settings.market_index_symbol.strip().upper())
     locked_qty: dict[str, float] = {}
     for row in locked:
         symbol = row.symbol.strip().upper()

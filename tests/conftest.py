@@ -17,6 +17,9 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 os.environ.setdefault("APP_ENV", "development")
 os.environ.setdefault("AI_PROVIDER", "mock")
+# Makro filtre testlerde endeks snapshot'ı beklemesin (FakeGateway'ler XU100
+# tanımaz; get_index_regime zaten fail-open ama boş sembol hiç denemez).
+os.environ["MARKET_INDEX_SYMBOL"] = ""
 # Scanner/discovery davranışı testlerde deterministik olmalı — üretim .env'i
 # bunları açmış olabilir (SCANNER_ALLOW_ORDERS=true, DISCOVERY_SYMBOLS=...).
 # Env var, .env dosyasına baskın geldiği için burada sabitliyoruz.
@@ -29,3 +32,20 @@ os.environ["ADMIN_PASSWORD"] = "admin-change-me"
 # tradingMode'un default'u DEFAULT_MODE'dan türetilir; üretim .env'i
 # demo_live'a çekmiş olabilir — testler PAPER varsayımıyla yazıldı.
 os.environ["DEFAULT_MODE"] = "paper"
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_decision_caches():
+    """Süreç içi global cache'ler (karar cache'i + endeks rejimi) test
+    sınırlarından sızmasın."""
+    from app.services.decision_gate import decision_cache
+    from app.services.market_regime import reset_cache
+
+    decision_cache.clear()
+    reset_cache()
+    yield
+    decision_cache.clear()
+    reset_cache()

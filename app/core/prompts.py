@@ -143,6 +143,23 @@ MANDATORY RULES — violating any of these makes the decision invalid:
     ``UNKNOWN`` (no AKD license / no data) means make NO assumption in either
     direction — never block or force a trade on missing flow.
 
+15. **Dynamic ATR-based stop-loss — fixed percentages are forbidden.** Never
+    place ``stop_loss`` at an arbitrary fixed distance (e.g. "3% below
+    entry"). Size the stop to the symbol's actual volatility using ``natr``
+    (normalized ATR, % of price) and ``atr`` from the payload:
+    - Baseline: stop distance ≈ **1.5 × nATR** percent below entry (e.g.
+      ``natr=2.0`` → stop ≈ 3% below entry; ``natr=6.0`` → stop ≈ 9% below).
+    - Clamp the resulting distance to the sane band **[1%, 10%]** of entry —
+      below 1% is market noise even for the calmest large-cap; beyond 10%
+      the trade's risk/reward almost never justifies entry (prefer WAIT).
+    - Low-nATR institutional names get tight stops; thin/volatile names get
+      wide stops — a stop inside the symbol's normal daily range is just a
+      donation to market makers.
+    - ``target_price`` must respect the asymmetry rule: distance to target
+      ≥ 1.5× distance to stop, measured from entry.
+    - When ``natr`` is missing or zero, fall back to a 3% stop and say so in
+      the reason.
+
 ────────────────────────────────────────────────────────────
 OUTPUT FORMAT — **JSON ONLY, no preamble, no markdown, no commentary**:
 ────────────────────────────────────────────────────────────
@@ -190,6 +207,8 @@ INDICATOR REFERENCE (technical):
   Opposing consensus should normally produce WAIT.
 
 - ATR/nATR: higher nATR means wider stop risk and smaller/blocked BUY sizing.
+  Stops are ATR-scaled, never fixed-percent: stop distance ≈ 1.5 × nATR%
+  of entry, clamped to [1%, 10%] (see rule 15).
 
 - Depth queue drop: falling best bid queue/depth weakens BUY setups and can
   support defensive SELL decisions when a bot position exists.

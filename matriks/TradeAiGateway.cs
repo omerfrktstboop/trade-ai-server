@@ -1098,7 +1098,10 @@ namespace Matriks.Lean.Algotrader
             await WriteJsonAsync(stream, 200, new { ok = true, available = true, symbol = symbol, fields = fields });
         }
 
-        // Sembol tanımı + detay + id: /symbol?symbol=X
+        // Sembol id + kayıtlı meta: /symbol?symbol=X
+        // Not: GetSymbolDef/GetSymbolDetail'in Matriks'teki gerçek imzası
+        // (string) değil; derlenemedikleri için çıkarıldı. GetSymbolId
+        // doğrulanmış tek metod (ResolveBarEventSymbol'de de kullanılıyor).
         private async Task HandleSymbolInfoAsync(NetworkStream stream, HttpRequest request)
         {
             string symbol = NormalizeSymbol(request.GetQueryValue("symbol"));
@@ -1107,10 +1110,12 @@ namespace Matriks.Lean.Algotrader
                 await WriteJsonAsync(stream, 400, new { ok = false, error = "symbol required" });
                 return;
             }
-            var result = new Dictionary<string, object> { { "symbol", symbol } };
+            var result = new Dictionary<string, object>
+            {
+                { "symbol", symbol },
+                { "allowed", IsAllowedSymbol(symbol) }
+            };
             SafeInvoke(result, "symbolId", () => GetSymbolId(symbol));
-            SafeInvoke(result, "def", () => ReflectToDict(GetSymbolDef(symbol)));
-            SafeInvoke(result, "detail", () => ReflectToDict(GetSymbolDetail(symbol)));
             await WriteJsonAsync(stream, 200, new { ok = true, available = true, symbol = symbol, info = result });
         }
 
@@ -1125,12 +1130,12 @@ namespace Matriks.Lean.Algotrader
             }
             try
             {
-                object sessions = GetSessionTimes(symbol);
+                object sessions = InvokeSelf("GetSessionTimes", symbol);
                 await WriteJsonAsync(stream, 200, new { ok = true, available = true, symbol = symbol, sessions = ReflectAny(sessions) });
             }
             catch (Exception ex)
             {
-                await WriteJsonAsync(stream, 200, new { ok = true, available = false, symbol = symbol, error = ex.Message });
+                await WriteJsonAsync(stream, 200, new { ok = true, available = false, symbol = symbol, error = Unwrap(ex) });
             }
         }
 
@@ -1147,8 +1152,8 @@ namespace Matriks.Lean.Algotrader
                 return;
             }
             var result = new Dictionary<string, object> { { "symbol", symbol }, { "price", ToDouble(price) } };
-            SafeInvoke(result, "priceStep", () => ToDouble(GetPriceStepForBistViop(symbol, price)));
-            SafeInvoke(result, "rounded", () => ToDouble(RoundPriceStepBistViop(symbol, price)));
+            SafeInvoke(result, "priceStep", () => ToDouble(Convert.ToDecimal(InvokeSelf("GetPriceStepForBistViop", symbol, price))));
+            SafeInvoke(result, "rounded", () => ToDouble(Convert.ToDecimal(InvokeSelf("RoundPriceStepBistViop", symbol, price))));
             await WriteJsonAsync(stream, 200, new { ok = true, available = true, result = result });
         }
 
@@ -1206,7 +1211,7 @@ namespace Matriks.Lean.Algotrader
             });
         }
 
-        // Hesap / kullanıcı bilgisi: /account
+        // Hesap / kullanıcı bilgisi: /account (GetTradeUser doğrulanmış — direkt)
         private async Task HandleAccountAsync(NetworkStream stream)
         {
             try
@@ -1216,35 +1221,35 @@ namespace Matriks.Lean.Algotrader
             }
             catch (Exception ex)
             {
-                await WriteJsonAsync(stream, 200, new { ok = true, available = false, error = ex.Message });
+                await WriteJsonAsync(stream, 200, new { ok = true, available = false, error = Unwrap(ex) });
             }
         }
 
-        // Gerçek (borsa) pozisyon snapshot'ı: /realpositions
+        // Gerçek (borsa) pozisyon snapshot'ı: /realpositions (imza reflection ile)
         private async Task HandleRealPositionsAsync(NetworkStream stream)
         {
             try
             {
-                object positions = GetRealPositions();
+                object positions = InvokeSelf("GetRealPositions");
                 await WriteJsonAsync(stream, 200, new { ok = true, available = true, positions = ReflectAny(positions) });
             }
             catch (Exception ex)
             {
-                await WriteJsonAsync(stream, 200, new { ok = true, available = false, error = ex.Message });
+                await WriteJsonAsync(stream, 200, new { ok = true, available = false, error = Unwrap(ex) });
             }
         }
 
-        // Piyasa geneli özet: /overall
+        // Piyasa geneli özet: /overall (imza reflection ile)
         private async Task HandleOverallAsync(NetworkStream stream)
         {
             try
             {
-                object overall = GetOverall();
+                object overall = InvokeSelf("GetOverall");
                 await WriteJsonAsync(stream, 200, new { ok = true, available = true, overall = ReflectAny(overall) });
             }
             catch (Exception ex)
             {
-                await WriteJsonAsync(stream, 200, new { ok = true, available = false, error = ex.Message });
+                await WriteJsonAsync(stream, 200, new { ok = true, available = false, error = Unwrap(ex) });
             }
         }
 
@@ -1385,6 +1390,45 @@ namespace Matriks.Lean.Algotrader
                 || type == typeof(DateTimeOffset)
                 || type == typeof(TimeSpan)
                 || type == typeof(Guid);
+        }
+
+        // Bir Matriks metodunu ADIYLA reflection ile çağırır. Belgelenen ama
+        // imzası bu ortamda doğrulanamayan metodlar için compile riskini
+        // ortadan kaldırır: yanlış imza/eksik metod derlemeyi değil, yalnızca
+        // runtime'ı etkiler (çağıran try/catch ile available:false döner).
+        // Ad + parametre SAYISI ile eşleştirir; strateji base sınıfları
+        // boyunca (this.GetType() → BaseType zinciri) arar.
+        private object InvokeSelf(string methodName, params object[] args)
+        {
+            Type type = this.GetType();
+            while (type != null)
+            {
+                var methods = type.GetMethods(
+                    System.Reflection.BindingFlags.Public
+                    | System.Reflection.BindingFlags.NonPublic
+                    | System.Reflection.BindingFlags.Instance
+                    | System.Reflection.BindingFlags.DeclaredOnly);
+                foreach (var m in methods)
+                {
+                    if (m.Name != methodName)
+                        continue;
+                    if (m.GetParameters().Length != (args == null ? 0 : args.Length))
+                        continue;
+                    return m.Invoke(this, args);
+                }
+                type = type.BaseType;
+            }
+            throw new MissingMethodException(GetType().Name, methodName);
+        }
+
+        // Reflection çağrıları gerçek hatayı TargetInvocationException içine
+        // sarar; kullanıcıya anlamlı mesaj dönebilmek için iç istisnayı açar.
+        private static string Unwrap(Exception ex)
+        {
+            var inner = ex is System.Reflection.TargetInvocationException && ex.InnerException != null
+                ? ex.InnerException
+                : ex;
+            return inner.Message;
         }
 
         // Bir üretici delegesini güvenle çağırıp sonucu sözlüğe yazar.

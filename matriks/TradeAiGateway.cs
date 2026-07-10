@@ -526,7 +526,8 @@ namespace Matriks.Lean.Algotrader
             if (string.Equals(raw, "Min", StringComparison.OrdinalIgnoreCase)) return SymbolPeriod.Min;
             if (string.Equals(raw, "Min15", StringComparison.OrdinalIgnoreCase)) return SymbolPeriod.Min15;
             if (string.Equals(raw, "Min30", StringComparison.OrdinalIgnoreCase)) return SymbolPeriod.Min30;
-            if (string.Equals(raw, "Hour", StringComparison.OrdinalIgnoreCase)) return SymbolPeriod.Hour;
+            if (string.Equals(raw, "Hour", StringComparison.OrdinalIgnoreCase)) return SymbolPeriod.Min60;
+            if (string.Equals(raw, "Min60", StringComparison.OrdinalIgnoreCase)) return SymbolPeriod.Min60;
             if (string.Equals(raw, "Day", StringComparison.OrdinalIgnoreCase)) return SymbolPeriod.Day;
             return SymbolPeriod.Min5;
         }

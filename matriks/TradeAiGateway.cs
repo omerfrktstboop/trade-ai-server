@@ -11,6 +11,7 @@ using Matriks.Data.Symbol;
 using Matriks.Engines;
 using Matriks.Indicators;
 using Matriks.Enumeration;
+using Matriks.IntermediaryInstitutionAnalysis.Enums;
 using Matriks.Lean.Algotrader.AlgoBase;
 using Matriks.Lean.Algotrader.Models;
 using Matriks.Lean.Algotrader.Trading;

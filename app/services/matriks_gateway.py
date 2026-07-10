@@ -115,6 +115,23 @@ class MatriksGatewayClient:
             params["symbol"] = symbol.strip().upper()
         return await self._get("/news", params=params)
 
+    async def get_news_details(
+        self,
+        symbol: str | None = None,
+        keyword: str | None = None,
+        filter_type: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Return detailed cached news plus active Matriks news subscriptions."""
+        params = {"limit": str(max(1, min(200, limit)))}
+        if symbol:
+            params["symbol"] = symbol.strip().upper()
+        if keyword:
+            params["keyword"] = keyword.strip()
+        if filter_type:
+            params["filterType"] = filter_type.strip()
+        return await self._get("/news/details", params=params)
+
     async def get_institutions(self, symbol: str, limit: int = 5) -> dict[str, Any]:
         """Return daily ranked AKD buyers/sellers when licensed."""
         return await self._get(

@@ -73,6 +73,18 @@ namespace Matriks.Lean.Algotrader
         [Parameter("BURAYA_SERVER_TOKEN")]
         public string ServerApiToken;
 
+        [Parameter("")]
+        public string NewsKeywordsCsv;
+
+        [Parameter("")]
+        public string NewsSymbolKeywordRulesCsv;
+
+        [Parameter(true)]
+        public bool NewsFiltersOnlyInHeaders;
+
+        [Parameter(false)]
+        public bool NewsFiltersExactMatch;
+
         // Server config gelene kadar bütün emir kapıları fail-closed.
         private bool EnableDemoOrders;
         private bool EnableRealOrders;
@@ -123,6 +135,7 @@ namespace Matriks.Lean.Algotrader
 
         private readonly object _closeLock = new object();
         private readonly object _dailyCounterLock = new object();
+        private readonly object _newsSubscriptionLock = new object();
 
         // ── Order path state (Phase 2, TradeAiAgenticBot'tan birebir) ─
 
@@ -143,6 +156,9 @@ namespace Matriks.Lean.Algotrader
         private bool _subscriptionsInitialized;
         private readonly object _symbolSubscriptionLock = new object();
         private readonly SemaphoreSlim _configFetchLock = new SemaphoreSlim(1, 1);
+        private readonly List<string> _newsTrackedSymbols = new List<string>();
+        private readonly List<NewsKeywordSubscription> _newsKeywordSubscriptions = new List<NewsKeywordSubscription>();
+        private readonly List<NewsSymbolKeywordSubscription> _newsSymbolKeywordSubscriptions = new List<NewsSymbolKeywordSubscription>();
 
         // ── Matriks lifecycle ───────────────────────────────────────
 
@@ -169,13 +185,14 @@ namespace Matriks.Lean.Algotrader
                 }
                 AddSymbolMarketData(normalized);
                 AddSymbolMarketDepth(normalized);
-                AddNewsSymbol(normalized);
+                RegisterNewsSubscriptionsForSymbol(normalized);
                 InitializeIndicators(normalized);
 
                 _botPositionQtyBySymbol[normalized] = 0m;
                 _closeHistoryBySymbol[normalized] = new List<decimal>();
             }
             _subscriptionsInitialized = true;
+            RegisterGlobalNewsKeywordSubscriptions();
 
             SetTimerInterval(60);
             LogTradeUserInfo();
@@ -480,6 +497,12 @@ namespace Matriks.Lean.Algotrader
             if (request.Method == "GET" && request.Path == "/news")
             {
                 await HandleNewsAsync(stream, request);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/news/details")
+            {
+                await HandleNewsDetailsAsync(stream, request);
                 return;
             }
 
@@ -838,6 +861,65 @@ namespace Matriks.Lean.Algotrader
                 ok = true, symbol = string.IsNullOrWhiteSpace(symbol) ? null : symbol,
                 news = query.Take(limit).ToList(), cacheSize = _recentNews.Count,
                 note = "Only live news received after gateway startup is cached."
+            });
+        }
+
+        private async Task HandleNewsDetailsAsync(NetworkStream stream, HttpRequest request)
+        {
+            string symbol = NormalizeSymbol(request.GetQueryValue("symbol"));
+            string keyword = (request.GetQueryValue("keyword") ?? "").Trim();
+            string filterType = (request.GetQueryValue("filterType") ?? "").Trim();
+            int limit = 50;
+            int parsed;
+            if (int.TryParse(request.GetQueryValue("limit"), out parsed))
+                limit = Math.Max(1, Math.Min(200, parsed));
+
+            IEnumerable<NewsSnapshot> query = _recentNews.ToArray().Reverse();
+            if (!string.IsNullOrWhiteSpace(symbol))
+                query = query.Where(x => x.Symbols.Any(s => NormalizeSymbol(s) == symbol));
+            if (!string.IsNullOrWhiteSpace(keyword))
+                query = query.Where(x => NewsMatchesKeyword(x, keyword));
+            if (!string.IsNullOrWhiteSpace(filterType))
+                query = query.Where(x => string.Equals(x.FilterType ?? "", filterType, StringComparison.OrdinalIgnoreCase));
+
+            List<NewsSnapshot> items = query.Take(limit).ToList();
+            List<object> filterSummary = items
+                .GroupBy(x => string.IsNullOrWhiteSpace(x.FilterType) ? "UNKNOWN" : x.FilterType)
+                .Select(g => (object)new { filterType = g.Key, count = g.Count() })
+                .ToList();
+
+            List<string> trackedSymbols;
+            List<NewsKeywordSubscription> keywordSubscriptions;
+            List<NewsSymbolKeywordSubscription> symbolKeywordSubscriptions;
+            lock (_newsSubscriptionLock)
+            {
+                trackedSymbols = _newsTrackedSymbols.ToList();
+                keywordSubscriptions = _newsKeywordSubscriptions.ToList();
+                symbolKeywordSubscriptions = _newsSymbolKeywordSubscriptions.ToList();
+            }
+
+            await WriteJsonAsync(stream, 200, new
+            {
+                ok = true,
+                symbol = string.IsNullOrWhiteSpace(symbol) ? null : symbol,
+                keyword = string.IsNullOrWhiteSpace(keyword) ? null : keyword,
+                filterType = string.IsNullOrWhiteSpace(filterType) ? null : filterType,
+                cacheSize = _recentNews.Count,
+                returned = items.Count,
+                filters = new
+                {
+                    trackedSymbols = trackedSymbols,
+                    keywordSubscriptions = keywordSubscriptions,
+                    symbolKeywordSubscriptions = symbolKeywordSubscriptions
+                },
+                summary = new
+                {
+                    filterTypes = filterSummary,
+                    onlyInHeaders = NewsFiltersOnlyInHeaders,
+                    exactMatch = NewsFiltersExactMatch
+                },
+                news = items,
+                note = "Returns all cached AlgoNewsModel-derived fields plus active Matriks news subscriptions."
             });
         }
 
@@ -1655,12 +1737,72 @@ namespace Matriks.Lean.Algotrader
                     AddSymbol(symbol, IndicatorPeriod);
                 AddSymbolMarketData(symbol);
                 AddSymbolMarketDepth(symbol);
-                AddNewsSymbol(symbol);
+                RegisterNewsSubscriptionsForSymbol(symbol);
                 InitializeIndicators(symbol);
 
                 AllowedSymbols = AllowedSymbols.Concat(new[] { symbol }).ToArray();
                 _closeHistoryBySymbol.TryAdd(symbol, new List<decimal>());
                 SafeDebug("Portfolio symbol subscribed symbol=" + symbol);
+            }
+        }
+
+        private void RegisterGlobalNewsKeywordSubscriptions()
+        {
+            foreach (string keyword in ParseCsvList(NewsKeywordsCsv))
+            {
+                lock (_newsSubscriptionLock)
+                {
+                    if (_newsKeywordSubscriptions.Any(x => string.Equals(x.Keyword, keyword, StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    AddNewsKeyword(keyword, NewsFiltersOnlyInHeaders, NewsFiltersExactMatch);
+                    _newsKeywordSubscriptions.Add(new NewsKeywordSubscription
+                    {
+                        Keyword = keyword,
+                        OnlyInHeaders = NewsFiltersOnlyInHeaders,
+                        IsExactMatch = NewsFiltersExactMatch
+                    });
+                }
+                SafeDebug("News keyword subscribed keyword=" + keyword
+                    + " onlyInHeaders=" + NewsFiltersOnlyInHeaders
+                    + " exactMatch=" + NewsFiltersExactMatch);
+            }
+        }
+
+        private void RegisterNewsSubscriptionsForSymbol(string symbol)
+        {
+            symbol = NormalizeSymbol(symbol);
+            if (string.IsNullOrWhiteSpace(symbol))
+                return;
+
+            lock (_newsSubscriptionLock)
+            {
+                if (!_newsTrackedSymbols.Contains(symbol))
+                {
+                    AddNewsSymbol(symbol);
+                    _newsTrackedSymbols.Add(symbol);
+                }
+
+                foreach (NewsSymbolKeywordSubscription rule in ParseNewsSymbolKeywordRules(NewsSymbolKeywordRulesCsv)
+                    .Where(x => string.Equals(x.Symbol, symbol, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var effectiveRule = new NewsSymbolKeywordSubscription
+                    {
+                        Symbol = rule.Symbol,
+                        Keywords = rule.Keywords,
+                        OnlyInHeaders = NewsFiltersOnlyInHeaders,
+                        IsExactMatch = NewsFiltersExactMatch
+                    };
+                    bool exists = _newsSymbolKeywordSubscriptions.Any(x =>
+                        string.Equals(x.Symbol, effectiveRule.Symbol, StringComparison.OrdinalIgnoreCase)
+                        && x.OnlyInHeaders == effectiveRule.OnlyInHeaders
+                        && x.IsExactMatch == effectiveRule.IsExactMatch
+                        && x.Keywords.SequenceEqual(effectiveRule.Keywords, StringComparer.OrdinalIgnoreCase));
+                    if (exists)
+                        continue;
+
+                    AddNewsSymbolKeyword(symbol, effectiveRule.Keywords, effectiveRule.OnlyInHeaders, effectiveRule.IsExactMatch);
+                    _newsSymbolKeywordSubscriptions.Add(effectiveRule);
+                }
             }
         }
 
@@ -2160,6 +2302,26 @@ namespace Matriks.Lean.Algotrader
             return AllowedSymbols.Any(x => NormalizeSymbol(x) == normalized);
         }
 
+        private static bool NewsMatchesKeyword(NewsSnapshot item, string keyword)
+        {
+            if (string.IsNullOrWhiteSpace(keyword))
+                return true;
+
+            string normalized = keyword.Trim();
+            if (!string.IsNullOrWhiteSpace(item.Header)
+                && item.Header.IndexOf(normalized, StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (item.Categories != null && item.Categories.Any(x => !string.IsNullOrWhiteSpace(x) && x.IndexOf(normalized, StringComparison.OrdinalIgnoreCase) >= 0))
+                return true;
+            if (item.Symbols != null && item.Symbols.Any(x => !string.IsNullOrWhiteSpace(x) && x.IndexOf(normalized, StringComparison.OrdinalIgnoreCase) >= 0))
+                return true;
+            if (item.Sources != null && item.Sources.Any(x => !string.IsNullOrWhiteSpace(x) && x.IndexOf(normalized, StringComparison.OrdinalIgnoreCase) >= 0))
+                return true;
+            if (item.MatchedFilters != null && item.MatchedFilters.Any(x => !string.IsNullOrWhiteSpace(x) && x.IndexOf(normalized, StringComparison.OrdinalIgnoreCase) >= 0))
+                return true;
+            return false;
+        }
+
         private static string[] ParseSymbolsCsv(string csv)
         {
             return (csv ?? "")
@@ -2168,6 +2330,47 @@ namespace Matriks.Lean.Algotrader
                 .Where(x => x != "")
                 .Distinct()
                 .ToArray();
+        }
+
+        private static string[] ParseCsvList(string raw)
+        {
+            return (raw ?? "")
+                .Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => x.Trim())
+                .Where(x => x != "")
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
+        private static List<NewsSymbolKeywordSubscription> ParseNewsSymbolKeywordRules(string raw)
+        {
+            var rules = new List<NewsSymbolKeywordSubscription>();
+            foreach (string entry in (raw ?? "").Split(new[] { ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string part = entry.Trim();
+                int separator = part.IndexOf('=');
+                if (separator <= 0 || separator >= part.Length - 1)
+                    continue;
+
+                string symbol = NormalizeSymbol(part.Substring(0, separator));
+                List<string> keywords = part.Substring(separator + 1)
+                    .Split(new[] { '|', ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(x => x.Trim())
+                    .Where(x => x != "")
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (symbol == "" || keywords.Count == 0)
+                    continue;
+
+                rules.Add(new NewsSymbolKeywordSubscription
+                {
+                    Symbol = symbol,
+                    Keywords = keywords,
+                    OnlyInHeaders = true,
+                    IsExactMatch = false
+                });
+            }
+            return rules;
         }
 
         private static Dictionary<string, decimal> ParseLockedCsv(string csv)
@@ -2531,6 +2734,21 @@ namespace Matriks.Lean.Algotrader
             public bool HasAttachments { get; set; }
             public bool HasDetail { get; set; }
             public int DailyNewsNo { get; set; }
+        }
+
+        private struct NewsKeywordSubscription
+        {
+            public string Keyword { get; set; }
+            public bool OnlyInHeaders { get; set; }
+            public bool IsExactMatch { get; set; }
+        }
+
+        private struct NewsSymbolKeywordSubscription
+        {
+            public string Symbol { get; set; }
+            public List<string> Keywords { get; set; }
+            public bool OnlyInHeaders { get; set; }
+            public bool IsExactMatch { get; set; }
         }
 
         private struct OrderRequest

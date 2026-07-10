@@ -80,6 +80,17 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     return None
 
 
+def extract_json_object(text: str) -> dict[str, Any] | None:
+    """Public wrapper around :func:`_extract_json` for non-trading callers.
+
+    Kept as a thin alias rather than renaming ``_extract_json`` outright —
+    the trading-decision code path and its tests reference the private name
+    directly; this gives other services (e.g. the weekly review agent) the
+    same battle-tested JSON extraction without importing a "private" symbol.
+    """
+    return _extract_json(text)
+
+
 def _normalize_decision(raw: dict[str, Any]) -> dict[str, Any]:
     """Ensure the decision dict has the required fields with valid values."""
     action = str(raw.get("action", "WAIT")).upper()
@@ -165,6 +176,20 @@ class AiProvider(ABC):
         """
         ...
 
+    @abstractmethod
+    async def chat(
+        self, system_prompt: str, user_content: str, *, max_tokens: int = 800
+    ) -> str:
+        """Generic chat completion — raw text response, no trading schema.
+
+        Used by non-trading LLM tasks (e.g. the weekly self-reflection
+        review) that need a custom system prompt instead of the hardcoded
+        trading one. Never raises — any network/API/parse failure returns
+        ``""`` so callers can degrade gracefully (e.g. skip persisting a
+        lesson rather than crash a scheduled job).
+        """
+        ...
+
 
 # ── Mock provider ─────────────────────────────────────────────────────────────
 
@@ -179,6 +204,12 @@ class MockAiProvider(AiProvider):
             "confidence": 0.0,
             "reason": "Mock provider — always WAIT",
         }
+
+    async def chat(
+        self, system_prompt: str, user_content: str, *, max_tokens: int = 800
+    ) -> str:
+        logger.debug("MockAiProvider.chat called — returning empty string")
+        return ""
 
 
 # ── DeepSeek provider ─────────────────────────────────────────────────────────
@@ -313,6 +344,60 @@ class DeepSeekProvider(AiProvider):
             decision["confidence"],
         )
         return decision
+
+
+    async def chat(
+        self, system_prompt: str, user_content: str, *, max_tokens: int = 800
+    ) -> str:
+        """Generic chat completion for non-trading tasks — raw text out.
+
+        Deliberately independent of :meth:`decide` (small duplication of the
+        HTTP call) rather than a shared refactor: ``decide()``'s error-path
+        reason strings are asserted verbatim by the trading-decision test
+        suite, and this keeps that path untouched.
+        """
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        body = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": max_tokens,
+        }
+
+        t0 = time.monotonic()
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self._headers,
+                    json=body,
+                ) as resp:
+                    elapsed = time.monotonic() - t0
+                    logger.info(
+                        "DeepSeek chat: status=%d elapsed=%.2fs model=%s",
+                        resp.status,
+                        elapsed,
+                        self.model,
+                    )
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        logger.error(
+                            "DeepSeek chat error %d: %s", resp.status, error_text[:500]
+                        )
+                        return ""
+                    data = await resp.json()
+        except Exception as exc:  # noqa: BLE001 — any failure degrades to "" here
+            logger.error("DeepSeek chat failed after %.2fs: %s", time.monotonic() - t0, exc)
+            return ""
+
+        choices = data.get("choices", [])
+        if not choices:
+            return ""
+        return str(choices[0].get("message", {}).get("content", "") or "")
 
 
 # ── Provider factory ──────────────────────────────────────────────────────────

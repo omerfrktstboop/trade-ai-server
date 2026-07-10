@@ -150,6 +150,13 @@ class Settings(BaseSettings):
     # "kar al / zarar kes / tut" sorusuyla yeniden değerlendirilir.
     portfolio_scan_interval_minutes: int = 30
 
+    # Haftalık self-reflection (review agent) — hafta sınırları bu IANA
+    # timezone'a göre hesaplanır (Pazartesi 00:00 - Pazartesi 00:00).
+    review_timezone: str = "Europe/Istanbul"
+    # Stop-loss'a "isabet" sayılması için tolerans payı — kayma/slipaj
+    # yüzünden exit fiyatı stop'un birkaç kuruş üstünde kalabilir.
+    review_stop_loss_tolerance_pct: float = 2.0
+
     # ── Paths ─────────────────────────────────────────────────────────────
 
     base_dir: Path = Field(

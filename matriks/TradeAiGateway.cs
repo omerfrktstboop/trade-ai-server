@@ -73,17 +73,16 @@ namespace Matriks.Lean.Algotrader
         [Parameter("BURAYA_SERVER_TOKEN")]
         public string ServerApiToken;
 
-        [Parameter("")]
-        public string NewsKeywordsCsv;
-
-        [Parameter("")]
-        public string NewsSymbolKeywordRulesCsv;
-
-        [Parameter(true)]
-        public bool NewsFiltersOnlyInHeaders;
-
-        [Parameter(false)]
-        public bool NewsFiltersExactMatch;
+        // News ayarları BİLEREK [Parameter] DEĞİL: haber tam metnini Python
+        // tarafı (news_service.py, Google News RSS) sağlıyor; Matriks'in kendi
+        // haber aboneliği yalnızca ikincil/pasif sembol yakalaması için var.
+        // [Parameter("")] boş-string alanları algo panelinde zorunlu görünüp
+        // başlatmayı engelliyordu — normal alan yapıldı, panelde görünmezler.
+        // Gerekirse ileride tekrar [Parameter] yapılıp elle doldurulabilir.
+        private string NewsKeywordsCsv = "";
+        private string NewsSymbolKeywordRulesCsv = "";
+        private bool NewsFiltersOnlyInHeaders = true;
+        private bool NewsFiltersExactMatch = false;
 
         // Server config gelene kadar bütün emir kapıları fail-closed.
         private bool EnableDemoOrders;
@@ -667,6 +666,20 @@ namespace Matriks.Lean.Algotrader
                     MaxOrdersPerSymbolPerDay = cfg.Value<int?>("maxOrdersPerSymbolPerDay") ?? 0;
                     OrderTimeInForce = cfg.Value<string>("orderTimeInForce") ?? "Day";
                     ActiveProfileCode = cfg.Value<string>("profileCode") ?? "UNKNOWN";
+
+                    // Haber ayarları da server'dan gelir (algo panelinde değil).
+                    // Boş bırakılırsa: keyword aboneliği yok, sembol bazlı pasif
+                    // haber yakalama yine çalışır. Alan gelmezse eski değeri korur.
+                    NewsKeywordsCsv = cfg.Value<string>("newsKeywordsCsv") ?? NewsKeywordsCsv;
+                    NewsSymbolKeywordRulesCsv = cfg.Value<string>("newsSymbolKeywordRulesCsv") ?? NewsSymbolKeywordRulesCsv;
+                    NewsFiltersOnlyInHeaders = cfg.Value<bool?>("newsFiltersOnlyInHeaders") ?? NewsFiltersOnlyInHeaders;
+                    NewsFiltersExactMatch = cfg.Value<bool?>("newsFiltersExactMatch") ?? NewsFiltersExactMatch;
+                    if (_subscriptionsInitialized)
+                    {
+                        try { RegisterGlobalNewsKeywordSubscriptions(); }
+                        catch (Exception nex) { SafeDebug("News keyword re-subscribe failed: " + nex.Message); }
+                    }
+
                     _lastConfigFetchUtc = DateTime.UtcNow;
 
                     string configSignature = string.Join("|", new[]

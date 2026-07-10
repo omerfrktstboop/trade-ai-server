@@ -129,6 +129,15 @@ class Settings(BaseSettings):
     # Boş string makro filtreyi tamamen kapatır.
     market_index_symbol: str = "XU100"
 
+    # ── Matriks-side news subscription (gateway'e /gateway/config ile iner) ──
+    # Bunlar Matriks algo panelinde parametre DEĞİL; server'dan yönetilir.
+    # Boş bırakmak: keyword aboneliği yok, sembol bazlı pasif haber yakalama
+    # yine çalışır. (Haber tam metnini zaten Python news_service.py sağlıyor.)
+    news_keywords_csv: str = ""
+    news_symbol_keyword_rules_csv: str = ""
+    news_filters_only_in_headers: bool = True
+    news_filters_exact_match: bool = False
+
     # Dinamik watchlist keşif evreni — gateway'de kayıtlı olmayan bu semboller
     # periyodik olarak taranır; BUY sinyali gelince allowedSymbols'e eklenir.
     discovery_symbols: str = (

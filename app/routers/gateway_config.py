@@ -95,6 +95,11 @@ async def gateway_runtime_config() -> dict:
         "orderTimeInForce": profile.order_time_in_force,
         "indicatorPeriod": profile.indicator_period,
         "scanIntervalMinutes": profile.scan_interval_minutes,
+        # Matriks-side news aboneliği ayarları (algo panelinde parametre değil).
+        "newsKeywordsCsv": settings.news_keywords_csv,
+        "newsSymbolKeywordRulesCsv": settings.news_symbol_keyword_rules_csv,
+        "newsFiltersOnlyInHeaders": settings.news_filters_only_in_headers,
+        "newsFiltersExactMatch": settings.news_filters_exact_match,
         "profileCode": profile.code,
         "activeTradeProfile": {
             "code": profile.code,

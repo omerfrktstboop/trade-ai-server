@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import time
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,7 @@ from app.services.admin_config import (
     list_admin_configs,
     set_admin_config_value,
 )
+from app.services.block_reason_classifier import classify_block_reason
 from app.services.daily_trade_count import get_today_trade_counts
 from app.services.fundamentals_service import (
     NUMERIC_FIELDS as FUNDAMENTAL_NUMERIC_FIELDS,
@@ -272,6 +274,51 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
             **dashboard,
         },
     )
+
+
+@admin_router.get("/why-blocked", response_class=HTMLResponse)
+async def admin_why_blocked(request: Request) -> HTMLResponse:
+    identity = await require_admin(request)
+    symbol = str(request.query_params.get("symbol") or "").upper()
+    category = str(request.query_params.get("category") or "").upper()
+    action = str(request.query_params.get("action") or "").upper()
+    only_blocked = request.query_params.get("only_blocked") == "1"
+    rows: list[dict[str, Any]] = []
+    try:
+        async with async_session_factory() as session:
+            risks = await _latest(session, RiskDecision, 250)
+            orders = await _latest(session, OrderLog, 250)
+            status_ctx = await _status_strip_context(session)
+        for row in risks:
+            if only_blocked and row.allow_order:
+                continue
+            reason = row.reason or ""
+            rows.append({"created_at": row.created_at, "request_id": row.request_id, "symbol": row.symbol,
+                "action": row.action, "confidence": row.confidence, "risk_score": row.risk_score,
+                "allow_order": row.allow_order, "order_type": row.order_type, "qty": row.qty,
+                "price": row.entry_max, "reason": reason, "category": classify_block_reason(reason)})
+        for row in orders:
+            if row.status.upper() not in {"REJECTED", "ERROR", "CANCELED"}:
+                continue
+            reason = row.matrix_message or row.status
+            rows.append({"created_at": row.created_at, "request_id": row.request_id, "symbol": row.symbol,
+                "action": row.action, "confidence": None, "risk_score": None, "allow_order": False,
+                "order_type": "LIMIT", "qty": row.qty, "price": row.price, "reason": reason,
+                "category": classify_block_reason(reason)})
+    except Exception as exc:
+        logger.warning("Why blocked query failed: %s", exc)
+        status_ctx = {"status_mode": "UNKNOWN", "status_kill_switch": False,
+                      "status_profile_code": "UNKNOWN", "status_profile_risk_level": "UNKNOWN"}
+    rows = [r for r in rows if (not symbol or r["symbol"] == symbol) and (not category or r["category"] == category) and (not action or r["action"] == action)]
+    rows.sort(key=lambda r: r["created_at"] or datetime.min, reverse=True)
+    categories = Counter(r["category"] for r in rows)
+    symbols = Counter(r["symbol"] for r in rows)
+    summary = {"total": len(rows), "category": categories.most_common(1)[0][0] if categories else "-",
+               "symbol": symbols.most_common(1)[0][0] if symbols else "-",
+               "confidence_low": categories.get("CONFIDENCE_LOW", 0)}
+    return templates.TemplateResponse(request, "admin/why_blocked.html", {"identity": identity,
+        "active": "why-blocked", "rows": rows, "summary": summary,
+        "filters": {"symbol": symbol, "category": category, "action": action, "only_blocked": only_blocked}, **status_ctx})
 
 
 @admin_router.get("/config", response_class=HTMLResponse)

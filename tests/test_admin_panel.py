@@ -382,6 +382,13 @@ class TestAdminDashboard:
         assert response.json() == {"status": "disabled"}
 
 
+class TestWhyBlocked:
+    def test_empty_page_returns_200(self, client: TestClient, auth_headers: dict[str, str]):
+        response = client.get("/admin/why-blocked", headers=auth_headers)
+        assert response.status_code == 200
+        assert "No blocked decision found" in response.text
+
+
 class TestLogsListBugFixes:
     """Regression coverage for two field-name mismatches that made the
     AI Decisions table's Confidence/Model columns and the Config Audit

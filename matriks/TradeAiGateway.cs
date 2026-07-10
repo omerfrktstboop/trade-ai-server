@@ -127,6 +127,9 @@ namespace Matriks.Lean.Algotrader
         private readonly ConcurrentDictionary<string, OhlcvSnapshot> _lastOhlcvBySymbol = new ConcurrentDictionary<string, OhlcvSnapshot>();
         private readonly ConcurrentDictionary<string, DateTime> _marketDataWarningUtcByKey = new ConcurrentDictionary<string, DateTime>();
         private readonly ConcurrentDictionary<string, decimal> _maxBid1SizeBySymbol = new ConcurrentDictionary<string, decimal>();
+        // Günlük referans fiyat (gün içinde görülen ilk geçerli last) — /movers
+        // endpoint'inin değişim yüzdesi bu referansa göre hesaplanır.
+        private readonly ConcurrentDictionary<string, decimal> _dailyRefPriceBySymbol = new ConcurrentDictionary<string, decimal>();
         private readonly ConcurrentDictionary<string, RSI> _rsiBySymbol = new ConcurrentDictionary<string, RSI>();
         private readonly ConcurrentDictionary<string, MOV> _ema20BySymbol = new ConcurrentDictionary<string, MOV>();
         private readonly ConcurrentDictionary<string, MOV> _ema50BySymbol = new ConcurrentDictionary<string, MOV>();
@@ -515,6 +518,12 @@ namespace Matriks.Lean.Algotrader
             if (request.Method == "GET" && request.Path == "/mkk")
             {
                 await HandleMkkAsync(stream);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/movers")
+            {
+                await HandleMoversAsync(stream, request);
                 return;
             }
 
@@ -956,6 +965,75 @@ namespace Matriks.Lean.Algotrader
             catch (Exception ex)
             {
                 await WriteJsonAsync(stream, 200, new { ok = true, available = false, symbol = symbol, error = ex.Message, requiresLicense = "AKDE/AKD or VAKD" });
+            }
+        }
+
+        private async Task HandleMoversAsync(NetworkStream stream, HttpRequest request)
+        {
+            // Kayıtlı (abone) semboller üzerinden günlük değişim ve hacim
+            // sıralaması. Değişim, gün içinde görülen ilk geçerli fiyata
+            // (_dailyRefPriceBySymbol) göredir — Matriks API'si abone olunmayan
+            // sembol için ranking vermediğinden evren AllowedSymbols'tür;
+            // server, keşif evrenini config'teki symbols listesiyle genişletir.
+            int limit = 10;
+            int parsedLimit;
+            if (int.TryParse(request.GetQueryValue("limit"), out parsedLimit))
+                limit = Math.Max(1, Math.Min(50, parsedLimit));
+
+            var items = new List<Dictionary<string, object>>();
+            try
+            {
+                foreach (string symbolRaw in AllowedSymbols)
+                {
+                    string symbol = NormalizeSymbol(symbolRaw);
+                    MarketQuoteSnapshot quote;
+                    if (!_lastValidQuoteBySymbol.TryGetValue(symbol, out quote) || quote.Last <= 0m)
+                        continue;
+
+                    decimal refPrice;
+                    if (!_dailyRefPriceBySymbol.TryGetValue(symbol, out refPrice) || refPrice <= 0m)
+                        refPrice = quote.Last;
+
+                    double changePct = refPrice > 0m
+                        ? (double)((quote.Last - refPrice) / refPrice * 100m)
+                        : 0.0;
+
+                    items.Add(new Dictionary<string, object>
+                    {
+                        { "symbol", symbol },
+                        { "lastPrice", ToDouble(quote.Last) },
+                        { "refPrice", ToDouble(refPrice) },
+                        { "changePct", Math.Round(changePct, 2) },
+                        { "volume", ToDouble(quote.Volume) },
+                        { "quoteAgeSeconds", Math.Round((DateTime.Now - quote.UpdatedAt).TotalSeconds, 1) }
+                    });
+                }
+
+                var gainers = items
+                    .OrderByDescending(x => (double)x["changePct"])
+                    .Take(limit).Select(x => (string)x["symbol"]).ToList();
+                var losers = items
+                    .OrderBy(x => (double)x["changePct"])
+                    .Take(limit).Select(x => (string)x["symbol"]).ToList();
+                var volumeLeaders = items
+                    .OrderByDescending(x => (double)x["volume"])
+                    .Take(limit).Select(x => (string)x["symbol"]).ToList();
+
+                await WriteJsonAsync(stream, 200, new
+                {
+                    ok = true,
+                    available = items.Count > 0,
+                    updatedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz"),
+                    universeSize = items.Count,
+                    items = items,
+                    gainers = gainers,
+                    losers = losers,
+                    volumeLeaders = volumeLeaders
+                });
+            }
+            catch (Exception ex)
+            {
+                await WriteJsonAsync(stream, 200, new { ok = true, available = false, error = ex.Message });
             }
         }
 
@@ -1859,6 +1937,8 @@ namespace Matriks.Lean.Algotrader
                     UpdatedAt = DateTime.Now
                 };
                 _lastValidQuoteBySymbol[symbol] = live;
+                if (rawLast > 0m)
+                    _dailyRefPriceBySymbol.TryAdd(symbol, rawLast);
                 return live;
             }
 
@@ -2290,6 +2370,7 @@ namespace Matriks.Lean.Algotrader
                 _dailyCounterDate = DateTime.Today;
                 _maxBid1SizeBySymbol.Clear();
                 _dailyTradeCountBySymbol.Clear();
+                _dailyRefPriceBySymbol.Clear();
                 SafeDebug("Daily caches reset.");
             }
         }

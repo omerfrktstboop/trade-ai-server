@@ -32,7 +32,10 @@ from typing import Any
 from app.core.logger import log_signal_evaluation
 from app.core.risk_config import RiskConfig, risk_config
 from app.db.session import async_session_factory
+from sqlalchemy import select
+
 from app.models.db import AiDecision as AiDecisionModel
+from app.models.db import BotPosition as BotPositionModel
 from app.models.db import MarketSnapshot
 from app.models.db import RiskDecision as RiskDecisionModel
 from app.models.signal import (
@@ -650,6 +653,14 @@ async def evaluate_symbol(
     )
     payload["agenticSteps"] = steps
 
+    # ── 5.5. Pozisyon bağlamı (portfolio yönetimi) ───────────────────────
+    # Açık bot pozisyonu varken LLM'in görevi yeni alım aramak değil eldeki
+    # pozisyonu yönetmektir: maliyet + anlık K/Z payload'a eklenir ve prompt
+    # kural 16 devreye girer (kar al / zarar kes / tut).
+    position_context = await _build_position_context(sig_req)
+    if position_context:
+        payload["positionContext"] = position_context
+
     # ── 6. Admin test override VEYA AI kararı ────────────────────────────
     # Override asla REAL_LIVE'da uygulanmaz — test amaçlı bir özellik gerçek
     # sermayeyi hareket ettiremesin.
@@ -705,6 +716,41 @@ async def evaluate_symbol(
     await persist_evaluation(sig_req, payload, raw, response)
 
     return EvaluationResult(response=response, mode=sig_req.mode)
+
+
+async def _build_position_context(req: SignalRequest) -> dict[str, Any] | None:
+    """Açık bot pozisyonu için maliyet + K/Z bağlamı üret; yoksa None.
+
+    Maliyet ``bot_positions.avg_price``ten okunur (position_sync güncel
+    tutar). DB hatası veya kayıt yokluğu evaluation'ı asla düşürmez.
+    """
+    if req.bot_position_qty <= 0:
+        return None
+    try:
+        async with async_session_factory() as session:
+            row = (
+                await session.execute(
+                    select(BotPositionModel).where(
+                        BotPositionModel.symbol == req.symbol
+                    )
+                )
+            ).scalar_one_or_none()
+    except Exception:
+        logger.exception("Position context load failed symbol=%s", req.symbol)
+        row = None
+
+    avg_cost = float(row.avg_price) if row is not None and row.avg_price else None
+    context: dict[str, Any] = {
+        "qty": req.bot_position_qty,
+        "avgCost": avg_cost,
+        "currentPrice": req.last_price,
+        "positionValueTl": round(req.bot_position_qty * req.last_price, 2),
+    }
+    if avg_cost and avg_cost > 0 and req.last_price > 0:
+        context["unrealizedPnlPct"] = round(
+            (req.last_price - avg_cost) / avg_cost * 100, 2
+        )
+    return context
 
 
 def _log_evaluation(req: SignalRequest, response: SignalResponse) -> None:

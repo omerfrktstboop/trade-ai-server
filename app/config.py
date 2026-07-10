@@ -138,6 +138,18 @@ class Settings(BaseSettings):
     )
     discovery_interval_minutes: int = 30
 
+    # Discovery agent (movers tabanlı) eleme eşikleri.
+    # Tavan/taban kilidi: |değişim| bu yüzdeyi aşan adaylar elenir.
+    discovery_ceiling_change_pct: float = 9.5
+    # Sığ hacim: günlük hacmi (TL) bu eşiğin altında kalan adaylar elenir.
+    discovery_min_volume_tl: float = 100_000_000.0
+    # Satış duvarı: toplam ask/bid oranı bu değeri aşan adaylar elenir.
+    discovery_max_ask_bid_ratio: float = 3.0
+
+    # Portföy re-evaluasyon döngüsü: eldeki pozisyonlar bu aralıkla LLM'e
+    # "kar al / zarar kes / tut" sorusuyla yeniden değerlendirilir.
+    portfolio_scan_interval_minutes: int = 30
+
     # ── Paths ─────────────────────────────────────────────────────────────
 
     base_dir: Path = Field(

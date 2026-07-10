@@ -146,6 +146,16 @@ class MatriksGatewayClient:
         """Return explicit MKK/Takas capability status from the gateway."""
         return await self._get("/mkk")
 
+    async def get_movers(self, limit: int = 20) -> dict[str, Any]:
+        """GET /movers — kayıtlı evren üzerinden günlük yükselen/düşen/hacimliler.
+
+        Dönen dict: ``items`` (sembol başına lastPrice/changePct/volume) +
+        ``gainers``/``losers``/``volumeLeaders`` sıralı sembol listeleri.
+        """
+        return await self._get(
+            "/movers", params={"limit": str(max(1, min(50, limit)))}
+        )
+
     async def send_order(
         self,
         *,

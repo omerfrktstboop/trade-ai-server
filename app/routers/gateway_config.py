@@ -20,7 +20,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.core.auth import verify_token
 from app.db.session import async_session_factory
-from app.models.db import BotPosition, LockedPosition
+from app.models.db import BotPosition, LockedPosition, WatchlistSymbol
 from app.services.admin_config import list_admin_configs
 from app.services.trade_profile import get_active_profile
 
@@ -48,6 +48,13 @@ async def gateway_runtime_config() -> dict:
         profile = await get_active_profile(session)
         portfolio = (await session.execute(select(BotPosition))).scalars().all()
         locked = (await session.execute(select(LockedPosition))).scalars().all()
+        watchlist = (
+            await session.execute(
+                select(WatchlistSymbol.symbol).where(
+                    WatchlistSymbol.is_active.is_(True)
+                )
+            )
+        ).scalars().all()
 
     symbols = {
         value.strip().upper()
@@ -55,11 +62,18 @@ async def gateway_runtime_config() -> dict:
         if value.strip()
     }
     symbols.update(row.symbol.strip().upper() for row in portfolio if row.qty > 0)
-    # Makro filtre endeksi (XU100) veri aboneliği için listeye girer; emir
-    # yolu RiskEngine'in allowedSymbols kontrolünden geçtiği için endekse
-    # emir gidemez — bu yalnızca gateway'in snapshot vermesini sağlar.
+    # Data-only abonelikler: emir yolu RiskEngine'in allowedSymbols
+    # kontrolünden geçtiği için bunlara emir gidemez; gateway yalnızca
+    # snapshot/movers verisi sağlar.
+    #   - Makro filtre endeksi (XU100)
+    #   - Discovery keşif evreni (movers ranking'i genişletir)
+    #   - Aktif watchlist adayları (scanner analizi için snapshot gerekir)
     if settings.market_index_symbol.strip():
         symbols.add(settings.market_index_symbol.strip().upper())
+    symbols.update(
+        s.strip().upper() for s in settings.discovery_symbols.split(",") if s.strip()
+    )
+    symbols.update(str(s).strip().upper() for s in watchlist)
     locked_qty: dict[str, float] = {}
     for row in locked:
         symbol = row.symbol.strip().upper()

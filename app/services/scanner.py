@@ -29,13 +29,15 @@ from sqlalchemy import select
 from app.config import settings
 from app.core.risk_config import risk_config
 from app.db.session import async_session_factory
-from app.models.db import OrderLog
+from app.models.db import BotPosition, OrderLog
 from app.models.signal import OrderType, SignalAction, SignalMode
 from app.services.admin_config import (
     build_runtime_risk_config,
-    get_admin_config_value,
     is_kill_switch_enabled,
-    set_admin_config_value,
+)
+from app.services.discovery_agent import (
+    list_active_watchlist_symbols,
+    run_discovery_scan,
 )
 from app.services.evaluator import EvaluationResult, evaluate_symbol
 from app.services.matriks_gateway import (
@@ -72,6 +74,7 @@ class SymbolScanner:
         self._last_order_sent_at: dict[tuple[str, SignalAction], datetime] = {}
         self._last_discovery_by_symbol: dict[str, datetime] = {}
         self._last_discovery_run: datetime | None = None
+        self._last_portfolio_scan: datetime | None = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -176,6 +179,10 @@ class SymbolScanner:
             for s in runtime_cfg.allowed_symbols.split(",")
             if s.strip()
         ]
+        # Discovery agent'ın bulduğu aktif watchlist adayları da taranır —
+        # emir izni yine RiskEngine'in allowedSymbols kontrolünde kalır.
+        watchlist = await list_active_watchlist_symbols()
+        symbols.extend(s for s in watchlist if s not in symbols)
         # Manual BUY/SELL overrides must run even when the symbol is not in
         # the regular scan watchlist (for example an existing portfolio
         # position such as OPT25F). Preserve watchlist order, then append the
@@ -185,6 +192,7 @@ class SymbolScanner:
         now = datetime.now(timezone.utc)
 
         evaluated: list[str] = []
+        gateway_down_mid_cycle = False
         for symbol in symbols:
             last_scan = self._last_scan_by_symbol.get(symbol)
             due = last_scan is None or (now - last_scan) >= interval
@@ -200,6 +208,7 @@ class SymbolScanner:
                 self._warn_throttled(
                     "gateway", "Gateway became unavailable mid-cycle; stopping this tick"
                 )
+                gateway_down_mid_cycle = True
                 break
             except GatewayError as exc:
                 logger.warning("Snapshot rejected by gateway symbol=%s error=%s", symbol, exc)
@@ -227,82 +236,108 @@ class SymbolScanner:
             )
             await self._maybe_send_order(result)
 
-        # ── Dinamik watchlist keşfi ────────────────────────────────────────
-        await self._run_discovery(runtime_cfg)
+        # ── Otonom keşif (movers → watchlist) + portföy re-evaluasyonu ────
+        # Gateway tur ortasında düştüyse aynı tick'te tekrar denemek anlamsız.
+        if not gateway_down_mid_cycle:
+            await self._run_discovery()
+            await self._run_portfolio_scan(pending_overrides)
 
         return evaluated
 
-    async def _run_discovery(self, runtime_cfg) -> None:
-        """BIST keşif evrenini tara; BUY sinyali gelen sembolleri watchlist'e ekle."""
-        if not settings.discovery_symbols:
-            return
+    async def _run_discovery(self) -> None:
+        """Discovery agent'ı periyodik çalıştır: movers → elemeler → watchlist.
 
+        Adayları ``watchlist_symbols`` tablosuna yazar; bir sonraki tick'te
+        tarama listesine otomatik girerler. LLM çağrısı YAPMAZ — eleme
+        tamamen kural tabanlı (tavan kilidi / sığ hacim / satış duvarı).
+        """
         interval = timedelta(minutes=max(5, settings.discovery_interval_minutes))
         now = datetime.now(timezone.utc)
-
-        # Keşif döngüsü hız sınırı: tüm evren interval'den önce tekrar taranmaz.
         if self._last_discovery_run and (now - self._last_discovery_run) < interval:
             return
         self._last_discovery_run = now
 
-        # Zaten watchlist'te olan sembolleri atla.
-        current_symbols = {
-            s.strip().upper()
-            for s in runtime_cfg.allowed_symbols.split(",")
-            if s.strip()
-        }
-        discovery_universe = [
-            s.strip().upper()
-            for s in settings.discovery_symbols.split(",")
-            if s.strip() and s.strip().upper() not in current_symbols
-        ]
+        try:
+            added = await run_discovery_scan(self._gateway)
+        except Exception:
+            logger.exception("Discovery scan failed")
+            return
+        if added:
+            logger.info("Discovery scan accepted symbols=%s", added)
 
-        if not discovery_universe:
+    async def _run_portfolio_scan(self, pending_overrides: set[str]) -> None:
+        """Eldeki pozisyonları periyodik yeniden değerlendir (Portfolio Manager).
+
+        ``bot_positions``ta lot bulunan her sembol LLM'e pozisyon bağlamıyla
+        gider (evaluator ``positionContext`` ekler; prompt kural 16: kar al /
+        zarar kes / tut). Normal tarama zaten pozisyonlu sembolleri kapsıyor
+        olabilir — bu döngü, izleme listesinden çıkmış (ör. watchlist'ten
+        alınmış sonra pasifleşmiş) pozisyonların da yönetimsiz kalmamasını
+        garanti eder.
+        """
+        interval = timedelta(minutes=max(5, settings.portfolio_scan_interval_minutes))
+        now = datetime.now(timezone.utc)
+        if self._last_portfolio_scan and (now - self._last_portfolio_scan) < interval:
+            return
+        self._last_portfolio_scan = now
+
+        try:
+            async with async_session_factory() as session:
+                rows = (
+                    await session.execute(
+                        select(BotPosition).where(BotPosition.qty > 0)
+                    )
+                ).scalars().all()
+        except Exception:
+            logger.exception("Portfolio scan: bot_positions read failed")
             return
 
-        logger.info("Discovery scan starting universe_size=%d", len(discovery_universe))
-        added: list[str] = []
+        held = [row.symbol.strip().upper() for row in rows]
+        if not held:
+            return
 
-        for symbol in discovery_universe:
+        logger.info("Portfolio scan starting positions=%s", held)
+        for symbol in held:
             if self._stop_event.is_set():
                 break
+            # Normal tarama bu sembolü zaten yakın zamanda değerlendirdiyse
+            # (aynı tick dahil) tekrarlamak sadece token yakar — atla.
+            last_scan = self._last_scan_by_symbol.get(symbol)
+            if last_scan is not None and (now - last_scan) < interval:
+                continue
             try:
-                result = await evaluate_symbol(symbol, force_paper=True)
-            except (GatewayUnavailable, GatewayError):
+                result = await evaluate_symbol(
+                    symbol, force_paper=not settings.scanner_allow_orders
+                )
+            except GatewayUnavailable:
+                self._warn_throttled(
+                    "gateway", "Gateway unavailable during portfolio scan; stopping"
+                )
                 break
+            except GatewayError as exc:
+                logger.warning(
+                    "Portfolio scan snapshot rejected symbol=%s error=%s", symbol, exc
+                )
+                continue
             except Exception:
-                logger.debug("Discovery eval failed symbol=%s", symbol)
+                logger.exception("Portfolio scan evaluation failed symbol=%s", symbol)
                 continue
 
             if result is None:
                 continue
 
-            if (
-                result.response.action == SignalAction.BUY
-                and result.response.confidence_score >= 40
-            ):
-                added.append(symbol)
-                logger.info(
-                    "Discovery BUY signal symbol=%s confidence=%s — adding to watchlist",
-                    symbol,
-                    result.response.confidence_score,
-                )
-
-        if not added:
-            return
-
-        # allowedSymbols'e ekle (DB'ye yaz).
-        try:
-            async with async_session_factory() as session:
-                current_raw = await get_admin_config_value(session, "allowedSymbols")
-                existing = {s.strip().upper() for s in current_raw.split(",") if s.strip()}
-                new_set = existing | set(added)
-                new_value = ",".join(sorted(new_set))
-                await set_admin_config_value(session, "allowedSymbols", new_value)
-                await session.commit()
-            logger.info("Watchlist updated added=%s new_list=%s", added, new_value)
-        except Exception:
-            logger.exception("Failed to update allowedSymbols with discovery results")
+            # Normal tarama zamanlayıcısını da tazele — aynı tick içinde
+            # sembol ikinci kez değerlendirilmesin.
+            self._last_scan_by_symbol[symbol] = now
+            response = result.response
+            logger.info(
+                "Portfolio decision symbol=%s action=%s confidence=%s allowOrder=%s",
+                symbol,
+                response.action.value,
+                response.confidence_score,
+                response.allow_order,
+            )
+            await self._maybe_send_order(result)
 
     # ── Order path (Phase 2) ───────────────────────────────────────────────
 

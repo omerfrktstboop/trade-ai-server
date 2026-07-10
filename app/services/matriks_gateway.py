@@ -156,6 +156,65 @@ class MatriksGatewayClient:
             "/movers", params={"limit": str(max(1, min(50, limit)))}
         )
 
+    # ── Genişletilmiş read-only veri yüzeyi (gateway data surface) ──────────
+    # Aşağıdaki metodlar Matriks'in belgelenmiş veri-döndüren API'sini birebir
+    # sarar. Hiçbiri şu an evaluator/scanner tarafından kullanılmıyor; ileride
+    # gerektiğinde hazır dursun diye eklendi (read-only, yan etkisiz).
+
+    async def get_market_data(self, symbol: str, field: str = "Last") -> dict[str, Any]:
+        """GET /marketdata — tek bir SymbolUpdateField değeri (Last, Bid, Ask, ...)."""
+        return await self._get(
+            "/marketdata",
+            params={"symbol": symbol.strip().upper(), "field": field.strip()},
+        )
+
+    async def get_market_data_all(self, symbol: str) -> dict[str, Any]:
+        """GET /marketdata/all — tüm SymbolUpdateField değerlerini tek seferde."""
+        return await self._get(
+            "/marketdata/all", params={"symbol": symbol.strip().upper()}
+        )
+
+    async def get_symbol_info(self, symbol: str) -> dict[str, Any]:
+        """GET /symbol — sembol tanımı (SymbolDef) + detay + id."""
+        return await self._get("/symbol", params={"symbol": symbol.strip().upper()})
+
+    async def get_session_times(self, symbol: str) -> dict[str, Any]:
+        """GET /session — sembolün seans saatleri."""
+        return await self._get("/session", params={"symbol": symbol.strip().upper()})
+
+    async def get_price_step(self, symbol: str, price: float) -> dict[str, Any]:
+        """GET /pricestep — BIST/VIOP fiyat adımı + yuvarlanmış fiyat."""
+        return await self._get(
+            "/pricestep",
+            params={"symbol": symbol.strip().upper(), "price": str(price)},
+        )
+
+    async def get_bars(self, symbol: str, count: int = 50) -> dict[str, Any]:
+        """GET /bars — güncel OHLC bar + tutulan kapanış geçmişi serisi."""
+        return await self._get(
+            "/bars",
+            params={
+                "symbol": symbol.strip().upper(),
+                "count": str(max(1, min(500, count))),
+            },
+        )
+
+    async def get_account(self) -> dict[str, Any]:
+        """GET /account — trade user / hesap bilgisi (bakiye, limit, overall)."""
+        return await self._get("/account")
+
+    async def get_real_positions(self) -> dict[str, Any]:
+        """GET /realpositions — borsadaki gerçek pozisyonlar (sembol anahtarlı)."""
+        return await self._get("/realpositions")
+
+    async def get_overall(self) -> dict[str, Any]:
+        """GET /overall — hesap/piyasa genel toplam değeri."""
+        return await self._get("/overall")
+
+    async def get_method_catalog(self) -> dict[str, Any]:
+        """GET /capabilities/methods — gateway'in sunduğu tüm endpoint kataloğu."""
+        return await self._get("/capabilities/methods")
+
     async def send_order(
         self,
         *,

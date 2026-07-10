@@ -285,3 +285,77 @@ class TestSendOrder:
         # Emirde retry YOK — çift emir riski
         assert calls["count"] == 1
         await client.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Genişletilmiş veri yüzeyi (read-only passthrough client metodları)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestDataSurface:
+    def _recording_client(self, seen: dict):
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["path"] = request.url.path
+            seen["params"] = dict(request.url.params)
+            return httpx.Response(200, json={"ok": True, "available": True})
+
+        return MatriksGatewayClient(
+            base_url="http://fake-gateway",
+            token="x",
+            transport=httpx.MockTransport(handler),
+        )
+
+    async def test_get_market_data_hits_field_endpoint(self):
+        seen: dict = {}
+        client = self._recording_client(seen)
+
+        await client.get_market_data("thyao", "Bid")
+
+        assert seen["path"] == "/marketdata"
+        assert seen["params"] == {"symbol": "THYAO", "field": "Bid"}
+        await client.close()
+
+    async def test_get_market_data_all(self):
+        seen: dict = {}
+        client = self._recording_client(seen)
+        await client.get_market_data_all("akbnk")
+        assert seen["path"] == "/marketdata/all"
+        assert seen["params"]["symbol"] == "AKBNK"
+        await client.close()
+
+    async def test_symbol_session_pricestep_bars(self):
+        seen: dict = {}
+        client = self._recording_client(seen)
+
+        await client.get_symbol_info("thyao")
+        assert seen["path"] == "/symbol"
+        await client.get_session_times("thyao")
+        assert seen["path"] == "/session"
+        await client.get_price_step("thyao", 71.5)
+        assert seen["path"] == "/pricestep"
+        assert seen["params"]["price"] == "71.5"
+        await client.get_bars("thyao", count=10)
+        assert seen["path"] == "/bars"
+        assert seen["params"]["count"] == "10"
+        await client.close()
+
+    async def test_account_realpositions_overall_catalog(self):
+        seen: dict = {}
+        client = self._recording_client(seen)
+
+        await client.get_account()
+        assert seen["path"] == "/account"
+        await client.get_real_positions()
+        assert seen["path"] == "/realpositions"
+        await client.get_overall()
+        assert seen["path"] == "/overall"
+        await client.get_method_catalog()
+        assert seen["path"] == "/capabilities/methods"
+        await client.close()
+
+    async def test_bars_count_clamped(self):
+        seen: dict = {}
+        client = self._recording_client(seen)
+        await client.get_bars("thyao", count=9999)
+        assert seen["params"]["count"] == "500"
+        await client.close()

@@ -527,6 +527,70 @@ namespace Matriks.Lean.Algotrader
                 return;
             }
 
+            // ── Genişletilmiş read-only veri yüzeyi (data surface) ──────────
+            // Matriks AlgoTrader'ın belgelenmiş veri-döndüren metodlarının
+            // her biri için ince bir HTTP sarmalayıcı. Hepsi read-only,
+            // hepsi fail-soft: metod patlarsa {ok:true, available:false} döner.
+            if (request.Method == "GET" && request.Path == "/marketdata")
+            {
+                await HandleMarketDataFieldAsync(stream, request);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/marketdata/all")
+            {
+                await HandleMarketDataAllAsync(stream, request);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/symbol")
+            {
+                await HandleSymbolInfoAsync(stream, request);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/session")
+            {
+                await HandleSessionTimesAsync(stream, request);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/pricestep")
+            {
+                await HandlePriceStepAsync(stream, request);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/bars")
+            {
+                await HandleBarsAsync(stream, request);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/account")
+            {
+                await HandleAccountAsync(stream);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/realpositions")
+            {
+                await HandleRealPositionsAsync(stream);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/overall")
+            {
+                await HandleOverallAsync(stream);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/capabilities/methods")
+            {
+                await HandleMethodCatalogAsync(stream);
+                return;
+            }
+
             if (request.Method == "POST" && request.Path == "/config/reload")
             {
                 SafeDebug("Server config reload requested");
@@ -965,6 +1029,375 @@ namespace Matriks.Lean.Algotrader
             catch (Exception ex)
             {
                 await WriteJsonAsync(stream, 200, new { ok = true, available = false, symbol = symbol, error = ex.Message, requiresLicense = "AKDE/AKD or VAKD" });
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // Genişletilmiş read-only veri yüzeyi
+        // Her handler fail-soft: Matriks metodu patlarsa 200 + available:false.
+        // ══════════════════════════════════════════════════════════════════
+
+        // Tek bir SymbolUpdateField değerini döndürür: /marketdata?symbol=X&field=Last
+        private async Task HandleMarketDataFieldAsync(NetworkStream stream, HttpRequest request)
+        {
+            string symbol = NormalizeSymbol(request.GetQueryValue("symbol"));
+            string fieldName = (request.GetQueryValue("field") ?? "Last").Trim();
+            if (!IsAllowedSymbol(symbol))
+            {
+                await WriteJsonAsync(stream, 400, new { ok = false, error = "symbol not allowed", symbol = symbol });
+                return;
+            }
+            SymbolUpdateField field;
+            if (!Enum.TryParse<SymbolUpdateField>(fieldName, true, out field))
+            {
+                await WriteJsonAsync(stream, 400, new
+                {
+                    ok = false,
+                    error = "unknown field",
+                    field = fieldName,
+                    availableFields = Enum.GetNames(typeof(SymbolUpdateField))
+                });
+                return;
+            }
+            try
+            {
+                decimal value = GetMarketData(symbol, field);
+                await WriteJsonAsync(stream, 200, new
+                {
+                    ok = true, available = true, symbol = symbol,
+                    field = field.ToString(), value = ToDouble(value)
+                });
+            }
+            catch (Exception ex)
+            {
+                await WriteJsonAsync(stream, 200, new { ok = true, available = false, symbol = symbol, field = fieldName, error = ex.Message });
+            }
+        }
+
+        // Tüm SymbolUpdateField değerlerini tek seferde döker: /marketdata/all?symbol=X
+        private async Task HandleMarketDataAllAsync(NetworkStream stream, HttpRequest request)
+        {
+            string symbol = NormalizeSymbol(request.GetQueryValue("symbol"));
+            if (!IsAllowedSymbol(symbol))
+            {
+                await WriteJsonAsync(stream, 400, new { ok = false, error = "symbol not allowed", symbol = symbol });
+                return;
+            }
+            var fields = new Dictionary<string, object>();
+            foreach (SymbolUpdateField field in Enum.GetValues(typeof(SymbolUpdateField)))
+            {
+                try
+                {
+                    fields[field.ToString()] = ToDouble(GetMarketData(symbol, field));
+                }
+                catch
+                {
+                    fields[field.ToString()] = null;
+                }
+            }
+            await WriteJsonAsync(stream, 200, new { ok = true, available = true, symbol = symbol, fields = fields });
+        }
+
+        // Sembol tanımı + detay + id: /symbol?symbol=X
+        private async Task HandleSymbolInfoAsync(NetworkStream stream, HttpRequest request)
+        {
+            string symbol = NormalizeSymbol(request.GetQueryValue("symbol"));
+            if (string.IsNullOrWhiteSpace(symbol))
+            {
+                await WriteJsonAsync(stream, 400, new { ok = false, error = "symbol required" });
+                return;
+            }
+            var result = new Dictionary<string, object> { { "symbol", symbol } };
+            SafeInvoke(result, "symbolId", () => GetSymbolId(symbol));
+            SafeInvoke(result, "def", () => ReflectToDict(GetSymbolDef(symbol)));
+            SafeInvoke(result, "detail", () => ReflectToDict(GetSymbolDetail(symbol)));
+            await WriteJsonAsync(stream, 200, new { ok = true, available = true, symbol = symbol, info = result });
+        }
+
+        // Seans saatleri: /session?symbol=X
+        private async Task HandleSessionTimesAsync(NetworkStream stream, HttpRequest request)
+        {
+            string symbol = NormalizeSymbol(request.GetQueryValue("symbol"));
+            if (string.IsNullOrWhiteSpace(symbol))
+            {
+                await WriteJsonAsync(stream, 400, new { ok = false, error = "symbol required" });
+                return;
+            }
+            try
+            {
+                object sessions = GetSessionTimes(symbol);
+                await WriteJsonAsync(stream, 200, new { ok = true, available = true, symbol = symbol, sessions = ReflectAny(sessions) });
+            }
+            catch (Exception ex)
+            {
+                await WriteJsonAsync(stream, 200, new { ok = true, available = false, symbol = symbol, error = ex.Message });
+            }
+        }
+
+        // Fiyat adımı + yuvarlama: /pricestep?symbol=X&price=P
+        private async Task HandlePriceStepAsync(NetworkStream stream, HttpRequest request)
+        {
+            string symbol = NormalizeSymbol(request.GetQueryValue("symbol"));
+            decimal price;
+            decimal.TryParse(request.GetQueryValue("price"), System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out price);
+            if (string.IsNullOrWhiteSpace(symbol))
+            {
+                await WriteJsonAsync(stream, 400, new { ok = false, error = "symbol required" });
+                return;
+            }
+            var result = new Dictionary<string, object> { { "symbol", symbol }, { "price", ToDouble(price) } };
+            SafeInvoke(result, "priceStep", () => ToDouble(GetPriceStepForBistViop(symbol, price)));
+            SafeInvoke(result, "rounded", () => ToDouble(RoundPriceStepBistViop(symbol, price)));
+            await WriteJsonAsync(stream, 200, new { ok = true, available = true, result = result });
+        }
+
+        // OHLC bar geçmişi (güncel bar + tuttuğumuz kapanış serisi): /bars?symbol=X&count=N
+        private async Task HandleBarsAsync(NetworkStream stream, HttpRequest request)
+        {
+            string symbol = NormalizeSymbol(request.GetQueryValue("symbol"));
+            if (!IsAllowedSymbol(symbol))
+            {
+                await WriteJsonAsync(stream, 400, new { ok = false, error = "symbol not allowed", symbol = symbol });
+                return;
+            }
+            int count = 50;
+            int parsed;
+            if (int.TryParse(request.GetQueryValue("count"), out parsed))
+                count = Math.Max(1, Math.Min(500, parsed));
+
+            // Güncel bar, OnDataUpdate'te doldurduğumuz OHLCV cache'inden okunur
+            // (GetBarData() return tipine bağımlı değil — compile-safe).
+            object currentBar = null;
+            OhlcvSnapshot ohlc;
+            if (_lastOhlcvBySymbol.TryGetValue(symbol, out ohlc))
+            {
+                currentBar = new
+                {
+                    open = ToDouble(ohlc.Open),
+                    high = ToDouble(ohlc.High),
+                    low = ToDouble(ohlc.Low),
+                    close = ToDouble(ohlc.Close),
+                    volume = ToDouble(ohlc.Volume),
+                    reliable = ohlc.Reliable
+                };
+            }
+
+            List<double> closeHistory = new List<double>();
+            List<decimal> history;
+            if (_closeHistoryBySymbol.TryGetValue(symbol, out history) && history != null)
+            {
+                lock (_closeLock)
+                {
+                    int start = Math.Max(0, history.Count - count);
+                    for (int i = start; i < history.Count; i++)
+                        closeHistory.Add(ToDouble(history[i]));
+                }
+            }
+
+            await WriteJsonAsync(stream, 200, new
+            {
+                ok = true,
+                available = currentBar != null || closeHistory.Count > 0,
+                symbol = symbol,
+                period = IndicatorPeriod.ToString(),
+                currentBar = currentBar,
+                closeHistory = closeHistory
+            });
+        }
+
+        // Hesap / kullanıcı bilgisi: /account
+        private async Task HandleAccountAsync(NetworkStream stream)
+        {
+            try
+            {
+                object user = GetTradeUser();
+                await WriteJsonAsync(stream, 200, new { ok = true, available = user != null, account = ReflectToDict(user) });
+            }
+            catch (Exception ex)
+            {
+                await WriteJsonAsync(stream, 200, new { ok = true, available = false, error = ex.Message });
+            }
+        }
+
+        // Gerçek (borsa) pozisyon snapshot'ı: /realpositions
+        private async Task HandleRealPositionsAsync(NetworkStream stream)
+        {
+            try
+            {
+                object positions = GetRealPositions();
+                await WriteJsonAsync(stream, 200, new { ok = true, available = true, positions = ReflectAny(positions) });
+            }
+            catch (Exception ex)
+            {
+                await WriteJsonAsync(stream, 200, new { ok = true, available = false, error = ex.Message });
+            }
+        }
+
+        // Piyasa geneli özet: /overall
+        private async Task HandleOverallAsync(NetworkStream stream)
+        {
+            try
+            {
+                object overall = GetOverall();
+                await WriteJsonAsync(stream, 200, new { ok = true, available = true, overall = ReflectAny(overall) });
+            }
+            catch (Exception ex)
+            {
+                await WriteJsonAsync(stream, 200, new { ok = true, available = false, error = ex.Message });
+            }
+        }
+
+        // Bu gateway'in sunduğu tüm endpoint'lerin kataloğu: /capabilities/methods
+        private async Task HandleMethodCatalogAsync(NetworkStream stream)
+        {
+            await WriteJsonAsync(stream, 200, new
+            {
+                ok = true,
+                endpoints = new object[]
+                {
+                    new { path = "/health", desc = "Gateway + veri + pozisyon durumu" },
+                    new { path = "/snapshot?symbol=X", desc = "OHLCV + derinlik + teknik feature bloğu" },
+                    new { path = "/positions", desc = "Bot pozisyon snapshot'ı" },
+                    new { path = "/depth?symbol=X&levels=25", desc = "25 kademe derinlik + imbalance" },
+                    new { path = "/indicators?symbol=X", desc = "RSI/EMA/MACD anlık değerler" },
+                    new { path = "/news?symbol=X&limit=50", desc = "Matriks haber cache" },
+                    new { path = "/news/details?symbol=X", desc = "Detaylı haber + abonelikler" },
+                    new { path = "/institutions?symbol=X", desc = "AKD net alıcı/satıcı sıralaması" },
+                    new { path = "/mkk", desc = "MKK/Takas yetenek durumu" },
+                    new { path = "/movers?limit=20", desc = "Günlük yükselen/düşen/hacimliler" },
+                    new { path = "/marketdata?symbol=X&field=Last", desc = "Tek SymbolUpdateField değeri" },
+                    new { path = "/marketdata/all?symbol=X", desc = "Tüm SymbolUpdateField değerleri" },
+                    new { path = "/symbol?symbol=X", desc = "Sembol tanımı + detay + id" },
+                    new { path = "/session?symbol=X", desc = "Seans saatleri" },
+                    new { path = "/pricestep?symbol=X&price=P", desc = "Fiyat adımı + yuvarlama" },
+                    new { path = "/bars?symbol=X&count=50", desc = "Güncel bar + kapanış geçmişi" },
+                    new { path = "/account", desc = "Trade user / hesap bilgisi" },
+                    new { path = "/realpositions", desc = "Gerçek borsa pozisyonları" },
+                    new { path = "/overall", desc = "Piyasa geneli özet" },
+                    new { path = "/order (POST)", desc = "LIMIT emir gönderimi" },
+                    new { path = "/config/reload (POST)", desc = "Sunucu config'ini yeniden çek" }
+                }
+            });
+        }
+
+        // ── Reflection yardımcıları (fail-soft, sığ) ────────────────────────
+
+        // Bir objeyi düz bir sözlüğe indirger: public property'ler, per-property
+        // try/catch. Nested objeler ToString()'e düşer — döngüsel referans /
+        // dev graf patlaması olmaz. null → boş sözlük.
+        private static Dictionary<string, object> ReflectToDict(object obj)
+        {
+            var result = new Dictionary<string, object>();
+            if (obj == null)
+                return result;
+            try
+            {
+                foreach (var prop in obj.GetType().GetProperties(
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                {
+                    if (prop.GetIndexParameters().Length > 0)
+                        continue; // indexer'ları atla
+                    try
+                    {
+                        object value = prop.GetValue(obj, null);
+                        result[prop.Name] = SimplifyValue(value);
+                    }
+                    catch
+                    {
+                        result[prop.Name] = null;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return result;
+        }
+
+        // Koleksiyon → eleman başına ReflectToDict; tekil obje → ReflectToDict;
+        // primitif → aynen. Serileştirmenin asla patlamamasını garanti eder.
+        private static object ReflectAny(object obj)
+        {
+            if (obj == null)
+                return null;
+            if (IsSimple(obj.GetType()))
+                return obj;
+            // Sözlük (ör. GetRealPositions → sembol anahtarlı) → key/value map.
+            var dict = obj as System.Collections.IDictionary;
+            if (dict != null)
+            {
+                var map = new Dictionary<string, object>();
+                try
+                {
+                    int i = 0;
+                    foreach (System.Collections.DictionaryEntry entry in dict)
+                    {
+                        if (i++ >= 200) break;
+                        string key = entry.Key == null ? "null" : entry.Key.ToString();
+                        object v = entry.Value;
+                        map[key] = (v != null && IsSimple(v.GetType())) ? v : ReflectToDict(v);
+                    }
+                }
+                catch
+                {
+                }
+                return map;
+            }
+            var enumerable = obj as System.Collections.IEnumerable;
+            if (enumerable != null && !(obj is string))
+            {
+                var list = new List<object>();
+                try
+                {
+                    int i = 0;
+                    foreach (var item in enumerable)
+                    {
+                        if (i++ >= 200) break; // güvenlik sınırı
+                        list.Add(IsSimple(item == null ? typeof(object) : item.GetType())
+                            ? item : ReflectToDict(item));
+                    }
+                }
+                catch
+                {
+                }
+                return list;
+            }
+            return ReflectToDict(obj);
+        }
+
+        private static object SimplifyValue(object value)
+        {
+            if (value == null)
+                return null;
+            return IsSimple(value.GetType()) ? value : value.ToString();
+        }
+
+        private static bool IsSimple(Type type)
+        {
+            if (type == null)
+                return false;
+            return type.IsPrimitive
+                || type.IsEnum
+                || type == typeof(string)
+                || type == typeof(decimal)
+                || type == typeof(DateTime)
+                || type == typeof(DateTimeOffset)
+                || type == typeof(TimeSpan)
+                || type == typeof(Guid);
+        }
+
+        // Bir üretici delegesini güvenle çağırıp sonucu sözlüğe yazar.
+        private void SafeInvoke(Dictionary<string, object> target, string key, Func<object> producer)
+        {
+            try
+            {
+                target[key] = producer();
+            }
+            catch (Exception ex)
+            {
+                target[key] = null;
+                SafeDebug("SafeInvoke failed key=" + key + " err=" + ex.Message);
             }
         }
 

@@ -593,6 +593,7 @@ async def admin_trade_profiles_create(request: Request) -> Any:
     except (ValueError, TypeError) as exc:
         return await _trade_profiles_page(request, identity, error=str(exc))
 
+    await _notify_gateway_config_reload()
     return RedirectResponse("/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -1212,6 +1213,7 @@ async def admin_api_create_trade_profile(
             active = await get_active_profile(session)
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _notify_gateway_config_reload()
     return _trade_profile_dict(profile, active.code)
 
 
@@ -1245,6 +1247,7 @@ async def admin_api_update_trade_profile(
             active = await get_active_profile(session)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _notify_gateway_config_reload()
     return _trade_profile_dict(profile, active.code)
 
 
@@ -1282,6 +1285,7 @@ async def admin_api_clone_trade_profile(
             active = await get_active_profile(session)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _notify_gateway_config_reload()
     return _trade_profile_dict(clone, active.code)
 
 
@@ -1294,6 +1298,7 @@ async def admin_api_disable_trade_profile(request: Request, code: str) -> dict[s
             active = await get_active_profile(session)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _notify_gateway_config_reload()
     return _trade_profile_dict(profile, active.code)
 
 
@@ -1305,6 +1310,7 @@ async def admin_api_delete_trade_profile(request: Request, code: str) -> dict[st
             await delete_profile(session, code, changed_by=identity)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _notify_gateway_config_reload()
     return {"status": "ok", "code": code}
 
 

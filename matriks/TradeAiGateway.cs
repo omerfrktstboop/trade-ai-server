@@ -86,6 +86,7 @@ namespace Matriks.Lean.Algotrader
         private string RuntimeMode = "PAPER";
         private string ActiveProfileCode = "UNAVAILABLE";
         private DateTime _lastConfigFetchUtc = DateTime.MinValue;
+        private string _lastAppliedConfigSignature = string.Empty;
 
         private SymbolPeriod IndicatorPeriod = SymbolPeriod.Min5;
 
@@ -567,13 +568,33 @@ namespace Matriks.Lean.Algotrader
                     ActiveProfileCode = cfg.Value<string>("profileCode") ?? "UNKNOWN";
                     _lastConfigFetchUtc = DateTime.UtcNow;
 
-                    SafeDebug("Server config applied profile=" + ActiveProfileCode
-                        + " mode=" + RuntimeMode
-                        + " symbols=" + string.Join(",", AllowedSymbols)
-                        + " enableDemoOrders=" + EnableDemoOrders
-                        + " enableRealOrders=" + EnableRealOrders
-                        + " maxOrderValueTl=" + MaxOrderValueTl
-                        + " maxQtyPerOrder=" + MaxQtyPerOrder);
+                    string configSignature = string.Join("|", new[]
+                    {
+                        ActiveProfileCode,
+                        RuntimeMode,
+                        string.Join(",", AllowedSymbols.OrderBy(x => x, StringComparer.Ordinal)),
+                        EnableDemoOrders.ToString(),
+                        EnableRealOrders.ToString(),
+                        RequireDemoAccount.ToString(),
+                        DemoAccountConfirmed.ToString(),
+                        MaxOrderValueTl.ToString(),
+                        MaxQtyPerOrder.ToString(),
+                        MaxOrdersPerDay.ToString(),
+                        MaxOrdersPerSymbolPerDay.ToString(),
+                        OrderTimeInForce,
+                        IndicatorPeriod.ToString(),
+                    });
+                    if (!string.Equals(_lastAppliedConfigSignature, configSignature, StringComparison.Ordinal))
+                    {
+                        _lastAppliedConfigSignature = configSignature;
+                        SafeDebug("Server config applied profile=" + ActiveProfileCode
+                            + " mode=" + RuntimeMode
+                            + " symbols=" + string.Join(",", AllowedSymbols)
+                            + " enableDemoOrders=" + EnableDemoOrders
+                            + " enableRealOrders=" + EnableRealOrders
+                            + " maxOrderValueTl=" + MaxOrderValueTl
+                            + " maxQtyPerOrder=" + MaxQtyPerOrder);
+                    }
                     return true;
                 }
             }

@@ -496,7 +496,7 @@ namespace Matriks.Lean.Algotrader
 
             if (request.Method == "POST" && request.Path == "/config/reload")
             {
-                bool loaded = await FetchAndApplyServerConfigAsync();
+                bool loaded = await FetchAndApplyServerConfigAsync(true);
                 await WriteJsonAsync(stream, loaded ? 200 : 503, new
                 {
                     ok = loaded,
@@ -517,10 +517,12 @@ namespace Matriks.Lean.Algotrader
 
         // ── Endpoint handlers ────────────────────────────────────────
 
-        private async Task<bool> FetchAndApplyServerConfigAsync()
+        private async Task<bool> FetchAndApplyServerConfigAsync(bool waitForLock = false)
         {
-            if (!await _configFetchLock.WaitAsync(0))
-                return true;
+            if (waitForLock)
+                await _configFetchLock.WaitAsync();
+            else if (!await _configFetchLock.WaitAsync(0))
+                return false;
             try
             {
                 using (var result = await _http.GetAsync("api/gateway/config"))

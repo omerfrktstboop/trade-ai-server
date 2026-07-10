@@ -496,6 +496,8 @@ async def admin_add_to_watchlist(request: Request) -> RedirectResponse:
                 reason=f"Added {symbol} to watchlist from Positions page",
             )
 
+        await _notify_gateway_config_reload()
+
     return RedirectResponse("/admin/positions", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -615,6 +617,7 @@ async def admin_trade_profiles_update(request: Request, code: str) -> Any:
     except ValueError as exc:
         return await _trade_profiles_page(request, identity, error=str(exc))
 
+    await _notify_gateway_config_reload()
     return RedirectResponse("/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER)
 
 

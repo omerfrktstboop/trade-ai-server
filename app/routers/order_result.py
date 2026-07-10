@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from app.core.auth import verify_token
 from app.db.session import async_session_factory
 from app.models.db import OrderLog
+from app.services.notifications import notify_order_event
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,18 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
             "Failed to persist order result request_id=%s symbol=%s",
             body.request_id,
             body.symbol,
+        )
+
+    if body.status.upper() in {"FILLED", "REJECTED", "CANCELED", "ERROR"}:
+        await notify_order_event(
+            body.status,
+            symbol=body.symbol,
+            side=body.action,
+            qty=body.qty,
+            price=body.price,
+            order_id=body.order_id,
+            reason=body.matriks_message,
+            request_id=body.request_id,
         )
 
     return OrderResultResponse(status="ok")

@@ -46,6 +46,7 @@ from app.services.matriks_gateway import (
     MatriksGatewayClient,
     gateway_client,
 )
+from app.services.notifications import notify_gateway_event, notify_order_event, notify_risk_block
 from app.services.position_sync import sync_positions_from_gateway
 from app.services.signal_override import list_pending_override_symbols
 from app.services.trade_profile import get_active_profile
@@ -163,6 +164,7 @@ class SymbolScanner:
 
         if kill_switch:
             self._warn_throttled("killswitch", "Kill switch enabled; skipping scan cycle")
+            await notify_risk_block("Kill switch açık; scanner turu atlandı")
             return []
 
         if not runtime_cfg.can_trade_now():
@@ -180,12 +182,14 @@ class SymbolScanner:
             self._warn_throttled(
                 "gateway", "Matriks gateway unavailable; skipping scan cycle"
             )
+            await notify_gateway_event("ulaşılamıyor")
             return []
         if not gateway_health.get("positionsLoaded"):
             self._warn_throttled(
                 "positions",
                 "Matriks positions are not loaded; skipping scan cycle",
             )
+            await notify_gateway_event("pozisyonlar yüklenmedi")
             return []
 
         # ── Pozisyonları gateway'den tazele ────────────────────────────────
@@ -229,6 +233,7 @@ class SymbolScanner:
                 self._warn_throttled(
                     "gateway", "Gateway became unavailable mid-cycle; stopping this tick"
                 )
+                await notify_gateway_event("tur sırasında ulaşılamıyor")
                 gateway_down_mid_cycle = True
                 break
             except GatewayError as exc:
@@ -442,6 +447,11 @@ class SymbolScanner:
                 max(1, int(remaining.total_seconds())),
                 response.request_id,
             )
+            await notify_order_event(
+                "COOLDOWN", symbol=response.symbol, side=response.action.value,
+                qty=response.qty, price=response.price, request_id=response.request_id,
+                reason="Emir cooldown süresinde",
+            )
             return
 
         try:
@@ -467,6 +477,11 @@ class SymbolScanner:
                 response.request_id,
                 reason,
             )
+            await notify_order_event(
+                status, symbol=response.symbol, side=response.action.value,
+                qty=response.qty, price=response.price, request_id=response.request_id,
+                reason=reason,
+            )
         except (GatewayUnavailable, GatewayError) as exc:
             status = "ERROR"
             reason = str(exc)
@@ -475,6 +490,11 @@ class SymbolScanner:
                 response.symbol,
                 response.request_id,
                 exc,
+            )
+            await notify_order_event(
+                status, symbol=response.symbol, side=response.action.value,
+                qty=response.qty, price=response.price, request_id=response.request_id,
+                reason=reason,
             )
 
         await self._persist_order_outcome(response, status, reason)

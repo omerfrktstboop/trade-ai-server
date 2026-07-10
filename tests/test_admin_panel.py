@@ -363,6 +363,24 @@ class TestAdminDashboard:
         assert status["lastTickAt"] is None
         assert status["lastEvaluatedSymbols"] == []
 
+    def test_notification_test_endpoint_is_disabled_without_config(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        from app.routers import admin
+
+        old_token = admin.notification_service._token
+        old_chat_id = admin.notification_service._chat_id
+        admin.notification_service._token = ""
+        admin.notification_service._chat_id = ""
+        try:
+            response = client.post("/api/admin/notifications/test", headers=auth_headers)
+        finally:
+            admin.notification_service._token = old_token
+            admin.notification_service._chat_id = old_chat_id
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "disabled"}
+
 
 class TestLogsListBugFixes:
     """Regression coverage for two field-name mismatches that made the

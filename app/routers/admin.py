@@ -45,6 +45,7 @@ from app.services.fundamentals_service import (
     upsert_fundamental,
 )
 from app.services.matriks_gateway import GatewayError, GatewayUnavailable, gateway_client
+from app.services.notifications import notification_service
 from app.services.scanner import scanner
 from app.services.signal_override import SELL_ALL_SENTINEL_QTY, create_override
 from app.services.trade_profile import (
@@ -1101,6 +1102,16 @@ async def admin_api_bot_status(request: Request) -> dict[str, Any]:
     return await _bot_status()
 
 
+@admin_api_router.post("/notifications/test")
+async def admin_api_notification_test(request: Request) -> dict[str, str]:
+    """Send a best-effort operational test without exposing Telegram secrets."""
+    await require_admin(request)
+    if not notification_service.enabled:
+        return {"status": "disabled"}
+    await notification_service.send("info", "Trade AI test bildirimi", event_key="admin:test")
+    return {"status": "ok"}
+
+
 @admin_api_router.get("/config")
 async def admin_api_config(request: Request) -> list[dict[str, Any]]:
     await require_admin(request)
@@ -1129,6 +1140,13 @@ async def admin_api_update_config(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _notify_gateway_config_reload()
+    if key in {"killSwitchEnabled", "tradingMode"} or item.requires_confirmation:
+        await notification_service.send(
+            "warning",
+            "Yönetim yapılandırması değişti",
+            {"Anahtar": key, "Değer": item.display_value, "Kullanıcı": identity},
+            event_key=f"admin-config:{key}:{item.display_value}",
+        )
     return _config_dict(item)
 
 
@@ -1151,6 +1169,12 @@ async def admin_api_emergency(
             )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await notification_service.send(
+        "warning",
+        "Acil işlem uygulandı",
+        {"İşlem": action, "Kullanıcı": identity},
+        event_key=f"admin-emergency:{action}",
+    )
     return {"status": "ok", "action": action}
 
 

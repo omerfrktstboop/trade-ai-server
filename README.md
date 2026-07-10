@@ -279,6 +279,138 @@ Verify the gateway end-to-end with:
 python scripts/gateway_smoke.py
 ```
 
+## Windows Server Deployment
+
+The production target is a single Windows machine that already runs
+Matriks IQ. Everything runs natively — **no Docker** (Docker Desktop
+doesn't support Windows Server 2019 without WSL2, and there's no benefit
+to it here: server, database, and gateway are all local processes talking
+over loopback).
+
+### 1. Prerequisites
+
+- Matriks IQ installed, licensed, and able to log in unattended (set up
+  autologon so the server survives a reboot without a human present).
+- [Python 3.11 or 3.12](https://www.python.org/downloads/) (not 3.13+ —
+  some pinned dependencies don't ship wheels for it yet). Check
+  "Add python.exe to PATH" during install.
+- [PostgreSQL](https://www.postgresql.org/download/windows/) — native
+  Windows installer, not Docker. Note the password you set for the
+  `postgres` superuser.
+- [Git for Windows](https://git-scm.com/download/win).
+- [NSSM](https://nssm.cc/download) (or use Task Scheduler) to run uvicorn
+  as a Windows service so it starts on boot and survives RDP disconnects.
+
+### 2. Clone and install
+
+```powershell
+git clone https://github.com/<you>/trade-ai-server.git C:\trade-ai-server
+cd C:\trade-ai-server
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 3. Create the database
+
+In `psql` (or pgAdmin):
+
+```sql
+CREATE USER trade_ai WITH PASSWORD 'change-me';
+CREATE DATABASE trade_ai OWNER trade_ai;
+```
+
+### 4. Configure `.env`
+
+```powershell
+copy .env.example .env
+notepad .env
+```
+
+Key values for a production install:
+
+```ini
+APP_ENV=production
+API_TOKEN=<long random string>
+ADMIN_PASSWORD=<strong password>
+AI_PROVIDER=deepseek
+DEEPSEEK_API_KEY=<your key>
+DATABASE_URL=postgresql+asyncpg://trade_ai:change-me@localhost:5432/trade_ai
+
+MATRIKS_GATEWAY_URL=http://127.0.0.1:8787
+MATRIKS_GATEWAY_TOKEN=<shared secret — must match the gateway's ApiToken>
+
+SCANNER_ENABLED=true
+SCANNER_ALLOW_ORDERS=false   # keep false until the parallel-run checklist below is done
+```
+
+`APP_ENV=production` makes the server refuse to start with a mock AI
+provider, a SQLite database, or default tokens — see
+[Environment Variables](#environment-variables) above for the full list
+of checks.
+
+### 5. Install the Matriks gateway
+
+1. Open `matriks/TradeAiGateway.cs` and copy it into a new algo in Matriks
+   IQ's algo editor.
+2. Set its parameters:
+
+   | Parameter | Value | Notes |
+   |---|---|---|
+   | `Port` | `8787` | must match `MATRIKS_GATEWAY_URL` |
+   | `ApiToken` | same as `MATRIKS_GATEWAY_TOKEN` in `.env` | shared secret |
+   | `SymbolsCsv` | e.g. `THYAO,AKBNK,SISE,KCHOL,TUPRS,ANELE` | tradeable universe |
+   | `LockedLongTermCsv` | e.g. `THYAO:100,ASELS:50` | lots that can never be sold |
+   | `ServerBaseUrl` | `http://127.0.0.1:8000` | where this FastAPI server listens |
+   | `ServerApiToken` | same as `API_TOKEN` in `.env` | used for the `/api/order-result` report |
+   | `EnableDemoOrders` / `EnableRealOrders` | `false` / `false` | flip on only when you're ready (see checklist) |
+   | `RequireDemoAccount` | `true` | extra guard before any real-mode order |
+   | `DemoAccountConfirmed` | `false` | manual confirmation flag |
+   | `MaxOrderValueTl`, `MaxQtyPerOrder`, `MaxOrdersPerDay`, `MaxOrdersPerSymbolPerDay` | conservative values | hard caps the server cannot override |
+   | `OrderTimeInForce` | `Day` | or `GTC` |
+
+3. Start the algo. It binds to `127.0.0.1:8787` only — nothing is exposed
+   to the network.
+4. Verify: `python scripts/gateway_smoke.py` from the repo root, on the
+   same machine.
+
+### 6. Run the server as a Windows service
+
+Using NSSM:
+
+```powershell
+nssm install TradeAiServer "C:\trade-ai-server\.venv\Scripts\python.exe" ^
+  "-m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+nssm set TradeAiServer AppDirectory "C:\trade-ai-server"
+nssm start TradeAiServer
+```
+
+Confirm it's up: `curl http://localhost:8000/api/health`.
+
+### 7. Remote access to the admin panel
+
+Port 8000 is **not** exposed to the internet — no port forwarding, no
+DDNS. Install [Tailscale](https://tailscale.com/) on the server and on
+whatever device you check the panel from; they join the same private
+network with no open ports. Then browse to
+`http://<tailscale-machine-name>:8000/admin`. The gateway's port 8787
+stays loopback-only regardless — Tailscale never sees it.
+
+### 8. Parallel run and cutover
+
+If an older Matriks bot is already trading live, don't cut over blind:
+
+1. Keep the old bot running. Start this stack with `SCANNER_ENABLED=true`,
+   `SCANNER_ALLOW_ORDERS=false` — it will evaluate every scan interval and
+   log decisions to `ai_decisions`/`risk_decisions`, but never place an
+   order.
+2. Compare its decisions against the old bot's for a few days.
+3. Once you trust it, flip `SCANNER_ALLOW_ORDERS=true` and set the admin
+   panel's trading mode to `DEMO_LIVE` — only DEMO_LIVE decisions become
+   orders at this stage; `REAL_LIVE` stays blocked in code until a later,
+   deliberate change.
+4. Only then stop the old bot.
+
 ### Order Result
 
 Matriks IQ bir emri gerçekleştirdiğinde bu endpoint'e sonucu bildirir.

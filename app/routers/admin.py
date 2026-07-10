@@ -564,6 +564,8 @@ async def admin_trade_profiles_create(request: Request) -> Any:
     description = str(form.get("description") or "")
     risk_level = str(form.get("risk_level") or "MEDIUM").strip().upper()
     changes = _parse_profile_form_fields(form)
+    for field in ("name", "description", "risk_level"):
+        changes.pop(field, None)
 
     try:
         async with async_session_factory() as session:

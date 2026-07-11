@@ -28,6 +28,7 @@ from app.models.db import (
     LockedPosition,
     MarketSnapshot,
     ManualApprovalRequest,
+    PositionManagementDecision,
     OrderLog,
     RiskDecision,
     TradeProfile,
@@ -299,6 +300,13 @@ async def admin_approvals(request: Request) -> HTMLResponse:
     async with async_session_factory() as session:
         rows = list((await session.execute(select(ManualApprovalRequest).order_by(ManualApprovalRequest.created_at.desc()))).scalars().all())
     return templates.TemplateResponse(request, "admin/approvals.html", {"identity": identity, "active": "approvals", "rows": rows})
+
+@admin_router.get("/positions/management", response_class=HTMLResponse)
+async def admin_position_management(request: Request) -> HTMLResponse:
+    identity = await require_admin(request)
+    async with async_session_factory() as session:
+        rows = list((await session.execute(select(PositionManagementDecision).order_by(PositionManagementDecision.created_at.desc()).limit(200))).scalars().all())
+    return templates.TemplateResponse(request, "admin/position_management.html", {"identity": identity, "active": "positions", "rows": rows})
 
 @admin_router.post("/approvals/{approval_id}/approve")
 async def admin_approve(request: Request, approval_id: int) -> RedirectResponse:

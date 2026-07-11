@@ -714,6 +714,11 @@ async def evaluate_symbol(
     # ── 8. Log + persist ─────────────────────────────────────────────────
     _log_evaluation(sig_req, response)
     await persist_evaluation(sig_req, payload, raw, response)
+    try:
+        from app.services.position_management import record_position_management
+        await record_position_management(sig_req, raw, response)
+    except Exception:
+        logger.exception("Position management persistence failed symbol=%s", sig_req.symbol)
 
     return EvaluationResult(response=response, mode=sig_req.mode)
 

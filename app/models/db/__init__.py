@@ -15,3 +15,4 @@ from app.models.db.symbol_fundamental import SymbolFundamental  # noqa: F401
 from app.models.db.watchlist_symbol import WatchlistSymbol  # noqa: F401
 from app.models.db.ai_lesson_learned import AiLessonLearned  # noqa: F401
 from app.models.db.manual_approval_request import ManualApprovalRequest  # noqa: F401
+from app.models.db.position_management_decision import PositionManagementDecision  # noqa: F401

@@ -54,6 +54,7 @@ from app.services.scanner import scanner
 from app.services.replay import replay_batch
 from app.services.performance_report import build_performance_report
 from app.services.manual_approvals import approve_request, reject_request
+from app.services.self_check import run_self_check
 from app.services.signal_override import SELL_ALL_SENTINEL_QTY, create_override
 from app.services.trade_profile import (
     EDITABLE_FIELDS,
@@ -307,6 +308,15 @@ async def admin_position_management(request: Request) -> HTMLResponse:
     async with async_session_factory() as session:
         rows = list((await session.execute(select(PositionManagementDecision).order_by(PositionManagementDecision.created_at.desc()).limit(200))).scalars().all())
     return templates.TemplateResponse(request, "admin/position_management.html", {"identity": identity, "active": "positions", "rows": rows})
+
+@admin_router.get("/self-check", response_class=HTMLResponse)
+async def admin_self_check(request: Request) -> HTMLResponse:
+    identity = await require_admin(request)
+    return templates.TemplateResponse(request, "admin/self_check.html", {"identity": identity, "active": "self-check", "result": await run_self_check()})
+
+@admin_router.post("/self-check/run", response_class=HTMLResponse)
+async def admin_self_check_run(request: Request) -> HTMLResponse:
+    return await admin_self_check(request)
 
 @admin_router.post("/approvals/{approval_id}/approve")
 async def admin_approve(request: Request, approval_id: int) -> RedirectResponse:
@@ -1224,6 +1234,12 @@ async def admin_api_bot_status(request: Request) -> dict[str, Any]:
 async def admin_api_performance(request: Request) -> dict[str, Any]:
     await require_admin(request)
     return await build_performance_report(str(request.query_params.get("range") or "7d"), request.query_params.get("symbol"))
+
+@admin_api_router.get("/self-check")
+@admin_api_router.post("/self-check/run")
+async def admin_api_self_check(request: Request) -> dict[str, Any]:
+    await require_admin(request)
+    return await run_self_check()
 
 
 @admin_api_router.post("/notifications/test")

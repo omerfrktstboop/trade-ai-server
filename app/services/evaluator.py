@@ -64,6 +64,7 @@ from app.services.matriks_gateway import (
     gateway_client,
 )
 from app.services.news_service import get_news_context
+from app.services.kap_service import get_kap_context
 from app.services.risk_engine import RiskDecision, RiskEngine
 from app.services.signal_override import consume_override, override_to_raw_decision
 
@@ -114,6 +115,7 @@ def build_payload(
     fund_context: dict[str, Any] | None = None,
     broker_flow_context: dict[str, Any] | None = None,
     fundamentals_context: dict[str, Any] | None = None,
+    kap_context: dict[str, Any] | None = None,
     active_config: RiskConfig | None = None,
 ) -> dict:
     """Convert a SignalRequest into a plain dict for the AI provider.
@@ -162,6 +164,8 @@ def build_payload(
         payload["brokerFlowContext"] = broker_flow_context
     if fundamentals_context:
         payload["fundamentalsContext"] = fundamentals_context
+    if kap_context:
+        payload["kapContext"] = kap_context
     return payload
 
 
@@ -652,6 +656,7 @@ async def evaluate_symbol(
 
     # ── 5. Dış bağlam (haber + akıllı para + admin fundamentals) ─────────
     news_context = await get_news_context([sig_req.symbol])
+    kap_context = await get_kap_context([sig_req.symbol])
     broker_flow_context = await get_broker_flow_context([sig_req.symbol])
     fundamentals_context = await get_fundamentals_context([sig_req.symbol])
 
@@ -660,6 +665,7 @@ async def evaluate_symbol(
         news_context=news_context,
         broker_flow_context=broker_flow_context,
         fundamentals_context=fundamentals_context,
+        kap_context=kap_context,
         active_config=runtime_engine.config,
     )
     payload["agenticSteps"] = steps

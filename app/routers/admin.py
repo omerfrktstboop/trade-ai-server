@@ -24,6 +24,7 @@ from app.db.session import async_session_factory
 from app.models.db import (
     AiDecision,
     BotPosition,
+    KapEvent,
     ConfigAuditLog,
     LockedPosition,
     MarketSnapshot,
@@ -853,6 +854,22 @@ async def _fundamentals_page(
 async def admin_fundamentals(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
     return await _fundamentals_page(request, identity)
+
+
+@admin_router.get("/kap", response_class=HTMLResponse)
+async def admin_kap(request: Request) -> HTMLResponse:
+    identity = await require_admin(request)
+    async with async_session_factory() as session:
+        rows = list((await session.execute(select(KapEvent).order_by(KapEvent.cached_at.desc()).limit(200))).scalars().all())
+    return templates.TemplateResponse(request, "admin/kap.html", {"identity": identity, "active": "kap", "rows": rows, "risk_only": False})
+
+
+@admin_router.get("/kap-risk", response_class=HTMLResponse)
+async def admin_kap_risk(request: Request) -> HTMLResponse:
+    identity = await require_admin(request)
+    async with async_session_factory() as session:
+        rows = list((await session.execute(select(KapEvent).where(KapEvent.risk_level.in_(("HIGH", "BLOCKING"))).order_by(KapEvent.cached_at.desc()).limit(200))).scalars().all())
+    return templates.TemplateResponse(request, "admin/kap.html", {"identity": identity, "active": "kap", "rows": rows, "risk_only": True})
 
 
 @admin_router.post("/fundamentals/{symbol}")

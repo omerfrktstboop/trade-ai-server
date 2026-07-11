@@ -534,6 +534,18 @@ namespace Matriks.Lean.Algotrader
                 return;
             }
 
+            if (request.Method == "GET" && request.Path == "/kap")
+            {
+                await HandleKapAsync(stream, request, false);
+                return;
+            }
+
+            if (request.Method == "GET" && request.Path == "/kap/risk")
+            {
+                await HandleKapAsync(stream, request, true);
+                return;
+            }
+
             if (request.Method == "GET" && request.Path == "/institutions")
             {
                 await HandleInstitutionsAsync(stream, request);
@@ -1197,6 +1209,54 @@ namespace Matriks.Lean.Algotrader
                 news = items,
                 note = "Returns all cached AlgoNewsModel-derived fields plus active Matriks news subscriptions."
             });
+        }
+
+        private async Task HandleKapAsync(NetworkStream stream, HttpRequest request, bool riskOnly)
+        {
+            string symbol = NormalizeSymbol(request.GetQueryValue("symbol"));
+            int limit = 50;
+            int parsed;
+            if (int.TryParse(request.GetQueryValue("limit"), out parsed))
+                limit = Math.Max(1, Math.Min(200, parsed));
+            int lookbackHours = 48;
+            if (int.TryParse(request.GetQueryValue("lookbackHours"), out parsed))
+                lookbackHours = Math.Max(1, Math.Min(720, parsed));
+
+            // This is intentionally a cache fallback. A discovered, licensed
+            // KAP method can be wrapped later without a compile-time dependency.
+            IEnumerable<NewsSnapshot> query = _recentNews.ToArray().Reverse();
+            if (!string.IsNullOrWhiteSpace(symbol))
+                query = query.Where(x => x.Symbols.Any(s => NormalizeSymbol(s) == symbol));
+            query = query.Where(IsKapLikeNews);
+            if (riskOnly)
+                query = query.Where(IsKapRiskLikeNews);
+
+            List<NewsSnapshot> items = query.Take(limit).ToList();
+            await WriteJsonAsync(stream, 200, new
+            {
+                ok = true,
+                available = true,
+                source = "news-details-fallback",
+                symbol = string.IsNullOrWhiteSpace(symbol) ? null : symbol,
+                lookbackHours = lookbackHours,
+                news = items,
+                note = "KAP method discovery is metadata-only; this endpoint uses the live Matriks news cache until a compatible KAP method is confirmed."
+            });
+        }
+
+        private static bool IsKapLikeNews(NewsSnapshot item)
+        {
+            string filterType = item.FilterType ?? "";
+            return filterType.IndexOf("KAP", StringComparison.OrdinalIgnoreCase) >= 0
+                || NewsMatchesKeyword(item, "KAP")
+                || NewsMatchesKeyword(item, "kamuyu aydinlatma")
+                || NewsMatchesKeyword(item, "kamuyu aydınlatma");
+        }
+
+        private static bool IsKapRiskLikeNews(NewsSnapshot item)
+        {
+            string[] keywords = { "tedbir", "brut takas", "brüt takas", "kredili", "aciga satis", "açığa satış", "bedelli", "pay satisi", "pay satışı", "SPK", "dava", "ceza", "iflas", "haciz" };
+            return keywords.Any(keyword => NewsMatchesKeyword(item, keyword));
         }
 
         private async Task HandleInstitutionsAsync(NetworkStream stream, HttpRequest request)

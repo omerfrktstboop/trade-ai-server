@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from app.config import settings
 from app.db.session import async_session_factory
-from app.models.db import NewsCache
+from app.models.db import KapEvent, NewsCache
 from app.models.signal import OrderType, SignalAction, SignalResponse
 
 async def active_news_risk(symbol: str) -> tuple[str, str] | None:
@@ -12,10 +12,13 @@ async def active_news_risk(symbol: str) -> tuple[str, str] | None:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.news_risk_lookback_hours)
         async with async_session_factory() as session:
             rows = list((await session.execute(select(NewsCache).where(NewsCache.symbol == symbol.upper(), NewsCache.cached_at >= cutoff))).scalars().all())
+            kap_rows = list((await session.execute(select(KapEvent).where(KapEvent.symbol == symbol.upper(), KapEvent.cached_at >= cutoff, KapEvent.risk_level.in_(("HIGH", "BLOCKING"))))).scalars().all())
         for row in rows:
             text = f"{row.title} {row.content or ''}".casefold()
             for keyword in (x.strip() for x in settings.news_risk_keywords_csv.split(",") if x.strip()):
                 if keyword.casefold() in text: return keyword, row.title
+        for row in kap_rows:
+            return f"KAP {row.risk_level}", row.title
     except Exception:
         return None
     return None

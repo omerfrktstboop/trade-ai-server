@@ -1,0 +1,9 @@
+{% extends "admin/base.html" %}
+{% block title %}KAP{% endblock %}
+{% block page_title %}{{ 'KAP Risk' if risk_only else 'KAP Events' }}{% endblock %}
+{% block content %}
+<div class="table-container"><table><thead><tr><th>Symbol</th><th>Event</th><th>Risk</th><th>Title</th><th>Published</th><th>Source</th></tr></thead><tbody>
+{% for row in rows %}<tr><td>{{ row.symbol }}</td><td>{{ row.event_type }}</td><td>{{ row.risk_level }}</td><td>{{ row.title }}</td><td>{{ row.published_at | local_time }}</td><td>{{ row.source or '—' }}</td></tr>
+{% else %}<tr><td colspan="6">No KAP records yet.</td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}

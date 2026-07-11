@@ -323,6 +323,17 @@ class TestDataSurface:
         assert seen["params"]["symbol"] == "AKBNK"
         await client.close()
 
+    async def test_kap_endpoints(self):
+        seen: dict = {}
+        client = self._recording_client(seen)
+        await client.get_kap("thyao", limit=99)
+        assert seen["path"] == "/kap"
+        assert seen["params"] == {"symbol": "THYAO", "limit": "99"}
+        await client.get_kap_risk("thyao", lookback_hours=48)
+        assert seen["path"] == "/kap/risk"
+        assert seen["params"] == {"symbol": "THYAO", "lookbackHours": "48"}
+        await client.close()
+
     async def test_symbol_session_pricestep_bars(self):
         seen: dict = {}
         client = self._recording_client(seen)

@@ -154,6 +154,12 @@ class TradeProfileFieldsBody(BaseModel):
     min_confidence_for_sell: float | None = Field(None, alias="minConfidenceForSell")
     max_natr_for_buy: float | None = Field(None, alias="maxNatrForBuy")
     max_depth_queue_drop_pct_for_buy: float | None = Field(None, alias="maxDepthQueueDropPctForBuy")
+    max_spread_pct_for_buy: float | None = Field(None, alias="maxSpreadPctForBuy")
+    min_depth_bid_ask_ratio_top10_for_buy: float | None = Field(None, alias="minDepthBidAskRatioTop10ForBuy")
+    max_depth_sell_pressure_score_for_buy: float | None = Field(None, alias="maxDepthSellPressureScoreForBuy")
+    block_buy_on_strong_sell_pressure: bool | None = Field(None, alias="blockBuyOnStrongSellPressure")
+    block_buy_on_near_ask_wall: bool | None = Field(None, alias="blockBuyOnNearAskWall")
+    near_wall_distance_pct: float | None = Field(None, alias="nearWallDistancePct")
     require_alpha_trend_alignment: bool | None = Field(None, alias="requireAlphaTrendAlignment")
     require_indicator_consensus_alignment: bool | None = Field(
         None, alias="requireIndicatorConsensusAlignment"
@@ -1364,6 +1370,12 @@ def _trade_profile_dict(profile: TradeProfile, active_code: str) -> dict[str, An
         "minConfidenceForSell": profile.min_confidence_for_sell,
         "maxNatrForBuy": profile.max_natr_for_buy,
         "maxDepthQueueDropPctForBuy": profile.max_depth_queue_drop_pct_for_buy,
+        "maxSpreadPctForBuy": profile.max_spread_pct_for_buy,
+        "minDepthBidAskRatioTop10ForBuy": profile.min_depth_bid_ask_ratio_top10_for_buy,
+        "maxDepthSellPressureScoreForBuy": profile.max_depth_sell_pressure_score_for_buy,
+        "blockBuyOnStrongSellPressure": profile.block_buy_on_strong_sell_pressure,
+        "blockBuyOnNearAskWall": profile.block_buy_on_near_ask_wall,
+        "nearWallDistancePct": profile.near_wall_distance_pct,
         "requireAlphaTrendAlignment": profile.require_alpha_trend_alignment,
         "requireIndicatorConsensusAlignment": profile.require_indicator_consensus_alignment,
         "allowSellLongTerm": profile.allow_sell_long_term,

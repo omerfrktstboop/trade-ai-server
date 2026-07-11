@@ -175,6 +175,7 @@ namespace Matriks.Lean.Algotrader
         private readonly ConcurrentDictionary<string, string> _lastReportedStatusByKey = new ConcurrentDictionary<string, string>();
         private Task _orderResultWorker;
         private DateTime _lastPositionSyncUtc = DateTime.MinValue;
+        private DateTime _lastNewsReceivedUtc = DateTime.MinValue;
         private readonly List<string> _newsTrackedSymbols = new List<string>();
         private readonly List<NewsKeywordSubscription> _newsKeywordSubscriptions = new List<NewsKeywordSubscription>();
         private readonly List<NewsSymbolKeywordSubscription> _newsSymbolKeywordSubscriptions = new List<NewsSymbolKeywordSubscription>();
@@ -269,6 +270,7 @@ namespace Matriks.Lean.Algotrader
         {
             if (newsModel == null)
                 return;
+            _lastNewsReceivedUtc = DateTime.UtcNow;
 
             _recentNews.Enqueue(new NewsSnapshot
             {
@@ -894,6 +896,7 @@ namespace Matriks.Lean.Algotrader
                 positionSyncAgeSeconds = _lastPositionSyncUtc == DateTime.MinValue
                     ? (double?)null
                     : Math.Round((DateTime.UtcNow - _lastPositionSyncUtc).TotalSeconds, 1),
+                lastNewsReceivedUtc = _lastNewsReceivedUtc == DateTime.MinValue ? null : _lastNewsReceivedUtc.ToString("o"),
                 autoOrderEnabled = _autoOrderEnabled,
                 testAutoOrderEnabled = _testAutoOrderEnabled,
                 quoteAgeSeconds = quoteAgeSeconds,
@@ -1178,28 +1181,16 @@ namespace Matriks.Lean.Algotrader
                 levels = Math.Max(1, Math.Min(25, parsed));
             try
             {
-                var depth = GetMarketDepth(symbol);
-                var bids = depth == null || depth.BidRows == null ? new List<object>()
-                    : depth.BidRows.Take(levels).Select((row, index) => (object)new
-                    { level = index + 1, price = ToDouble(row.Price), size = ToDouble(row.Size), orderCount = row.OrderCount }).ToList();
-                var asks = depth == null || depth.AskRows == null ? new List<object>()
-                    : depth.AskRows.Take(levels).Select((row, index) => (object)new
-                    { level = index + 1, price = ToDouble(row.Price), size = ToDouble(row.Size), orderCount = row.OrderCount }).ToList();
-                decimal totalBid = depth == null || depth.BidRows == null ? 0m : depth.BidRows.Take(levels).Sum(x => x.Size);
-                decimal totalAsk = depth == null || depth.AskRows == null ? 0m : depth.AskRows.Take(levels).Sum(x => x.Size);
-                decimal total = totalBid + totalAsk;
+                DepthSnapshot depth = ReadDepthSnapshot(symbol, levels);
                 await WriteJsonAsync(stream, 200, new
                 {
                     ok = true, symbol = symbol, levels = levels,
-                    available = bids.Count > 0 || asks.Count > 0,
-                    bids = bids, asks = asks,
-                    analysis = new
-                    {
-                        totalBidSize = ToDouble(totalBid), totalAskSize = ToDouble(totalAsk),
-                        imbalanceRatio = total > 0m ? ToDouble((totalBid - totalAsk) / total) : 0.0,
-                        bidAskSizeRatio = totalAsk > 0m ? ToDouble(totalBid / totalAsk) : 0.0
-                    },
-                    timestamp = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz")
+                    available = depth.Analysis.Available,
+                    bids = depth.Bids, asks = depth.Asks,
+                    depthLevels = new { bids = depth.Bids, asks = depth.Asks },
+                    depthAnalysis = depth.Analysis,
+                    analysis = depth.Analysis,
+                    timestamp = depth.Analysis.DepthTimestamp
                 });
             }
             catch (Exception ex)
@@ -1330,8 +1321,9 @@ namespace Matriks.Lean.Algotrader
                 source = "news-details-fallback",
                 symbol = string.IsNullOrWhiteSpace(symbol) ? null : symbol,
                 lookbackHours = lookbackHours,
+                lastNewsReceivedUtc = _lastNewsReceivedUtc == DateTime.MinValue ? null : _lastNewsReceivedUtc.ToString("o"),
                 news = items,
-                note = "KAP method discovery is metadata-only; this endpoint uses the live Matriks news cache until a compatible KAP method is confirmed."
+                note = "Fallback contains only Matriks news events received since gateway startup; no historical KAP completeness is implied."
             });
         }
 
@@ -1362,21 +1354,47 @@ namespace Matriks.Lean.Algotrader
             int parsed;
             if (int.TryParse(request.GetQueryValue("limit"), out parsed))
                 limit = Math.Max(1, Math.Min(20, parsed));
+            string periodRaw = (request.GetQueryValue("period") ?? "Daily").Trim();
+            MoneyIncomePeriod period;
+            if (!Enum.TryParse<MoneyIncomePeriod>(periodRaw, true, out period))
+            {
+                await WriteJsonAsync(stream, 400, new { ok = false, error = "invalid institution period", period = periodRaw });
+                return;
+            }
+            bool includeReportedOrders = true;
+            bool parsedBool;
+            if (bool.TryParse(request.GetQueryValue("includeReportedOrders"), out parsedBool)) includeReportedOrders = parsedBool;
             try
             {
                 var buyers = new List<object>();
                 var sellers = new List<object>();
                 for (int rank = 1; rank <= limit; rank++)
                 {
-                    var buyer = GetBestInstitution(symbol, TransactionDataField.Size, TransactionSide.Net, BestBuyerSellerOrder.NetBuyerLot, MoneyIncomePeriod.Daily, rank, true);
-                    var seller = GetBestInstitution(symbol, TransactionDataField.Size, TransactionSide.Net, BestBuyerSellerOrder.NetSellerLot, MoneyIncomePeriod.Daily, rank, true);
+                    var buyer = GetBestInstitution(symbol, TransactionDataField.Size, TransactionSide.Net, BestBuyerSellerOrder.NetBuyerLot, period, rank, includeReportedOrders);
+                    var seller = GetBestInstitution(symbol, TransactionDataField.Size, TransactionSide.Net, BestBuyerSellerOrder.NetSellerLot, period, rank, includeReportedOrders);
                     if (buyer != null) buyers.Add(new { id = buyer.Id, name = buyer.Name, rank = buyer.Rank, value = ToDouble(buyer.Value) });
                     if (seller != null) sellers.Add(new { id = seller.Id, name = seller.Name, rank = seller.Rank, value = ToDouble(seller.Value) });
+                }
+                bool effectiveIncludeReportedOrders = includeReportedOrders;
+                if (buyers.Count == 0 && sellers.Count == 0 && includeReportedOrders)
+                {
+                    effectiveIncludeReportedOrders = false;
+                    for (int rank = 1; rank <= limit; rank++)
+                    {
+                        var buyer = GetBestInstitution(symbol, TransactionDataField.Size, TransactionSide.Net, BestBuyerSellerOrder.NetBuyerLot, period, rank, false);
+                        var seller = GetBestInstitution(symbol, TransactionDataField.Size, TransactionSide.Net, BestBuyerSellerOrder.NetSellerLot, period, rank, false);
+                        if (buyer != null) buyers.Add(new { id = buyer.Id, name = buyer.Name, rank = buyer.Rank, value = ToDouble(buyer.Value) });
+                        if (seller != null) sellers.Add(new { id = seller.Id, name = seller.Name, rank = seller.Rank, value = ToDouble(seller.Value) });
+                    }
                 }
                 await WriteJsonAsync(stream, 200, new
                 {
                     ok = true, available = buyers.Count > 0 || sellers.Count > 0,
-                    symbol = symbol, period = "DAILY", buyers = buyers, sellers = sellers,
+                    symbol = symbol, period = period.ToString().ToUpperInvariant(), includeReportedOrders = effectiveIncludeReportedOrders,
+                    attemptedRanks = limit, buyersReturned = buyers.Count, sellersReturned = sellers.Count,
+                    methodAvailable = true, dataStatus = buyers.Count > 0 || sellers.Count > 0 ? "AVAILABLE" : "EMPTY",
+                    possibleReasons = buyers.Count > 0 || sellers.Count > 0 ? new string[0] : new[] { "market closed", "license unavailable", "session data unavailable" },
+                    buyers = buyers, sellers = sellers,
                     requiresLicense = "AKDE/AKD for equities; VAKD for VIOP end-of-day data"
                 });
             }
@@ -2525,6 +2543,87 @@ namespace Matriks.Lean.Algotrader
 
         // ── Market data collection (TradeAiAgenticBot'tan birebir) ───
 
+        private DepthSnapshot ReadDepthSnapshot(string symbol, int requestedLevels)
+        {
+            int levels = Math.Max(1, Math.Min(25, requestedLevels));
+            var result = new DepthSnapshot { Bids = new List<DepthLevelSnapshot>(), Asks = new List<DepthLevelSnapshot>() };
+            var depth = GetMarketDepth(symbol);
+            if (depth != null && depth.BidRows != null)
+                result.Bids = depth.BidRows.Take(levels).Select((row, index) => new DepthLevelSnapshot { Level = index + 1, Price = row.Price, Size = row.Size, OrderCount = row.OrderCount }).ToList();
+            if (depth != null && depth.AskRows != null)
+                result.Asks = depth.AskRows.Take(levels).Select((row, index) => new DepthLevelSnapshot { Level = index + 1, Price = row.Price, Size = row.Size, OrderCount = row.OrderCount }).ToList();
+            result.Analysis = AnalyzeDepth(result.Bids, result.Asks);
+            return result;
+        }
+
+        private static DepthAnalysisSnapshot AnalyzeDepth(List<DepthLevelSnapshot> bids, List<DepthLevelSnapshot> asks)
+        {
+            var a = new DepthAnalysisSnapshot { DepthTimestamp = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz"), OrderBookSignal = "UNAVAILABLE" };
+            a.LevelsUsed = Math.Min(25, Math.Max(bids.Count, asks.Count));
+            a.Available = bids.Count > 0 && asks.Count > 0;
+            a.DepthReliable = a.Available && bids[0].Price > 0m && asks[0].Price > 0m;
+            if (!a.DepthReliable) return a;
+            a.BestBid = bids[0].Price; a.BestAsk = asks[0].Price;
+            a.BidSizeTop1 = bids[0].Size; a.AskSizeTop1 = asks[0].Size;
+            a.Spread = Math.Max(0m, a.BestAsk - a.BestBid);
+            a.SpreadPct = SafePercent(a.Spread, (a.BestAsk + a.BestBid) / 2m);
+            a.Top1 = SummarizeDepth(bids, asks, 1); a.Top3 = SummarizeDepth(bids, asks, 3);
+            a.Top5 = SummarizeDepth(bids, asks, 5); a.Top10 = SummarizeDepth(bids, asks, 10); a.Top25 = SummarizeDepth(bids, asks, 25);
+            a.BidAskRatioTop5 = a.Top5.BidAskRatio; a.BidAskRatioTop10 = a.Top10.BidAskRatio; a.BidAskRatioTop25 = a.Top25.BidAskRatio;
+            a.ImbalanceTop5 = a.Top5.Imbalance; a.ImbalanceTop10 = a.Top10.Imbalance; a.ImbalanceTop25 = a.Top25.Imbalance;
+            a.WeightedBidPrice = WeightedDepthPrice(bids); a.WeightedAskPrice = WeightedDepthPrice(asks);
+            a.BidConcentrationTop3Pct = SafePercent(a.Top3.TotalBidSize, a.Top25.TotalBidSize);
+            a.AskConcentrationTop3Pct = SafePercent(a.Top3.TotalAskSize, a.Top25.TotalAskSize);
+            a.BidWallConcentrationRisk = a.BidConcentrationTop3Pct >= 70m; a.AskWallConcentrationRisk = a.AskConcentrationTop3Pct >= 70m;
+            decimal referencePrice = (a.BestBid + a.BestAsk) / 2m;
+            List<DepthWallSnapshot> bw = FindDepthWalls(bids, referencePrice); List<DepthWallSnapshot> aw = FindDepthWalls(asks, referencePrice);
+            a.LargestBidWall = bw.OrderByDescending(x => x.Size).FirstOrDefault(); a.LargestAskWall = aw.OrderByDescending(x => x.Size).FirstOrDefault();
+            a.NearestLargeBidWall = bw.OrderBy(x => Math.Abs(x.DistancePct)).FirstOrDefault(); a.NearestLargeAskWall = aw.OrderBy(x => Math.Abs(x.DistancePct)).FirstOrDefault();
+            a.BidWallCountTop5 = bw.Count(x => x.Level <= 5); a.AskWallCountTop5 = aw.Count(x => x.Level <= 5);
+            a.BidWallCountTop10 = bw.Count(x => x.Level <= 10); a.AskWallCountTop10 = aw.Count(x => x.Level <= 10);
+            decimal ratio = a.BidAskRatioTop10;
+            decimal buy = Math.Max(0m, Math.Min(100m, ratio <= 0m ? 0m : ratio / (ratio + 1m) * 100m));
+            bool cb = a.ImbalanceTop5 > 0m && a.ImbalanceTop10 > 0m && a.ImbalanceTop25 > 0m;
+            bool cs = a.ImbalanceTop5 < 0m && a.ImbalanceTop10 < 0m && a.ImbalanceTop25 < 0m;
+            if (cb) buy += 8m; if (a.AskWallConcentrationRisk) buy -= 8m;
+            a.BuyPressureScore = Math.Max(0m, Math.Min(100m, buy)); a.SellPressureScore = Math.Max(0m, Math.Min(100m, 100m - buy));
+            if (ratio >= 2m && cb && !a.BidWallConcentrationRisk) a.OrderBookSignal = "STRONG_BUY_PRESSURE";
+            else if (ratio >= 1.25m && a.ImbalanceTop10 > 0m) a.OrderBookSignal = "BUY_PRESSURE";
+            else if (ratio <= 0.5m && cs && !a.AskWallConcentrationRisk) a.OrderBookSignal = "STRONG_SELL_PRESSURE";
+            else if (ratio <= 0.8m && a.ImbalanceTop10 < 0m) a.OrderBookSignal = "SELL_PRESSURE";
+            else a.OrderBookSignal = "BALANCED";
+            return a;
+        }
+
+        private static DepthBandSnapshot SummarizeDepth(List<DepthLevelSnapshot> bids, List<DepthLevelSnapshot> asks, int levels)
+        {
+            var r = new DepthBandSnapshot();
+            r.TotalBidSize = bids.Take(levels).Sum(x => x.Size); r.TotalAskSize = asks.Take(levels).Sum(x => x.Size);
+            r.BidOrderCount = bids.Take(levels).Sum(x => x.OrderCount); r.AskOrderCount = asks.Take(levels).Sum(x => x.OrderCount);
+            r.BidAskRatio = r.TotalAskSize > 0m ? r.TotalBidSize / r.TotalAskSize : (r.TotalBidSize > 0m ? 100m : 0m);
+            decimal total = r.TotalBidSize + r.TotalAskSize; r.Imbalance = total > 0m ? (r.TotalBidSize - r.TotalAskSize) / total : 0m;
+            r.AverageBidOrderSize = r.BidOrderCount > 0 ? r.TotalBidSize / r.BidOrderCount : 0m;
+            r.AverageAskOrderSize = r.AskOrderCount > 0 ? r.TotalAskSize / r.AskOrderCount : 0m;
+            return r;
+        }
+
+        private static decimal WeightedDepthPrice(List<DepthLevelSnapshot> rows)
+        { decimal size = rows.Sum(x => x.Size); return size > 0m ? rows.Sum(x => x.Price * x.Size) / size : 0m; }
+
+        private static List<DepthWallSnapshot> FindDepthWalls(List<DepthLevelSnapshot> rows, decimal referencePrice)
+        {
+            var result = new List<DepthWallSnapshot>(); if (rows.Count == 0) return result;
+            List<decimal> sizes = rows.Select(x => x.Size).OrderBy(x => x).ToList();
+            decimal median = sizes.Count % 2 == 1 ? sizes[sizes.Count / 2] : (sizes[sizes.Count / 2 - 1] + sizes[sizes.Count / 2]) / 2m;
+            decimal threshold = Math.Max(median * 3m, sizes.Average() * 2.5m);
+            foreach (DepthLevelSnapshot row in rows.Where(x => x.Size >= threshold && x.Size > 0m))
+                result.Add(new DepthWallSnapshot { Level = row.Level, Price = row.Price, Size = row.Size, OrderCount = row.OrderCount, DistancePct = referencePrice > 0m ? (row.Price - referencePrice) / referencePrice * 100m : 0m });
+            return result;
+        }
+
+        private static decimal SafePercent(decimal numerator, decimal denominator)
+        { return denominator > 0m ? numerator / denominator * 100m : 0m; }
+
         private MarketDataPayload BuildMarketData(string symbolRaw, string dataType)
         {
             string symbol = NormalizeSymbol(symbolRaw);
@@ -2550,7 +2649,8 @@ namespace Matriks.Lean.Algotrader
             bool ohlcReliable = ohlc.Reliable;
 
 
-            // Depth data
+            // Depth data: one read, shared aggregate model; raw levels are not
+            // included in /snapshot to keep the AI payload token-efficient.
             decimal bestBid = 0m;
             decimal secondBid = 0m;
             decimal thirdBid = 0m;
@@ -2560,39 +2660,29 @@ namespace Matriks.Lean.Algotrader
             decimal depthQueueDropPct = 0m;
             bool depthReliable = false;
             string depthSummary = "";
+            DepthAnalysisSnapshot depthAnalysis = new DepthAnalysisSnapshot { OrderBookSignal = "UNAVAILABLE", DepthReliable = false };
             try
             {
-                var depth = GetMarketDepth(symbol);
-                if (depth != null && depth.BidRows != null && depth.BidRows.Count >= 1)
+                DepthSnapshot depth = ReadDepthSnapshot(symbol, 25);
+                depthAnalysis = depth.Analysis;
+                bestBid = depthAnalysis.BestBid;
+                bid1Size = depthAnalysis.BidSizeTop1;
+                ask1Size = depthAnalysis.AskSizeTop1;
+                if (depth.Bids.Count >= 2) secondBid = depth.Bids[1].Price;
+                if (depth.Bids.Count >= 3) thirdBid = depth.Bids[2].Price;
+                if (bestBid > 0m && bid1Size > 0m)
                 {
-                    bestBid = depth.BidRows[0].Price;
-                    bid1Size = depth.BidRows[0].Size;
-                    if (bestBid > 0m && bid1Size > 0m)
-                    {
-                        maxBid1Size = _maxBid1SizeBySymbol.AddOrUpdate(
-                            symbol,
-                            bid1Size,
-                            (_, existing) => bid1Size > existing ? bid1Size : existing);
+                    maxBid1Size = _maxBid1SizeBySymbol.AddOrUpdate(
+                        symbol,
+                        bid1Size,
+                        (_, existing) => bid1Size > existing ? bid1Size : existing);
 
-                        if (maxBid1Size > 0m)
-                        {
-                            depthQueueDropPct = Math.Max(0m, (maxBid1Size - bid1Size) / maxBid1Size * 100m);
-                        }
+                    if (maxBid1Size > 0m)
+                    {
+                        depthQueueDropPct = Math.Max(0m, (maxBid1Size - bid1Size) / maxBid1Size * 100m);
                     }
                 }
-                if (depth != null && depth.BidRows != null && depth.BidRows.Count >= 2)
-                {
-                    secondBid = depth.BidRows[1].Price;
-                }
-                if (depth != null && depth.BidRows != null && depth.BidRows.Count >= 3)
-                {
-                    thirdBid = depth.BidRows[2].Price;
-                }
-                if (depth != null && depth.AskRows != null && depth.AskRows.Count >= 1)
-                {
-                    ask1Size = depth.AskRows[0].Size;
-                }
-                depthReliable = bestBid > 0m && bid1Size > 0m && ask1Size > 0m;
+                depthReliable = depthAnalysis.DepthReliable;
                 if (!depthReliable)
                 {
                     depthQueueDropPct = 0m;
@@ -2659,6 +2749,10 @@ namespace Matriks.Lean.Algotrader
             payload["secondBid"] = ToDouble(secondBid);
             payload["thirdBid"] = ToDouble(thirdBid);
             payload["depthSummary"] = depthSummary;
+            payload["depthAnalysis"] = depthAnalysis;
+            payload["quoteAgeSeconds"] = Math.Max(0.0, (DateTime.Now - quote.UpdatedAt).TotalSeconds);
+            payload["ohlcvAgeSeconds"] = Math.Max(0.0, (DateTime.Now - ohlc.UpdatedAt).TotalSeconds);
+            payload["depthAgeSeconds"] = depthAnalysis.DepthAgeSeconds;
             payload["botPositionQty"] = ToDouble(GetAccountAvailableQty(symbol));
             payload["totalAccountQty"] = ToDouble(GetTotalAccountQty(symbol));
             payload["lockedLongTermQty"] = ToDouble(GetLockedLongTermQty(symbol));
@@ -4049,6 +4143,137 @@ namespace Matriks.Lean.Algotrader
             public bool Success { get; set; }
             public string OrderId { get; set; }
             public string Message { get; set; }
+        }
+
+        private sealed class DepthSnapshot
+        {
+            public List<DepthLevelSnapshot> Bids { get; set; }
+            public List<DepthLevelSnapshot> Asks { get; set; }
+            public DepthAnalysisSnapshot Analysis { get; set; }
+        }
+
+        private sealed class DepthLevelSnapshot
+        {
+            [JsonProperty("level")]
+            public int Level { get; set; }
+            [JsonProperty("price")]
+            public decimal Price { get; set; }
+            [JsonProperty("size")]
+            public decimal Size { get; set; }
+            [JsonProperty("orderCount")]
+            public int OrderCount { get; set; }
+        }
+
+        private sealed class DepthBandSnapshot
+        {
+            [JsonProperty("totalBidSize")]
+            public decimal TotalBidSize { get; set; }
+            [JsonProperty("totalAskSize")]
+            public decimal TotalAskSize { get; set; }
+            [JsonProperty("bidAskRatio")]
+            public decimal BidAskRatio { get; set; }
+            [JsonProperty("imbalance")]
+            public decimal Imbalance { get; set; }
+            [JsonProperty("bidOrderCount")]
+            public int BidOrderCount { get; set; }
+            [JsonProperty("askOrderCount")]
+            public int AskOrderCount { get; set; }
+            [JsonProperty("averageBidOrderSize")]
+            public decimal AverageBidOrderSize { get; set; }
+            [JsonProperty("averageAskOrderSize")]
+            public decimal AverageAskOrderSize { get; set; }
+        }
+
+        private sealed class DepthWallSnapshot
+        {
+            [JsonProperty("level")]
+            public int Level { get; set; }
+            [JsonProperty("price")]
+            public decimal Price { get; set; }
+            [JsonProperty("size")]
+            public decimal Size { get; set; }
+            [JsonProperty("orderCount")]
+            public int OrderCount { get; set; }
+            [JsonProperty("distancePct")]
+            public decimal DistancePct { get; set; }
+        }
+
+        private sealed class DepthAnalysisSnapshot
+        {
+            [JsonProperty("available")]
+            public bool Available { get; set; }
+            [JsonProperty("levelsUsed")]
+            public int LevelsUsed { get; set; }
+            [JsonProperty("bestBid")]
+            public decimal BestBid { get; set; }
+            [JsonProperty("bestAsk")]
+            public decimal BestAsk { get; set; }
+            [JsonProperty("spread")]
+            public decimal Spread { get; set; }
+            [JsonProperty("spreadPct")]
+            public decimal SpreadPct { get; set; }
+            [JsonProperty("bidSizeTop1")]
+            public decimal BidSizeTop1 { get; set; }
+            [JsonProperty("askSizeTop1")]
+            public decimal AskSizeTop1 { get; set; }
+            [JsonProperty("top1")]
+            public DepthBandSnapshot Top1 { get; set; }
+            [JsonProperty("top3")]
+            public DepthBandSnapshot Top3 { get; set; }
+            [JsonProperty("top5")]
+            public DepthBandSnapshot Top5 { get; set; }
+            [JsonProperty("top10")]
+            public DepthBandSnapshot Top10 { get; set; }
+            [JsonProperty("top25")]
+            public DepthBandSnapshot Top25 { get; set; }
+            [JsonProperty("bidAskRatioTop5")]
+            public decimal BidAskRatioTop5 { get; set; }
+            [JsonProperty("bidAskRatioTop10")]
+            public decimal BidAskRatioTop10 { get; set; }
+            [JsonProperty("bidAskRatioTop25")]
+            public decimal BidAskRatioTop25 { get; set; }
+            [JsonProperty("imbalanceTop5")]
+            public decimal ImbalanceTop5 { get; set; }
+            [JsonProperty("imbalanceTop10")]
+            public decimal ImbalanceTop10 { get; set; }
+            [JsonProperty("imbalanceTop25")]
+            public decimal ImbalanceTop25 { get; set; }
+            [JsonProperty("weightedBidPrice")]
+            public decimal WeightedBidPrice { get; set; }
+            [JsonProperty("weightedAskPrice")]
+            public decimal WeightedAskPrice { get; set; }
+            [JsonProperty("bidConcentrationTop3Pct")]
+            public decimal BidConcentrationTop3Pct { get; set; }
+            [JsonProperty("askConcentrationTop3Pct")]
+            public decimal AskConcentrationTop3Pct { get; set; }
+            [JsonProperty("bidWallConcentrationRisk")]
+            public bool BidWallConcentrationRisk { get; set; }
+            [JsonProperty("askWallConcentrationRisk")]
+            public bool AskWallConcentrationRisk { get; set; }
+            [JsonProperty("largestBidWall")]
+            public DepthWallSnapshot LargestBidWall { get; set; }
+            [JsonProperty("largestAskWall")]
+            public DepthWallSnapshot LargestAskWall { get; set; }
+            [JsonProperty("nearestLargeBidWall")]
+            public DepthWallSnapshot NearestLargeBidWall { get; set; }
+            [JsonProperty("nearestLargeAskWall")]
+            public DepthWallSnapshot NearestLargeAskWall { get; set; }
+            public int BidWallCountTop5 { get; set; }
+            public int AskWallCountTop5 { get; set; }
+            public int BidWallCountTop10 { get; set; }
+            public int AskWallCountTop10 { get; set; }
+            [JsonProperty("buyPressureScore")]
+            public decimal BuyPressureScore { get; set; }
+            [JsonProperty("sellPressureScore")]
+            public decimal SellPressureScore { get; set; }
+            [JsonProperty("orderBookSignal")]
+            public string OrderBookSignal { get; set; }
+            [JsonProperty("depthTimestamp")]
+            public string DepthTimestamp { get; set; }
+            [JsonProperty("depthAgeSeconds")]
+            public double DepthAgeSeconds { get; set; }
+            [JsonProperty("depthReliable")]
+            public bool DepthReliable { get; set; }
         }
 
         private static bool TryResolveBarTimestamp(object bar, out DateTime timestamp)

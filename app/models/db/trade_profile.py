@@ -45,6 +45,12 @@ class TradeProfile(Base):
     min_confidence_for_sell: Mapped[float] = mapped_column(Float, nullable=False)
     max_natr_for_buy: Mapped[float] = mapped_column(Float, nullable=False)
     max_depth_queue_drop_pct_for_buy: Mapped[float] = mapped_column(Float, nullable=False)
+    max_spread_pct_for_buy: Mapped[float] = mapped_column(Float, default=0.50, nullable=False)
+    min_depth_bid_ask_ratio_top10_for_buy: Mapped[float] = mapped_column(Float, default=0.60, nullable=False)
+    max_depth_sell_pressure_score_for_buy: Mapped[float] = mapped_column(Float, default=80.0, nullable=False)
+    block_buy_on_strong_sell_pressure: Mapped[bool] = mapped_column(Boolean, default=True)
+    block_buy_on_near_ask_wall: Mapped[bool] = mapped_column(Boolean, default=False)
+    near_wall_distance_pct: Mapped[float] = mapped_column(Float, default=0.30, nullable=False)
 
     require_alpha_trend_alignment: Mapped[bool] = mapped_column(Boolean, default=True)
     require_indicator_consensus_alignment: Mapped[bool] = mapped_column(Boolean, default=True)

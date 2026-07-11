@@ -423,6 +423,21 @@ class RiskEngine:
             return None
 
         if action == SignalAction.BUY:
+            if request.quote_age_seconds is not None and request.quote_age_seconds > self.config.max_quote_age_seconds_for_buy:
+                return f"BUY blocked: quote age {request.quote_age_seconds:.1f}s exceeds max {self.config.max_quote_age_seconds_for_buy:.1f}s"
+            if request.depth_reliable:
+                if request.depth_age_seconds is not None and request.depth_age_seconds > self.config.max_depth_age_seconds_for_buy:
+                    return f"BUY blocked: depth age {request.depth_age_seconds:.1f}s exceeds max {self.config.max_depth_age_seconds_for_buy:.1f}s"
+                if request.spread_pct is not None and request.spread_pct > self.config.max_spread_pct_for_buy:
+                    return f"BUY blocked: spread {request.spread_pct:.2f}% exceeds max {self.config.max_spread_pct_for_buy:.2f}%"
+                if request.depth_bid_ask_ratio_top10 is not None and request.depth_bid_ask_ratio_top10 < self.config.min_depth_bid_ask_ratio_top10_for_buy:
+                    return "BUY blocked: depth bid/ask ratio Top10 below profile minimum"
+                if request.depth_sell_pressure_score is not None and request.depth_sell_pressure_score > self.config.max_depth_sell_pressure_score_for_buy:
+                    return "BUY blocked: depth sell pressure exceeds profile maximum"
+                if self.config.block_buy_on_strong_sell_pressure and request.depth_order_book_signal == "STRONG_SELL_PRESSURE":
+                    return "BUY blocked: STRONG_SELL_PRESSURE in reliable depth"
+                if self.config.block_buy_on_near_ask_wall and request.depth_nearest_ask_wall_distance_pct is not None and abs(request.depth_nearest_ask_wall_distance_pct) <= self.config.near_wall_distance_pct:
+                    return "BUY blocked: concentrated ask wall is too close"
             natr = request.natr
             if natr is not None and natr > self.config.max_natr_for_buy:
                 return (

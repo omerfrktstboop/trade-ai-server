@@ -28,6 +28,7 @@ an ``UNKNOWN`` entry — broker flow is a decision INPUT, never a blocker.
 from __future__ import annotations
 
 import logging
+import time
 import unicodedata
 from typing import Any
 
@@ -51,6 +52,8 @@ _SMART_MONEY_KEYWORDS: tuple[str, ...] = (
 
 # Akıllı paranın net-alış tarafında baskın sayılması için gereken pay.
 _DOMINANCE_THRESHOLD = 0.40
+AKD_CACHE_TTL_SECONDS = 300
+_akd_cache: dict[tuple[int, str, str, bool], tuple[float, dict[str, Any]]] = {}
 
 
 # ── Public interface ───────────────────────────────────────────────────────────
@@ -78,8 +81,18 @@ async def get_broker_flow_context(
     context: dict[str, Any] = {}
     for symbol in symbols:
         normalized = symbol.strip().upper()
+        cache_key = (id(gw), normalized, "DAILY", True)
+        cached = _akd_cache.get(cache_key)
+        if cached and time.monotonic() - cached[0] < AKD_CACHE_TTL_SECONDS:
+            entry = dict(cached[1])
+            entry["dataAgeSeconds"] = round(time.monotonic() - cached[0], 1)
+            context[normalized] = entry
+            continue
         try:
-            raw = await gw.get_institutions(normalized)
+            try:
+                raw = await gw.get_institutions(normalized, limit=10, period="Daily", include_reported_orders=True)
+            except TypeError:  # backwards-compatible injected/test gateways
+                raw = await gw.get_institutions(normalized, limit=10)
         except (GatewayUnavailable, GatewayError) as exc:
             logger.debug("Institutions fetch failed symbol=%s error=%s", normalized, exc)
             context[normalized] = _unknown_entry(normalized, "Broker flow unavailable.")
@@ -89,7 +102,12 @@ async def get_broker_flow_context(
             context[normalized] = _unknown_entry(normalized, "Broker flow unavailable.")
             continue
 
-        context[normalized] = _analyze(normalized, raw)
+        entry = _analyze(normalized, raw)
+        entry["period"] = str(raw.get("period") or "DAILY")
+        entry["available"] = bool(raw.get("available"))
+        entry["dataAgeSeconds"] = 0.0
+        _akd_cache[cache_key] = (time.monotonic(), entry)
+        context[normalized] = entry
     return context
 
 
@@ -133,6 +151,10 @@ def _analyze(symbol: str, raw: dict[str, Any]) -> dict[str, Any]:
         # Geriye dönük uyumlu sade görünüm (eski tüketiciler/testler için).
         "brokerFlow": _legacy_flow(flow),
         "netInstitutionalFlow": round(total_buy - total_sell, 2),
+        "totalRankedBuyLot": round(total_buy, 2),
+        "totalRankedSellLot": round(total_sell, 2),
+        "topBuyers": buyers[:5],
+        "topSellers": sellers[:5],
         "smartBuyRatio": round(buy_ratio, 3),
         "smartSellRatio": round(sell_ratio, 3),
         "netSmartLot": round(net_smart_lot, 2),
@@ -244,4 +266,7 @@ def _unknown_entry(symbol: str, comment: str) -> dict[str, Any]:
         "netSmartLot": None,
         "topBrokers": [],
         "comment": comment,
+        "available": False,
+        "period": "DAILY",
+        "dataAgeSeconds": None,
     }

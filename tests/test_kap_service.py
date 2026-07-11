@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from app.services.kap_service import _is_active_risk, _published, classify_kap
+import app.services.kap_service as kap_service
 
 
 def test_kap_classifier_marks_brut_takas_as_blocking():
@@ -26,3 +27,19 @@ def test_kap_risk_window_excludes_old_and_unknown_dates():
     assert _is_active_risk(now - timedelta(hours=2), now=now, lookback_hours=24)
     assert not _is_active_risk(now - timedelta(days=10), now=now, lookback_hours=24)
     assert not _is_active_risk(None, now=now, lookback_hours=24)
+
+
+async def test_kap_gateway_cache_avoids_second_call(monkeypatch):
+    class Gateway:
+        calls = 0
+
+        async def get_kap(self, symbol, limit):
+            self.calls += 1
+            return {"ok": True, "news": []}
+
+    gateway = Gateway()
+    kap_service.invalidate_kap_cache()
+    monkeypatch.setattr(kap_service, "gateway_client", gateway)
+    await kap_service.sync_kap_events("THYAO")
+    await kap_service.sync_kap_events("THYAO")
+    assert gateway.calls == 1

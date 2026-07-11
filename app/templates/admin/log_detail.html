@@ -47,6 +47,16 @@
     Hesap toplamı: <span class="mono">{{ snapshot.total_account_qty }}</span> &nbsp;
     Kilitli uzun vade: <span class="mono">{{ snapshot.locked_long_term_qty }}</span>
   </div>
+  <div class="section-title mt-16">25 Kademe Derinlik Özeti</div>
+  {% if snapshot.depth_reliable %}
+  <div class="text-sm">
+    Spread: <span class="mono">{{ snapshot.spread_pct }}</span>% &nbsp;
+    Top5 / Top10 / Top25: <span class="mono">{{ snapshot.bid_ask_ratio_top5 }} / {{ snapshot.bid_ask_ratio_top10 }} / {{ snapshot.bid_ask_ratio_top25 }}</span><br>
+    Büyük duvar mesafesi bid / ask: <span class="mono">{{ snapshot.largest_bid_wall_distance_pct }} / {{ snapshot.largest_ask_wall_distance_pct }}</span>% &nbsp;
+    Baskı skoru alış / satış: <span class="mono">{{ snapshot.depth_buy_pressure_score }} / {{ snapshot.depth_sell_pressure_score }}</span> &nbsp;
+    Sinyal: <strong>{{ snapshot.depth_order_book_signal or 'UNAVAILABLE' }}</strong>
+  </div>
+  {% else %}<div class="text-muted">Derinlik verisi kullanılamıyor.</div>{% endif %}
 </div>
 {% endif %}
 

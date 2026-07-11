@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -12,6 +13,16 @@ from app.models.db import KapEvent
 from app.services.matriks_gateway import GatewayError, GatewayUnavailable, gateway_client
 
 logger = logging.getLogger(__name__)
+KAP_GATEWAY_CACHE_TTL_SECONDS = 120
+_kap_gateway_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def invalidate_kap_cache(symbol: str | None = None) -> None:
+    """Invalidate one symbol after a risk-news signal, or all symbols."""
+    if symbol:
+        _kap_gateway_cache.pop(symbol.strip().upper(), None)
+    else:
+        _kap_gateway_cache.clear()
 
 _RISK_KEYWORDS = {
     "BLOCKING": ("tedbir", "brüt takas", "brut takas", "kredili işlem yasağı", "açığa satış yasağı", "aciga satis yasagi", "faaliyet durdurma", "konkordato", "iflas", "haciz"),
@@ -72,7 +83,12 @@ def classify_kap(title: str, content: str | None) -> tuple[str, str]:
 async def sync_kap_events(symbol: str, limit: int = 50) -> list[KapEvent]:
     symbol = symbol.strip().upper()
     try:
-        payload = await gateway_client.get_kap(symbol, limit)
+        cached = _kap_gateway_cache.get(symbol)
+        if cached and time.monotonic() - cached[0] < KAP_GATEWAY_CACHE_TTL_SECONDS:
+            payload = cached[1]
+        else:
+            payload = await gateway_client.get_kap(symbol, limit)
+            _kap_gateway_cache[symbol] = (time.monotonic(), payload)
     except (GatewayUnavailable, GatewayError):
         return []
     entries = payload.get("news") or payload.get("events") or []
@@ -117,5 +133,8 @@ async def get_kap_context(symbols: list[str]) -> dict[str, Any]:
         except Exception:
             result[symbol] = {"latestEvents": [], "riskEvents24h": [], "hasBlockingRisk": False, "summary": "KAP unavailable"}; continue
         serialize = lambda row: {"title": row.title, "eventType": row.event_type, "riskLevel": row.risk_level, "publishedAt": row.published_at.isoformat() if row.published_at else None, "dateUnknown": row.published_at is None, "source": row.source}
-        result[symbol] = {"latestEvents": [serialize(row) for row in rows[:5]], "riskEvents24h": [serialize(row) for row in risk_rows], "hasBlockingRisk": any(row.risk_level == "BLOCKING" for row in risk_rows), "summary": f"{len(rows)} KAP events, {len(risk_rows)} elevated risk events"}
+        important_rows = sorted(rows, key=lambda row: (row.risk_level in {"BLOCKING", "HIGH"}, row.published_at or datetime.min.replace(tzinfo=UTC)), reverse=True)[:5]
+        newest = max((row.published_at for row in rows if row.published_at), default=None)
+        kap_age = max(0.0, (datetime.now(UTC) - newest).total_seconds()) if newest else None
+        result[symbol] = {"latestEvents": [serialize(row) for row in important_rows], "riskEvents24h": [serialize(row) for row in risk_rows], "hasBlockingRisk": any(row.risk_level == "BLOCKING" for row in risk_rows), "kapAgeSeconds": kap_age, "summary": f"{len(rows)} KAP events, {len(risk_rows)} elevated risk events"}
     return result

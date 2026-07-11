@@ -138,13 +138,15 @@ class MatriksGatewayClient:
     async def get_kap_risk(self, symbol: str, lookback_hours: int = 48) -> dict[str, Any]:
         return await self._get("/kap/risk", params={"symbol": symbol.strip().upper(), "lookbackHours": str(max(1, min(720, lookback_hours)))})
 
-    async def get_institutions(self, symbol: str, limit: int = 5) -> dict[str, Any]:
+    async def get_institutions(self, symbol: str, limit: int = 10, period: str = "Daily", include_reported_orders: bool = True) -> dict[str, Any]:
         """Return daily ranked AKD buyers/sellers when licensed."""
         return await self._get(
             "/institutions",
             params={
                 "symbol": symbol.strip().upper(),
                 "limit": str(max(1, min(20, limit))),
+                "period": period,
+                "includeReportedOrders": str(include_reported_orders).lower(),
             },
         )
 

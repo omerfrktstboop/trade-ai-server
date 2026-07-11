@@ -166,7 +166,36 @@ def build_payload(
         payload["fundamentalsContext"] = fundamentals_context
     if kap_context:
         payload["kapContext"] = kap_context
+    depth_context = _build_depth_context(req)
+    if depth_context:
+        payload["depthContext"] = depth_context
     return payload
+
+
+def _build_depth_context(req: SignalRequest) -> dict[str, Any]:
+    if req.depth_reliable is False:
+        return {"depthReliable": False, "orderBookSignal": "UNAVAILABLE"}
+    fields = {
+        "levelsUsed": req.depth_levels_used, "spreadPct": req.spread_pct,
+        "bidAskRatioTop5": req.depth_bid_ask_ratio_top5,
+        "bidAskRatioTop10": req.depth_bid_ask_ratio_top10,
+        "bidAskRatioTop25": req.depth_bid_ask_ratio_top25,
+        "imbalanceTop5": req.depth_imbalance_top5,
+        "imbalanceTop10": req.depth_imbalance_top10,
+        "imbalanceTop25": req.depth_imbalance_top25,
+        "bidConcentrationTop3Pct": req.depth_bid_concentration_top3_pct,
+        "askConcentrationTop3Pct": req.depth_ask_concentration_top3_pct,
+        "largestBidWallDistancePct": req.depth_largest_bid_wall_distance_pct,
+        "largestAskWallDistancePct": req.depth_largest_ask_wall_distance_pct,
+        "nearestBidWallDistancePct": req.depth_nearest_bid_wall_distance_pct,
+        "nearestAskWallDistancePct": req.depth_nearest_ask_wall_distance_pct,
+        "buyPressureScore": req.depth_buy_pressure_score,
+        "sellPressureScore": req.depth_sell_pressure_score,
+        "orderBookSignal": req.depth_order_book_signal,
+        "wallConcentrationRisk": req.depth_wall_concentration_risk,
+        "depthAgeSeconds": req.depth_age_seconds, "depthReliable": req.depth_reliable,
+    }
+    return {key: value for key, value in fields.items() if value is not None}
 
 
 def _build_technical_feature_payload(req: SignalRequest) -> dict[str, Any]:
@@ -410,6 +439,18 @@ async def persist_evaluation(
                     ema50=req.ema50,
                     macd=req.macd,
                     macd_signal=req.macd_signal,
+                    spread_pct=req.spread_pct,
+                    bid_ask_ratio_top5=req.depth_bid_ask_ratio_top5,
+                    bid_ask_ratio_top10=req.depth_bid_ask_ratio_top10,
+                    bid_ask_ratio_top25=req.depth_bid_ask_ratio_top25,
+                    imbalance_top10=req.depth_imbalance_top10,
+                    imbalance_top25=req.depth_imbalance_top25,
+                    largest_bid_wall_distance_pct=req.depth_largest_bid_wall_distance_pct,
+                    largest_ask_wall_distance_pct=req.depth_largest_ask_wall_distance_pct,
+                    depth_buy_pressure_score=req.depth_buy_pressure_score,
+                    depth_sell_pressure_score=req.depth_sell_pressure_score,
+                    depth_order_book_signal=req.depth_order_book_signal,
+                    depth_reliable=req.depth_reliable,
                     position_qty=req.bot_position_qty,
                     total_account_qty=req.total_account_qty,
                     locked_long_term_qty=req.locked_long_term_qty,
@@ -490,6 +531,11 @@ def snapshot_to_signal_request(
     server's trade history, so its count would always read zero and silently
     disable the daily-limit gate.
     """
+    depth = payload.get("depthAnalysis") if isinstance(payload.get("depthAnalysis"), dict) else {}
+    largest_bid = depth.get("largestBidWall") or {}
+    largest_ask = depth.get("largestAskWall") or {}
+    nearest_bid = depth.get("nearestLargeBidWall") or {}
+    nearest_ask = depth.get("nearestLargeAskWall") or {}
     return SignalRequest(
         requestId=request_id,
         symbol=symbol,
@@ -523,7 +569,18 @@ def snapshot_to_signal_request(
         depthBid1Size=_payload_get(payload, "depthBid1Size"),
         depthBid1MaxSize=_payload_get(payload, "depthBid1MaxSize"),
         depthQueueDropPct=_payload_get(payload, "depthQueueDropPct"),
-        depthReliable=_payload_get(payload, "depthReliable"),
+        depthReliable=depth.get("depthReliable", _payload_get(payload, "depthReliable")),
+        depthLevelsUsed=depth.get("levelsUsed"), spreadPct=depth.get("spreadPct"),
+        depthBidAskRatioTop5=depth.get("bidAskRatioTop5"), depthBidAskRatioTop10=depth.get("bidAskRatioTop10"),
+        depthBidAskRatioTop25=depth.get("bidAskRatioTop25"), depthImbalanceTop5=depth.get("imbalanceTop5"),
+        depthImbalanceTop10=depth.get("imbalanceTop10"), depthImbalanceTop25=depth.get("imbalanceTop25"),
+        depthBidConcentrationTop3Pct=depth.get("bidConcentrationTop3Pct"), depthAskConcentrationTop3Pct=depth.get("askConcentrationTop3Pct"),
+        depthLargestBidWallDistancePct=largest_bid.get("distancePct"), depthLargestAskWallDistancePct=largest_ask.get("distancePct"),
+        depthNearestBidWallDistancePct=nearest_bid.get("distancePct"), depthNearestAskWallDistancePct=nearest_ask.get("distancePct"),
+        depthBuyPressureScore=depth.get("buyPressureScore"), depthSellPressureScore=depth.get("sellPressureScore"),
+        depthOrderBookSignal=depth.get("orderBookSignal"),
+        depthWallConcentrationRisk=(bool(depth.get("bidWallConcentrationRisk") or depth.get("askWallConcentrationRisk")) if depth else None),
+        quoteAgeSeconds=payload.get("quoteAgeSeconds"), ohlcvAgeSeconds=payload.get("ohlcvAgeSeconds"), depthAgeSeconds=payload.get("depthAgeSeconds"),
         marketRegime=_payload_get(payload, "marketRegime"),
         botPositionQty=payload.get("botPositionQty", 0),
         totalAccountQty=payload.get("totalAccountQty", 0),

@@ -26,6 +26,24 @@ class FakeGateway:
         )
 
 
+class CountingGateway:
+    def __init__(self):
+        self.calls = 0
+
+    async def get_institutions(self, symbol, limit=10, period="Daily", include_reported_orders=True):
+        self.calls += 1
+        return _resp(symbol, [{"name": "Yatırım Fonları", "value": 100}], [])
+
+
+async def test_akd_cache_avoids_second_gateway_call():
+    gateway = CountingGateway()
+    first = await get_broker_flow_context(["THYAO"], gateway=gateway)
+    second = await get_broker_flow_context(["THYAO"], gateway=gateway)
+    assert gateway.calls == 1
+    assert first["THYAO"]["smartMoneyFlow"] == "STRONG_BUY"
+    assert second["THYAO"]["dataAgeSeconds"] >= 0
+
+
 def _resp(symbol: str, buyers: list[dict], sellers: list[dict]) -> dict:
     return {
         "ok": True,

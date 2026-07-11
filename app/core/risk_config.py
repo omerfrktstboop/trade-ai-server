@@ -110,6 +110,14 @@ class RiskConfig(BaseSettings):
         le=100,
         description="Maximum bid queue drop percent allowed for new BUY decisions",
     )
+    max_spread_pct_for_buy: float = Field(default=0.50, ge=0)
+    min_depth_bid_ask_ratio_top10_for_buy: float = Field(default=0.60, ge=0)
+    max_depth_sell_pressure_score_for_buy: float = Field(default=80.0, ge=0, le=100)
+    block_buy_on_strong_sell_pressure: bool = True
+    block_buy_on_near_ask_wall: bool = False
+    near_wall_distance_pct: float = Field(default=0.30, ge=0)
+    max_quote_age_seconds_for_buy: float = Field(default=30.0, ge=0)
+    max_depth_age_seconds_for_buy: float = Field(default=15.0, ge=0)
 
     # ── Restrictions ───────────────────────────────────────────────────────
 

@@ -17,6 +17,19 @@ meaningfully exceed the distance from entry to stop-loss. Your sole purpose
 is to evaluate market data and output an actionable trading signal — nothing
 more.
 
+DEPTH CONTEXT RULES: ``depthContext`` is an instantaneous, cancelable order-book
+summary, never a standalone BUY/SELL reason. Ignore it completely when
+``depthReliable`` is false or depth age is stale. Prefer agreement across Top5,
+Top10 and Top25; never infer support/resistance from one first-level order.
+Large walls may be spoofed, especially when concentration risk is true. High
+spread reduces willingness to open a position. Strong sell pressure requires
+higher BUY confidence, while buy pressure conflicting with the technical trend
+must not produce BUY. Combine depth only with technicals, volume, news, KAP,
+AKD and market regime. Mention at most the decisive aggregate metric in the
+reason (for example Top10 ratio and nearest-wall distance); never repeat raw
+depth levels. Treat stale quotes, off-session snapshots and stale depth as
+unavailable live data.
+
 ────────────────────────────────────────────────────────────
 MANDATORY RULES — violating any of these makes the decision invalid:
 ────────────────────────────────────────────────────────────

@@ -139,6 +139,14 @@ async def _screen(
     try:
         depth = await gw.get_depth(symbol)
         wall_ratio = _ask_bid_ratio(depth)
+        analysis = depth.get("depthAnalysis") or depth.get("analysis") or {}
+        if analysis.get("orderBookSignal") == "STRONG_SELL_PRESSURE":
+            logger.debug("Discovery reject %s: strong sell pressure", symbol)
+            return None
+        spread_pct = _to_float(analysis.get("spreadPct"))
+        if spread_pct is not None and spread_pct > 0.50:
+            logger.debug("Discovery reject %s: spread %.2f%%", symbol, spread_pct)
+            return None
         if wall_ratio is not None and wall_ratio > settings.discovery_max_ask_bid_ratio:
             logger.debug(
                 "Discovery reject %s: sell wall ask/bid=%.2f", symbol, wall_ratio
@@ -159,6 +167,10 @@ async def _screen(
 def _ask_bid_ratio(depth: dict[str, Any]) -> float | None:
     """Toplam ask hacmi / toplam bid hacmi. Veri yoksa None."""
     payload = depth.get("payload") or depth
+    analysis = payload.get("depthAnalysis") or payload.get("analysis") or {}
+    bid_ask = _to_float(analysis.get("bidAskRatioTop25"))
+    if bid_ask is not None and bid_ask > 0:
+        return 1.0 / bid_ask
     bids = payload.get("bids") or []
     asks = payload.get("asks") or []
     total_bid = sum(_to_float(level.get("size")) or 0.0 for level in bids)
@@ -205,7 +217,8 @@ async def _upsert_watchlist(
                 if score is None:
                     session.add(WatchlistQualityScore(symbol=symbol, **values))
                 else:
-                    for key, value in values.items(): setattr(score, key, value)
+                    for key, value in values.items():
+                        setattr(score, key, value)
             await session.commit()
     except Exception:
         logger.exception("Watchlist upsert failed")

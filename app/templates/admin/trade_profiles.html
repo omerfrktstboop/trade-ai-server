@@ -63,6 +63,10 @@
   {{ num_field('min_confidence_for_sell', 'Min Confidence SELL', p.min_confidence_for_sell) }}
   {{ num_field('max_natr_for_buy', 'Max nATR for BUY', p.max_natr_for_buy) }}
   {{ num_field('max_depth_queue_drop_pct_for_buy', 'Max Depth Queue Drop %', p.max_depth_queue_drop_pct_for_buy) }}
+  {{ num_field('max_spread_pct_for_buy', 'Max Spread % for BUY', p.max_spread_pct_for_buy) }}
+  {{ num_field('min_depth_bid_ask_ratio_top10_for_buy', 'Min Depth Bid/Ask Top10', p.min_depth_bid_ask_ratio_top10_for_buy) }}
+  {{ num_field('max_depth_sell_pressure_score_for_buy', 'Max Sell Pressure for BUY', p.max_depth_sell_pressure_score_for_buy) }}
+  {{ num_field('near_wall_distance_pct', 'Near Ask Wall Distance %', p.near_wall_distance_pct) }}
   {{ bool_field('require_alpha_trend_alignment', 'Require AlphaTrend Alignment', p.require_alpha_trend_alignment) }}
   {{ bool_field('require_indicator_consensus_alignment', 'Require Indicator Consensus', p.require_indicator_consensus_alignment) }}
 {% endcall %}

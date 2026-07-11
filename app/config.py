@@ -124,6 +124,8 @@ class Settings(BaseSettings):
     # kararları gateway'e emir olarak gönderilir. REAL_LIVE scanner'da
     # Phase 2 boyunca kod seviyesinde bloklu.
     scanner_allow_orders: bool = False
+    # Manual admin approval is a separate order gate and defaults closed.
+    manual_approval_allow_orders: bool = False
 
     # Makro filtre: piyasa geneli rejim bu endeks sembolünden okunur.
     # Boş string makro filtreyi tamamen kapatır.

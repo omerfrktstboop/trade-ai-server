@@ -47,6 +47,7 @@ from app.services.matriks_gateway import (
     gateway_client,
 )
 from app.services.notifications import notify_gateway_event, notify_order_event, notify_risk_block
+from app.services.manual_approvals import queue_response
 from app.services.position_sync import sync_positions_from_gateway
 from app.services.signal_override import list_pending_override_symbols
 from app.services.trade_profile import get_active_profile
@@ -374,11 +375,11 @@ class SymbolScanner:
         Buradaki kapılar ilk savunma hattı; gateway (C#) aynı kontrolleri
         kendi sabit limitleriyle bir kez daha uygular.
         """
-        if not settings.scanner_allow_orders:
-            return
-
         response = result.response
-        if not response.allow_order or response.requires_confirmation:
+        if response.requires_confirmation:
+            await queue_response(response, result.mode)
+            return
+        if not settings.scanner_allow_orders or not response.allow_order:
             return
         if response.action not in (SignalAction.BUY, SignalAction.SELL):
             return

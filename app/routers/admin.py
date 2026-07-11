@@ -27,6 +27,7 @@ from app.models.db import (
     ConfigAuditLog,
     LockedPosition,
     MarketSnapshot,
+    ManualApprovalRequest,
     OrderLog,
     RiskDecision,
     TradeProfile,
@@ -51,6 +52,7 @@ from app.services.notifications import notification_service
 from app.services.scanner import scanner
 from app.services.replay import replay_batch
 from app.services.performance_report import build_performance_report
+from app.services.manual_approvals import approve_request, reject_request
 from app.services.signal_override import SELL_ALL_SENTINEL_QTY, create_override
 from app.services.trade_profile import (
     EDITABLE_FIELDS,
@@ -290,6 +292,25 @@ async def admin_performance(request: Request) -> HTMLResponse:
         logger.warning("Performance report failed: %s", exc)
         report, error = {"totalDecisions": 0, "allowedOrders": 0, "blockedDecisions": 0, "ordersSent": 0, "filledOrders": 0, "rejectedOrders": 0, "estimatedRealizedPnl": 0, "topBlockReason": "-", "latestDecisions": []}, str(exc)
     return templates.TemplateResponse(request, "admin/performance.html", {"identity": identity, "active": "performance", "report": report, "error": error, "range": range_value, "symbol": symbol or ""})
+
+@admin_router.get("/approvals", response_class=HTMLResponse)
+async def admin_approvals(request: Request) -> HTMLResponse:
+    identity = await require_admin(request)
+    async with async_session_factory() as session:
+        rows = list((await session.execute(select(ManualApprovalRequest).order_by(ManualApprovalRequest.created_at.desc()))).scalars().all())
+    return templates.TemplateResponse(request, "admin/approvals.html", {"identity": identity, "active": "approvals", "rows": rows})
+
+@admin_router.post("/approvals/{approval_id}/approve")
+async def admin_approve(request: Request, approval_id: int) -> RedirectResponse:
+    identity = await require_admin(request); form = await request.form()
+    await approve_request(approval_id, identity, str(form.get("admin_note") or ""))
+    return RedirectResponse("/admin/approvals", status_code=303)
+
+@admin_router.post("/approvals/{approval_id}/reject")
+async def admin_reject(request: Request, approval_id: int) -> RedirectResponse:
+    identity = await require_admin(request); form = await request.form()
+    await reject_request(approval_id, identity, str(form.get("admin_note") or ""))
+    return RedirectResponse("/admin/approvals", status_code=303)
 
 
 @admin_router.get("/why-blocked", response_class=HTMLResponse)

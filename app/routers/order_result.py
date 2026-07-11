@@ -27,8 +27,13 @@ class OrderResultRequest(BaseModel):
     request_id: str = Field(..., alias="requestId")
     symbol: str
     action: str
-    qty: float
-    price: float
+    qty: float | None = None  # legacy: cumulative filled qty when supplied by gateway
+    price: float | None = None  # legacy: average execution/limit price
+    order_qty: float | None = Field(None, alias="orderQty")
+    filled_qty: float | None = Field(None, alias="filledQty")
+    last_fill_qty: float | None = Field(None, alias="lastFillQty")
+    avg_price: float | None = Field(None, alias="avgPrice")
+    limit_price: float | None = Field(None, alias="limitPrice")
     status: str
     matriks_message: str = Field(..., alias="matriksMessage")
     order_id: str | None = Field(None, alias="orderId")
@@ -42,6 +47,32 @@ class OrderResultResponse(BaseModel):
     status: str
 
 
+FINAL_STATUSES = {"FILLED", "REJECTED", "CANCELED", "CANCELLED", "EXPIRED", "ERROR"}
+STATUS_RANK = {
+    "PENDING": 0,
+    "SENT_PENDING": 10,
+    "NEW": 20,
+    "SENT": 25,
+    "CANCEL_REQUESTED": 30,
+    "PARTIALLY_FILLED": 40,
+    "FILLED": 100,
+    "REJECTED": 100,
+    "CANCELED": 100,
+    "CANCELLED": 100,
+    "EXPIRED": 100,
+    "ERROR": 100,
+}
+
+
+def should_apply_status(current: str | None, incoming: str) -> bool:
+    """Return whether an exchange event may advance the persisted lifecycle."""
+    old = (current or "PENDING").upper()
+    new = incoming.upper()
+    if old in FINAL_STATUSES:
+        return old == new
+    return STATUS_RANK.get(new, 0) >= STATUS_RANK.get(old, 0)
+
+
 # ── Endpoint ─────────────────────────────────────────────────────────────────
 
 
@@ -52,31 +83,34 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
     Persists to ``order_logs`` table and returns ``{"status": "ok"}``.
     DB errors are swallowed so that the endpoint never blocks Matriks IQ.
     """
+    event_applied = False
     try:
         async with async_session_factory() as session:
             entry = (
                 await session.execute(
                     select(OrderLog)
-                    .where(
-                        OrderLog.request_id == body.request_id,
-                        OrderLog.status.in_(
-                            ("SENT_PENDING", "NEW", "PARTIALLY_FILLED", "CANCEL_REQUESTED")
-                        ),
-                    )
+                    .where(OrderLog.request_id == body.request_id)
                     .order_by(OrderLog.created_at.desc())
                     .limit(1)
                 )
             ).scalar_one_or_none()
+            incoming_status = body.status.upper()
+            order_qty = body.order_qty if body.order_qty is not None else body.qty
+            filled_qty = body.filled_qty if body.filled_qty is not None else body.qty
+            effective_qty = filled_qty if filled_qty is not None else (order_qty or 0.0)
+            effective_price = body.avg_price or body.price or body.limit_price
             if entry is None:
                 entry = OrderLog(request_id=body.request_id, symbol=body.symbol,
-                    action=body.action, qty=body.qty, price=body.price,
-                    status=body.status, order_id=body.order_id,
+                    action=body.action, qty=effective_qty, price=effective_price,
+                    status=incoming_status, order_id=body.order_id,
                     matrix_message=body.matriks_message)
                 session.add(entry)
-            else:
-                entry.status = body.status
-                entry.qty = body.qty
-                entry.price = body.price
+                event_applied = True
+            elif should_apply_status(entry.status, incoming_status):
+                event_applied = entry.status.upper() != incoming_status
+                entry.status = incoming_status
+                entry.qty = max(entry.qty or 0.0, effective_qty)
+                entry.price = effective_price or entry.price
                 entry.order_id = body.order_id or entry.order_id
                 entry.matrix_message = body.matriks_message
             await session.commit()
@@ -87,13 +121,13 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
             body.symbol,
         )
 
-    if body.status.upper() in {"FILLED", "REJECTED", "CANCELED", "ERROR"}:
+    if event_applied and body.status.upper() in FINAL_STATUSES:
         await notify_order_event(
             body.status,
             symbol=body.symbol,
             side=body.action,
-            qty=body.qty,
-            price=body.price,
+            qty=body.filled_qty if body.filled_qty is not None else (body.qty or 0.0),
+            price=body.avg_price or body.price or body.limit_price,
             order_id=body.order_id,
             reason=body.matriks_message,
             request_id=body.request_id,

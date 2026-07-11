@@ -40,6 +40,14 @@ def _published(value: Any) -> datetime | None:
         return None
 
 
+def _is_active_risk(published_at: datetime | None, *, now: datetime, lookback_hours: int) -> bool:
+    """Unknown dates remain auditable but cannot create an unbounded live lock."""
+    if published_at is None:
+        return False
+    normalized = published_at if published_at.tzinfo else published_at.replace(tzinfo=UTC)
+    return normalized.astimezone(UTC) >= now.astimezone(UTC) - timedelta(hours=lookback_hours)
+
+
 def classify_kap(title: str, content: str | None) -> tuple[str, str]:
     text = f"{title} {content or ''}".casefold()
     for level, keywords in _RISK_KEYWORDS.items():
@@ -79,7 +87,7 @@ async def sync_kap_events(symbol: str, limit: int = 50) -> list[KapEvent]:
                 if not title: continue
                 content = _value(raw, "content", "body", "description", "text")
                 content = str(content) if content is not None else None
-                published_at = _published(_value(raw, "publishedAt", "published_at", "timestamp", "date"))
+                published_at = _published(_value(raw, "publishedAt", "published_at", "timestamp", "date", "datetime", "DateTime"))
                 existing = select(KapEvent).where(KapEvent.symbol == symbol, KapEvent.title == title)
                 existing = existing.where(KapEvent.published_at.is_(None) if published_at is None else KapEvent.published_at == published_at)
                 if (await session.execute(existing)).scalar_one_or_none() is not None: continue
@@ -101,11 +109,13 @@ async def get_kap_context(symbols: list[str]) -> dict[str, Any]:
         await sync_kap_events(symbol)
         try:
             async with async_session_factory() as session:
-                cutoff = datetime.now(UTC) - timedelta(hours=24)
                 rows = list((await session.execute(select(KapEvent).where(KapEvent.symbol == symbol).order_by(KapEvent.published_at.desc().nullslast()).limit(10))).scalars().all())
-                risk_rows = [row for row in rows if row.risk_level in {"HIGH", "BLOCKING"} and (row.published_at is None or row.published_at >= cutoff)]
+                # Unknown dates stay visible for audit but never become an
+                # unbounded live BUY lock. Only dated events enter the window.
+                now = datetime.now(UTC)
+                risk_rows = [row for row in rows if row.risk_level in {"HIGH", "BLOCKING"} and _is_active_risk(row.published_at, now=now, lookback_hours=24)]
         except Exception:
             result[symbol] = {"latestEvents": [], "riskEvents24h": [], "hasBlockingRisk": False, "summary": "KAP unavailable"}; continue
-        serialize = lambda row: {"title": row.title, "eventType": row.event_type, "riskLevel": row.risk_level, "publishedAt": row.published_at.isoformat() if row.published_at else None, "source": row.source}
+        serialize = lambda row: {"title": row.title, "eventType": row.event_type, "riskLevel": row.risk_level, "publishedAt": row.published_at.isoformat() if row.published_at else None, "dateUnknown": row.published_at is None, "source": row.source}
         result[symbol] = {"latestEvents": [serialize(row) for row in rows[:5]], "riskEvents24h": [serialize(row) for row in risk_rows], "hasBlockingRisk": any(row.risk_level == "BLOCKING" for row in risk_rows), "summary": f"{len(rows)} KAP events, {len(risk_rows)} elevated risk events"}
     return result

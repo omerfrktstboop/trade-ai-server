@@ -111,6 +111,11 @@ namespace Matriks.Lean.Algotrader
         // ── Constants ────────────────────────────────────────────────
 
         private const int MaxCloseHistory = 240;
+        private const int MaxHttpHeaderBytes = 16384;
+        private const int MaxHttpBodyBytes = 1048576;
+        private const int ConfigStaleSeconds = 180;
+        private const int PositionSyncIntervalSeconds = 45;
+        private static readonly TimeSpan IdempotencyTtl = TimeSpan.FromHours(24);
 
         // ── HTTP server state ────────────────────────────────────────
 
@@ -122,8 +127,10 @@ namespace Matriks.Lean.Algotrader
 
         // ── Market data state (TradeAiAgenticBot'tan birebir) ────────
 
-        private readonly ConcurrentDictionary<string, decimal> _botPositionQtyBySymbol = new ConcurrentDictionary<string, decimal>();
+        private ConcurrentDictionary<string, decimal> _accountNetQtyBySymbol = new ConcurrentDictionary<string, decimal>();
+        private ConcurrentDictionary<string, decimal> _accountAvailableQtyBySymbol = new ConcurrentDictionary<string, decimal>();
         private readonly ConcurrentDictionary<string, List<decimal>> _closeHistoryBySymbol = new ConcurrentDictionary<string, List<decimal>>();
+        private readonly ConcurrentDictionary<string, DateTime> _lastCloseBarUtcBySymbol = new ConcurrentDictionary<string, DateTime>();
         private readonly ConcurrentDictionary<string, MarketQuoteSnapshot> _lastValidQuoteBySymbol = new ConcurrentDictionary<string, MarketQuoteSnapshot>();
         private readonly ConcurrentDictionary<string, OhlcvSnapshot> _lastOhlcvBySymbol = new ConcurrentDictionary<string, OhlcvSnapshot>();
         private readonly ConcurrentDictionary<string, DateTime> _marketDataWarningUtcByKey = new ConcurrentDictionary<string, DateTime>();
@@ -148,8 +155,9 @@ namespace Matriks.Lean.Algotrader
         {
             NullValueHandling = NullValueHandling.Ignore
         };
-        private readonly ConcurrentDictionary<string, object> _sentRequestIds = new ConcurrentDictionary<string, object>();
+        private readonly ConcurrentDictionary<string, IdempotencyEntry> _sentRequestIds = new ConcurrentDictionary<string, IdempotencyEntry>();
         private readonly ConcurrentDictionary<string, int> _dailyTradeCountBySymbol = new ConcurrentDictionary<string, int>();
+        private readonly ConcurrentDictionary<string, PendingOrderContext> _pendingOrdersByRequestId = new ConcurrentDictionary<string, PendingOrderContext>();
         private readonly ConcurrentDictionary<string, PendingOrderContext> _pendingOrdersBySymbolSide = new ConcurrentDictionary<string, PendingOrderContext>();
         private readonly ConcurrentDictionary<string, PendingOrderContext> _pendingOrdersByOrderId = new ConcurrentDictionary<string, PendingOrderContext>();
         private readonly ConcurrentDictionary<string, GatewayOrderSnapshot> _recentOrderStatesByOrderId = new ConcurrentDictionary<string, GatewayOrderSnapshot>();
@@ -161,6 +169,12 @@ namespace Matriks.Lean.Algotrader
         private bool _subscriptionsInitialized;
         private readonly object _symbolSubscriptionLock = new object();
         private readonly SemaphoreSlim _configFetchLock = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _orderGate = new SemaphoreSlim(1, 1);
+        private readonly ConcurrentQueue<OrderResultEnvelope> _orderResultQueue = new ConcurrentQueue<OrderResultEnvelope>();
+        private readonly SemaphoreSlim _orderResultSignal = new SemaphoreSlim(0);
+        private readonly ConcurrentDictionary<string, string> _lastReportedStatusByKey = new ConcurrentDictionary<string, string>();
+        private Task _orderResultWorker;
+        private DateTime _lastPositionSyncUtc = DateTime.MinValue;
         private readonly List<string> _newsTrackedSymbols = new List<string>();
         private readonly List<NewsKeywordSubscription> _newsKeywordSubscriptions = new List<NewsKeywordSubscription>();
         private readonly List<NewsSymbolKeywordSubscription> _newsSymbolKeywordSubscriptions = new List<NewsSymbolKeywordSubscription>();
@@ -193,7 +207,8 @@ namespace Matriks.Lean.Algotrader
                 RegisterNewsSubscriptionsForSymbol(normalized);
                 InitializeIndicators(normalized);
 
-                _botPositionQtyBySymbol[normalized] = 0m;
+                _accountNetQtyBySymbol[normalized] = 0m;
+                _accountAvailableQtyBySymbol[normalized] = 0m;
                 _closeHistoryBySymbol[normalized] = new List<decimal>();
             }
             _subscriptionsInitialized = true;
@@ -204,6 +219,7 @@ namespace Matriks.Lean.Algotrader
             LoadRealPositionsSnapshot();
 
             _cts = new CancellationTokenSource();
+            _orderResultWorker = Task.Run(() => ProcessOrderResultQueueAsync(_cts.Token));
             try
             {
                 _listener = new TcpListener(IPAddress.Loopback, Port);
@@ -229,16 +245,15 @@ namespace Matriks.Lean.Algotrader
         {
             ResetDailyCachesIfNeeded();
             UpdateOhlcvSnapshotFromBarData(barData);
-            RefreshCloseHistoryFromMarketData();
         }
 
         public override void OnTimer()
         {
             ResetDailyCachesIfNeeded();
-            RefreshCloseHistoryFromMarketData();
             if ((DateTime.UtcNow - _lastConfigFetchUtc).TotalSeconds >= 60)
                 _ = FetchAndApplyServerConfigAsync();
-            if (!_realPositionsLoadedFromSnapshot)
+            CleanupIdempotencyCache();
+            if ((DateTime.UtcNow - _lastPositionSyncUtc).TotalSeconds >= PositionSyncIntervalSeconds)
             {
                 LoadRealPositionsSnapshot();
             }
@@ -324,7 +339,11 @@ namespace Matriks.Lean.Algotrader
                 _pendingOrdersByOrderId[orderId] = context;
             }
 
-            decimal reportQty = filledQty > 0 ? filledQty : (orderQty > 0 ? orderQty : context.Qty);
+            decimal lastFillQty = 0m;
+            GatewayOrderSnapshot priorSnapshot;
+            if (!string.IsNullOrWhiteSpace(orderId)
+                && _recentOrderStatesByOrderId.TryGetValue(orderId, out priorSnapshot))
+                lastFillQty = Math.Max(0m, filledQty - priorSnapshot.FilledQty);
             decimal reportPrice = avgPx > 0 ? avgPx : (order.Price > 0 ? order.Price : context.Price);
             string message = "Matriks order update status=" + status
                 + " orderQty=" + orderQty
@@ -348,10 +367,18 @@ namespace Matriks.Lean.Algotrader
                 };
             }
 
-            PendingOrderContext capturedContext = context;
-            Task.Run(async () =>
+            EnqueueOrderResult(new OrderResultEnvelope
             {
-                await ReportOrderResultAsync(capturedContext, status, message, orderId, reportQty, reportPrice);
+                Context = context,
+                Status = status,
+                MatriksMessage = message,
+                OrderId = orderId,
+                OrderQty = orderQty > 0 ? orderQty : context.Qty,
+                FilledQty = filledQty,
+                LastFillQty = lastFillQty,
+                AvgPrice = avgPx,
+                LimitPrice = order.Price > 0 ? order.Price : context.Price,
+                Price = reportPrice
             });
 
             if (IsFinalOrderStatus(status))
@@ -360,7 +387,13 @@ namespace Matriks.Lean.Algotrader
                 {
                     _pendingOrdersByOrderId.TryRemove(orderId, out _);
                 }
-                _pendingOrdersBySymbolSide.TryRemove(BuildSymbolSideKey(symbol, context.Action), out _);
+                PendingOrderContext removed;
+                _pendingOrdersByRequestId.TryRemove(context.RequestId, out removed);
+                string activeKey = BuildSymbolSideKey(symbol, context.Action);
+                PendingOrderContext active;
+                if (_pendingOrdersBySymbolSide.TryGetValue(activeKey, out active)
+                    && active.RequestId == context.RequestId)
+                    _pendingOrdersBySymbolSide.TryRemove(activeKey, out removed);
             }
         }
 
@@ -375,6 +408,17 @@ namespace Matriks.Lean.Algotrader
                 if (_listener != null)
                 {
                     _listener.Stop();
+                }
+                try { _orderResultSignal.Release(); }
+                catch (ObjectDisposedException) { }
+                if (_orderResultWorker != null)
+                {
+                    try
+                    {
+                        if (!_orderResultWorker.Wait(TimeSpan.FromSeconds(5)))
+                            SafeDebug("Order result queue shutdown timed out; remaining events will be retried by backend reconciliation.");
+                    }
+                    catch (Exception ex) { SafeDebug("Order result queue shutdown error: " + ex.Message); }
                 }
                 if (_http != null)
                 {
@@ -437,6 +481,11 @@ namespace Matriks.Lean.Algotrader
                 if (request == null)
                 {
                     await WriteJsonAsync(stream, 400, new { ok = false, error = "bad request" });
+                    return;
+                }
+                if (!string.IsNullOrWhiteSpace(request.ParseError))
+                {
+                    await WriteJsonAsync(stream, 400, new { ok = false, error = request.ParseError });
                     return;
                 }
 
@@ -681,7 +730,7 @@ namespace Matriks.Lean.Algotrader
                     string body = await result.Content.ReadAsStringAsync();
                     if (!result.IsSuccessStatusCode)
                     {
-                        SafeDebug("Server config fetch failed HTTP " + (int)result.StatusCode + " body=" + body);
+                        SafeDebug("Server config fetch failed HTTP " + (int)result.StatusCode);
                         return false;
                     }
 
@@ -694,28 +743,52 @@ namespace Matriks.Lean.Algotrader
                         .Where(x => !string.IsNullOrWhiteSpace(x))
                         .Distinct()
                         .ToArray();
-                    IndicatorPeriod = ParseSymbolPeriod(cfg.Value<string>("indicatorPeriod"));
+                    SymbolPeriod indicatorPeriod = ParseSymbolPeriod(cfg.Value<string>("indicatorPeriod"));
+                    Dictionary<string, decimal> lockedLongTermQty = cfg["lockedLongTermQty"] != null
+                        ? cfg["lockedLongTermQty"].ToObject<Dictionary<string, decimal>>()
+                        : new Dictionary<string, decimal>();
+                    string runtimeMode = NormalizeMode(cfg.Value<string>("mode"));
+                    bool enableDemoOrders = cfg.Value<bool?>("enableDemoOrders") ?? false;
+                    bool enableRealOrders = cfg.Value<bool?>("enableRealOrders") ?? false;
+                    bool requireDemoAccount = cfg.Value<bool?>("requireDemoAccount") ?? true;
+                    bool demoAccountConfirmed = cfg.Value<bool?>("demoAccountConfirmed") ?? false;
+                    decimal maxOrderValueTl = cfg.Value<decimal?>("maxOrderValueTl") ?? 0m;
+                    decimal maxQtyPerOrder = cfg.Value<decimal?>("maxQtyPerOrder") ?? 0m;
+                    int maxOrdersPerDay = cfg.Value<int?>("maxOrdersPerDay") ?? 0;
+                    int maxOrdersPerSymbolPerDay = cfg.Value<int?>("maxOrdersPerSymbolPerDay") ?? 0;
+                    string orderTimeInForce = cfg.Value<string>("orderTimeInForce") ?? "Day";
+                    string activeProfileCode = cfg.Value<string>("profileCode") ?? "UNKNOWN";
+
+                    bool liveMode = runtimeMode == "DEMO_LIVE" || runtimeMode == "REAL_LIVE";
+                    if (liveMode && (symbols.Length == 0 || maxOrderValueTl <= 0m
+                        || maxQtyPerOrder <= 0m || maxOrdersPerDay <= 0
+                        || maxOrdersPerSymbolPerDay <= 0))
+                    {
+                        SafeDebug("Server config rejected: live mode requires allowed symbols and positive risk limits");
+                        return false;
+                    }
+
+                    // Parsing above is deliberately completed before any live
+                    // field is changed. Invalid live limits remain fail-closed.
                     if (_subscriptionsInitialized)
                     {
                         foreach (string symbol in symbols)
                             EnsurePortfolioSymbolSubscribed(symbol);
                     }
+                    IndicatorPeriod = indicatorPeriod;
                     AllowedSymbols = symbols;
-
-                    LockedLongTermQty = cfg["lockedLongTermQty"] != null
-                        ? cfg["lockedLongTermQty"].ToObject<Dictionary<string, decimal>>()
-                        : new Dictionary<string, decimal>();
-                    RuntimeMode = NormalizeMode(cfg.Value<string>("mode"));
-                    EnableDemoOrders = cfg.Value<bool?>("enableDemoOrders") ?? false;
-                    EnableRealOrders = cfg.Value<bool?>("enableRealOrders") ?? false;
-                    RequireDemoAccount = cfg.Value<bool?>("requireDemoAccount") ?? true;
-                    DemoAccountConfirmed = cfg.Value<bool?>("demoAccountConfirmed") ?? false;
-                    MaxOrderValueTl = cfg.Value<decimal?>("maxOrderValueTl") ?? 0m;
-                    MaxQtyPerOrder = cfg.Value<decimal?>("maxQtyPerOrder") ?? 0m;
-                    MaxOrdersPerDay = cfg.Value<int?>("maxOrdersPerDay") ?? 0;
-                    MaxOrdersPerSymbolPerDay = cfg.Value<int?>("maxOrdersPerSymbolPerDay") ?? 0;
-                    OrderTimeInForce = cfg.Value<string>("orderTimeInForce") ?? "Day";
-                    ActiveProfileCode = cfg.Value<string>("profileCode") ?? "UNKNOWN";
+                    LockedLongTermQty = lockedLongTermQty;
+                    RuntimeMode = runtimeMode;
+                    EnableDemoOrders = enableDemoOrders;
+                    EnableRealOrders = enableRealOrders;
+                    RequireDemoAccount = requireDemoAccount;
+                    DemoAccountConfirmed = demoAccountConfirmed;
+                    MaxOrderValueTl = maxOrderValueTl;
+                    MaxQtyPerOrder = maxQtyPerOrder;
+                    MaxOrdersPerDay = maxOrdersPerDay;
+                    MaxOrdersPerSymbolPerDay = maxOrdersPerSymbolPerDay;
+                    OrderTimeInForce = orderTimeInForce;
+                    ActiveProfileCode = activeProfileCode;
 
                     // Haber ayarları da server'dan gelir (algo panelinde değil).
                     // Boş bırakılırsa: keyword aboneliği yok, sembol bazlı pasif
@@ -813,9 +886,14 @@ namespace Matriks.Lean.Algotrader
                 configAgeSeconds = _lastConfigFetchUtc == DateTime.MinValue
                     ? (double?)null
                     : Math.Round((DateTime.UtcNow - _lastConfigFetchUtc).TotalSeconds, 1),
+                configStale = IsConfigStale(),
                 profileCode = ActiveProfileCode,
                 runtimeMode = RuntimeMode,
                 positionsLoaded = _realPositionsLoadedFromSnapshot,
+                lastPositionSyncUtc = _lastPositionSyncUtc == DateTime.MinValue ? null : _lastPositionSyncUtc.ToString("o"),
+                positionSyncAgeSeconds = _lastPositionSyncUtc == DateTime.MinValue
+                    ? (double?)null
+                    : Math.Round((DateTime.UtcNow - _lastPositionSyncUtc).TotalSeconds, 1),
                 autoOrderEnabled = _autoOrderEnabled,
                 testAutoOrderEnabled = _testAutoOrderEnabled,
                 quoteAgeSeconds = quoteAgeSeconds,
@@ -871,15 +949,21 @@ namespace Matriks.Lean.Algotrader
             var entries = new List<object>();
             var seen = new HashSet<string>();
 
-            foreach (var kv in _botPositionQtyBySymbol)
+            foreach (var kv in _accountAvailableQtyBySymbol)
             {
                 seen.Add(kv.Key);
+                decimal netQty;
+                _accountNetQtyBySymbol.TryGetValue(kv.Key, out netQty);
+                decimal locked = GetLockedLongTermQty(kv.Key);
                 entries.Add(new
                 {
                     symbol = kv.Key,
-                    botQty = ToDouble(kv.Value),
-                    lockedLongTermQty = ToDouble(GetLockedLongTermQty(kv.Key)),
-                    totalQty = ToDouble(kv.Value + GetLockedLongTermQty(kv.Key))
+                    accountNetQty = ToDouble(netQty),
+                    accountAvailableQty = ToDouble(kv.Value),
+                    lockedLongTermQty = ToDouble(locked),
+                    sellableQty = ToDouble(Math.Max(0m, kv.Value - locked)),
+                    botQty = ToDouble(kv.Value), // deprecated compatibility alias
+                    totalQty = ToDouble(netQty)
                 });
             }
 
@@ -893,7 +977,10 @@ namespace Matriks.Lean.Algotrader
                     symbol = kv.Key,
                     botQty = 0.0,
                     lockedLongTermQty = ToDouble(kv.Value),
-                    totalQty = ToDouble(kv.Value)
+                    accountNetQty = 0.0,
+                    accountAvailableQty = 0.0,
+                    sellableQty = 0.0,
+                    totalQty = 0.0
                 });
             }
 
@@ -943,7 +1030,8 @@ namespace Matriks.Lean.Algotrader
             }
             catch (Exception ex)
             {
-                await WriteJsonAsync(stream, 400, new { ok = false, error = "invalid JSON body: " + ex.Message });
+                SafeDebug("Invalid order JSON: " + ex.Message);
+                await WriteJsonAsync(stream, 400, new { ok = false, error = "invalid JSON body" });
                 return;
             }
             string orderId = (cancel.OrderId ?? "").Trim();
@@ -1228,6 +1316,9 @@ namespace Matriks.Lean.Algotrader
             if (!string.IsNullOrWhiteSpace(symbol))
                 query = query.Where(x => x.Symbols.Any(s => NormalizeSymbol(s) == symbol));
             query = query.Where(IsKapLikeNews);
+            DateTime cutoffUtc = DateTime.UtcNow.AddHours(-lookbackHours);
+            query = query.Where(x => x.DateTime != DateTime.MinValue
+                && x.DateTime.ToUniversalTime() >= cutoffUtc);
             if (riskOnly)
                 query = query.Where(IsKapRiskLikeNews);
 
@@ -1891,21 +1982,46 @@ namespace Matriks.Lean.Algotrader
                 return;
             }
 
+            await _orderGate.WaitAsync();
+            try
+            {
             ResetDailyCachesIfNeeded();
+            CleanupIdempotencyCache();
 
             string side = NormalizeAction(order.Side);
             string symbol = NormalizeSymbol(order.Symbol);
-            string mode = NormalizeMode(order.Mode);
+            IdempotencyEntry cachedResult;
+            if (_sentRequestIds.TryGetValue(order.RequestId, out cachedResult))
+            {
+                await WriteJsonAsync(stream, 200, new
+                {
+                    ok = true,
+                    accepted = cachedResult.Accepted,
+                    status = cachedResult.Status,
+                    requestId = order.RequestId,
+                    symbol = symbol,
+                    reason = cachedResult.Message,
+                    duplicate = true
+                });
+                return;
+            }
+            // RuntimeMode from validated server config is the sole authority.
+            string requestMode = string.IsNullOrWhiteSpace(order.Mode) ? RuntimeMode : NormalizeMode(order.Mode);
             decimal qty = ToDecimal(order.Qty);
             decimal price = ToDecimal(order.LimitPrice);
-            decimal orderValue = qty * price;
+            int finalQty;
+            string quantityError;
+            decimal roundedPrice = RoundPriceStepBistViop(symbol, price);
+            decimal orderValue = 0m;
+            if (TryConvertOrderQuantity(qty, out finalQty, out quantityError))
+                orderValue = finalQty * roundedPrice;
 
             SafeDebug("Order request received requestId=" + order.RequestId
                 + " symbol=" + symbol
                 + " side=" + side
                 + " qty=" + qty
                 + " limitPrice=" + price
-                + " mode=" + mode);
+                + " runtimeMode=" + RuntimeMode);
 
             // ── Güvenlik kapıları (sıra TradeAiAgenticBot.TrySendOrderAsync) ──
 
@@ -1913,9 +2029,11 @@ namespace Matriks.Lean.Algotrader
 
             if (side != "BUY" && side != "SELL")
                 rejection = "unknown side=" + order.Side;
-            else if (!_sentRequestIds.TryAdd(order.RequestId, null))
-                rejection = "duplicate requestId";
-            else if (price <= 0m)
+            else if (!TryConvertOrderQuantity(qty, out finalQty, out quantityError))
+                rejection = quantityError;
+            else if (qty != finalQty)
+                rejection = "qty has fractional component";
+            else if (roundedPrice <= 0m)
                 rejection = "limitPrice is null or <= 0";
             else if (qty <= 0m)
                 rejection = "qty <= 0";
@@ -1923,20 +2041,30 @@ namespace Matriks.Lean.Algotrader
                 rejection = "symbol not allowed: " + symbol;
             else if (!_realPositionsLoadedFromSnapshot)
                 rejection = "real positions are not loaded yet";
+            else if (IsConfigStale())
+                rejection = "gateway config is stale";
+            else if (AllowedSymbols == null || AllowedSymbols.Length == 0)
+                rejection = "AllowedSymbols is empty";
+            else if (MaxOrderValueTl <= 0m || MaxQtyPerOrder <= 0m || MaxOrdersPerDay <= 0 || MaxOrdersPerSymbolPerDay <= 0)
+                rejection = "live risk limits are not valid";
+            else if (!string.IsNullOrWhiteSpace(order.Mode) && requestMode != RuntimeMode)
+                rejection = "request mode does not match RuntimeMode";
+            else if (finalQty > MaxQtyPerOrder)
+                rejection = "qty exceeds MaxQtyPerOrder: " + finalQty;
             else if (orderValue > MaxOrderValueTl)
-                rejection = "orderValue exceeds MaxOrderValueTl: " + orderValue;
-            else if (qty > MaxQtyPerOrder)
-                rejection = "qty exceeds MaxQtyPerOrder: " + qty;
+                rejection = "orderValue exceeds MaxOrderValueTl after price rounding: " + orderValue;
             else if (GetTotalDailyOrderCount() >= MaxOrdersPerDay)
                 rejection = "MaxOrdersPerDay reached: " + MaxOrdersPerDay;
             else if (GetDailyTradeCount(symbol) >= MaxOrdersPerSymbolPerDay)
                 rejection = "MaxOrdersPerSymbolPerDay reached for " + symbol;
+            else if (_pendingOrdersBySymbolSide.ContainsKey(BuildSymbolSideKey(symbol, side)))
+                rejection = "active pending order already exists for symbol and side";
             else if (side == "SELL" && GetSellableQty(symbol) < qty)
                 rejection = "SELL qty exceeds sellable position (bot="
-                    + GetBotPositionQty(symbol)
+                    + GetAccountAvailableQty(symbol)
                     + " locked=" + GetLockedLongTermQty(symbol) + ")";
             else
-                rejection = CheckModeGates(mode);
+                rejection = CheckModeGates(RuntimeMode);
 
             if (rejection != null)
             {
@@ -1953,6 +2081,22 @@ namespace Matriks.Lean.Algotrader
                 return;
             }
 
+            var reservation = new IdempotencyEntry
+            {
+                CreatedUtc = DateTime.UtcNow,
+                Accepted = false,
+                Status = "RESERVED",
+                Message = "order slot reserved"
+            };
+            if (!_sentRequestIds.TryAdd(order.RequestId, reservation))
+            {
+                await WriteJsonAsync(stream, 200, new { ok = true, accepted = false,
+                    status = "REJECTED", requestId = order.RequestId, symbol = symbol,
+                    reason = "duplicate requestId" });
+                return;
+            }
+            IncrementDailyTradeCount(symbol); // reserve the daily/symbol slot inside the gate
+
             // ── Tüm kapılar geçildi — LIMIT emir gönder ──
 
             try
@@ -1960,7 +2104,9 @@ namespace Matriks.Lean.Algotrader
                 OrderExecutionResult execution = SendGatewayLimitOrder(order.RequestId, symbol, side, qty, price);
                 if (execution.Success)
                 {
-                    IncrementDailyTradeCount(symbol);
+                    reservation.Accepted = true;
+                    reservation.Status = "SENT_PENDING";
+                    reservation.Message = execution.Message;
                     SafeDebug("Order SENT_PENDING symbol=" + symbol
                         + " side=" + side
                         + " qty=" + qty
@@ -1978,6 +2124,7 @@ namespace Matriks.Lean.Algotrader
                 }
 
                 SafeDebug("Order send failed: " + execution.Message);
+                RollbackOrderReservation(order.RequestId, symbol, side, true);
                 await WriteJsonAsync(stream, 200, new
                 {
                     ok = true,
@@ -1990,6 +2137,7 @@ namespace Matriks.Lean.Algotrader
             }
             catch (Exception ex)
             {
+                RollbackOrderReservation(order.RequestId, symbol, side, true);
                 SafeDebug("Order exception requestId=" + order.RequestId + " error=" + ex.Message);
                 await WriteJsonAsync(stream, 200, new
                 {
@@ -1998,8 +2146,13 @@ namespace Matriks.Lean.Algotrader
                     status = "ERROR",
                     requestId = order.RequestId,
                     symbol = symbol,
-                    reason = ex.Message
+                    reason = "order send failed"
                 });
+            }
+            }
+            finally
+            {
+                _orderGate.Release();
             }
         }
 
@@ -2042,7 +2195,7 @@ namespace Matriks.Lean.Algotrader
         /// </summary>
         private decimal GetSellableQty(string symbol)
         {
-            decimal sellable = GetBotPositionQty(symbol) - GetLockedLongTermQty(symbol);
+            decimal sellable = GetAccountAvailableQty(symbol) - GetLockedLongTermQty(symbol);
             return sellable > 0m ? sellable : 0m;
         }
 
@@ -2054,9 +2207,7 @@ namespace Matriks.Lean.Algotrader
             }
 
             if (quantity != qty)
-            {
-                SafeDebug("Qty converted to int symbol=" + symbol + " original=" + qty + " quantity=" + quantity);
-            }
+                return new OrderExecutionResult { Success = false, Message = "qty has fractional component" };
 
             OrderSide orderSide = side == "BUY" ? OrderSide.Buy : OrderSide.Sell;
             ChartIcon chartIcon = orderSide == OrderSide.Buy ? ChartIcon.Buy : ChartIcon.Sell;
@@ -2080,7 +2231,15 @@ namespace Matriks.Lean.Algotrader
                 Qty = quantity,
                 Price = roundedPrice
             };
-            _pendingOrdersBySymbolSide[BuildSymbolSideKey(symbol, side)] = pending;
+            string symbolSideKey = BuildSymbolSideKey(symbol, side);
+            if (!_pendingOrdersByRequestId.TryAdd(requestId, pending))
+                return new OrderExecutionResult { Success = false, Message = "duplicate requestId" };
+            if (!_pendingOrdersBySymbolSide.TryAdd(symbolSideKey, pending))
+            {
+                PendingOrderContext ignored;
+                _pendingOrdersByRequestId.TryRemove(requestId, out ignored);
+                return new OrderExecutionResult { Success = false, Message = "active pending order already exists for symbol and side" };
+            }
 
             SafeDebug("Sending limit order: " + side
                 + " " + symbol
@@ -2094,7 +2253,9 @@ namespace Matriks.Lean.Algotrader
             }
             catch
             {
-                _pendingOrdersBySymbolSide.TryRemove(BuildSymbolSideKey(symbol, side), out _);
+                PendingOrderContext ignored;
+                _pendingOrdersBySymbolSide.TryRemove(symbolSideKey, out ignored);
+                _pendingOrdersByRequestId.TryRemove(requestId, out ignored);
                 throw;
             }
 
@@ -2141,6 +2302,10 @@ namespace Matriks.Lean.Algotrader
                 return bySymbol;
             }
 
+            if (symbolMatches.Count > 1)
+                SafeDebug("Ambiguous pending order match; requestId not guessed symbol="
+                    + symbol + " side=" + side + " candidates=" + symbolMatches.Count);
+
             return null;
         }
 
@@ -2149,16 +2314,24 @@ namespace Matriks.Lean.Algotrader
             string status,
             string matriksMessage,
             string orderId,
-            decimal qty,
-            decimal price)
+            decimal orderQty,
+            decimal filledQty,
+            decimal lastFillQty,
+            decimal avgPrice,
+            decimal limitPrice)
         {
             var payload = new OrderResultRequest
             {
                 RequestId = context.RequestId,
                 Symbol = NormalizeSymbol(context.Symbol),
                 Action = NormalizeAction(context.Action),
-                Qty = ToDouble(qty),
-                Price = ToDouble(price),
+                Qty = ToDouble(filledQty),
+                Price = ToDouble(avgPrice > 0m ? avgPrice : limitPrice),
+                OrderQty = ToDouble(orderQty),
+                FilledQty = ToDouble(filledQty),
+                LastFillQty = ToDouble(lastFillQty),
+                AvgPrice = ToDouble(avgPrice),
+                LimitPrice = ToDouble(limitPrice),
                 Status = status,
                 MatriksMessage = matriksMessage,
                 OrderId = orderId
@@ -2185,6 +2358,72 @@ namespace Matriks.Lean.Algotrader
             catch (Exception ex)
             {
                 SafeDebug("Order result post exception requestId=" + context.RequestId + " error=" + ex.Message);
+            }
+        }
+
+        private void EnqueueOrderResult(OrderResultEnvelope item)
+        {
+            // requestId is stable before and after Matriks assigns orderId, so
+            // all lifecycle events share one progression chain.
+            string key = item.Context.RequestId;
+            string previous;
+            if (_lastReportedStatusByKey.TryGetValue(key, out previous))
+            {
+                if (previous == item.Status || IsFinalOrderStatus(previous)
+                    || GetOrderStatusRank(item.Status) < GetOrderStatusRank(previous))
+                    return;
+            }
+            _lastReportedStatusByKey[key] = item.Status;
+            _orderResultQueue.Enqueue(item);
+            _orderResultSignal.Release();
+        }
+
+        private async Task ProcessOrderResultQueueAsync(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested || !_orderResultQueue.IsEmpty)
+            {
+                try { await _orderResultSignal.WaitAsync(token); }
+                catch (OperationCanceledException) { }
+                OrderResultEnvelope item;
+                while (_orderResultQueue.TryDequeue(out item))
+                    await ReportOrderResultAsync(item.Context, item.Status, item.MatriksMessage,
+                        item.OrderId, item.OrderQty, item.FilledQty, item.LastFillQty,
+                        item.AvgPrice, item.LimitPrice);
+            }
+        }
+
+        private bool IsConfigStale()
+        {
+            return _lastConfigFetchUtc == DateTime.MinValue
+                || (DateTime.UtcNow - _lastConfigFetchUtc).TotalSeconds > ConfigStaleSeconds;
+        }
+
+        private void CleanupIdempotencyCache()
+        {
+            DateTime cutoff = DateTime.UtcNow.Subtract(IdempotencyTtl);
+            foreach (var item in _sentRequestIds)
+            {
+                IdempotencyEntry ignored;
+                if (item.Value.CreatedUtc < cutoff)
+                    _sentRequestIds.TryRemove(item.Key, out ignored);
+            }
+        }
+
+        private void RollbackOrderReservation(string requestId, string symbol, string side, bool decrementCounter)
+        {
+            PendingOrderContext ignored;
+            _pendingOrdersByRequestId.TryRemove(requestId, out ignored);
+            string key = BuildSymbolSideKey(symbol, side);
+            PendingOrderContext active;
+            if (_pendingOrdersBySymbolSide.TryGetValue(key, out active) && active.RequestId == requestId)
+                _pendingOrdersBySymbolSide.TryRemove(key, out ignored);
+            IdempotencyEntry idempotency;
+            _sentRequestIds.TryRemove(requestId, out idempotency); // synchronous failure is retryable
+            if (decrementCounter)
+            {
+                int count;
+                if (_dailyTradeCountBySymbol.TryGetValue(symbol, out count) && count > 0)
+                    _dailyTradeCountBySymbol[symbol] = count - 1;
             }
         }
 
@@ -2232,7 +2471,20 @@ namespace Matriks.Lean.Algotrader
         private static bool IsFinalOrderStatus(string status)
         {
             string value = (status ?? "").Trim().ToUpperInvariant();
-            return value == "FILLED" || value == "CANCELED" || value == "CANCELLED" || value == "REJECTED" || value == "EXPIRED";
+            return value == "FILLED" || value == "CANCELED" || value == "CANCELLED"
+                || value == "REJECTED" || value == "EXPIRED" || value == "ERROR";
+        }
+
+        private static int GetOrderStatusRank(string status)
+        {
+            string value = (status ?? "").Trim().ToUpperInvariant();
+            if (IsFinalOrderStatus(value)) return 100;
+            if (value == "PARTIALLY_FILLED") return 40;
+            if (value == "CANCEL_REQUESTED") return 30;
+            if (value == "SENT") return 25;
+            if (value == "NEW") return 20;
+            if (value == "SENT_PENDING") return 10;
+            return 0;
         }
 
         private static bool TryConvertOrderQuantity(decimal qty, out int quantity, out string error)
@@ -2297,7 +2549,6 @@ namespace Matriks.Lean.Algotrader
             decimal low = ohlc.Low;
             bool ohlcReliable = ohlc.Reliable;
 
-            UpdateCloseHistory(symbol, lastPrice);
 
             // Depth data
             decimal bestBid = 0m;
@@ -2408,7 +2659,7 @@ namespace Matriks.Lean.Algotrader
             payload["secondBid"] = ToDouble(secondBid);
             payload["thirdBid"] = ToDouble(thirdBid);
             payload["depthSummary"] = depthSummary;
-            payload["botPositionQty"] = ToDouble(GetBotPositionQty(symbol));
+            payload["botPositionQty"] = ToDouble(GetAccountAvailableQty(symbol));
             payload["totalAccountQty"] = ToDouble(GetTotalAccountQty(symbol));
             payload["lockedLongTermQty"] = ToDouble(GetLockedLongTermQty(symbol));
             foreach (var item in technicalFeatures)
@@ -2528,34 +2779,22 @@ namespace Matriks.Lean.Algotrader
 
         // ── Position helpers ────────────────────────────────────────
 
-        private decimal GetBotPositionQty(string symbol)
+        private decimal GetAccountAvailableQty(string symbol)
         {
             symbol = NormalizeSymbol(symbol);
-            return _botPositionQtyBySymbol.TryGetValue(symbol, out var qty) ? qty : 0m;
+            return _accountAvailableQtyBySymbol.TryGetValue(symbol, out var qty) ? qty : 0m;
         }
 
         private decimal GetTotalAccountQty(string symbol)
         {
-            return GetBotPositionQty(symbol) + GetLockedLongTermQty(symbol);
+            decimal qty;
+            return _accountNetQtyBySymbol.TryGetValue(NormalizeSymbol(symbol), out qty) ? qty : 0m;
         }
 
         private decimal GetLockedLongTermQty(string symbol)
         {
             symbol = NormalizeSymbol(symbol);
             return LockedLongTermQty.TryGetValue(symbol, out var qty) ? qty : 0m;
-        }
-
-        private void RefreshCloseHistoryFromMarketData()
-        {
-            foreach (string symbolRaw in AllowedSymbols)
-            {
-                string symbol = NormalizeSymbol(symbolRaw);
-                if (!IsAllowedSymbol(symbol))
-                    continue;
-
-                MarketQuoteSnapshot quote = ReadMarketQuote(symbol);
-                UpdateCloseHistory(symbol, quote.Last);
-            }
         }
 
         private void LoadRealPositionsSnapshot()
@@ -2580,12 +2819,27 @@ namespace Matriks.Lean.Algotrader
                     return;
                 }
 
+                var netSnapshot = new Dictionary<string, decimal>();
+                var availableSnapshot = new Dictionary<string, decimal>();
                 foreach (var item in positions)
                 {
-                    UpdatePositionCache(item.Value, "GetRealPositions");
+                    AlgoTraderPosition position = item.Value;
+                    if (position == null) continue;
+                    string symbol = NormalizeSymbol(position.Symbol);
+                    if (symbol == "") continue;
+                    netSnapshot[symbol] = position.QtyNet;
+                    availableSnapshot[symbol] = position.QtyAvailable;
+                    if (position.QtyNet != 0m || position.QtyAvailable != 0m)
+                        EnsurePortfolioSymbolSubscribed(symbol);
                 }
+                // Publish complete snapshots with atomic reference swaps. Readers
+                // can observe either the previous or the new valid snapshot,
+                // never an intermediate Clear()/refill state.
+                _accountNetQtyBySymbol = new ConcurrentDictionary<string, decimal>(netSnapshot);
+                _accountAvailableQtyBySymbol = new ConcurrentDictionary<string, decimal>(availableSnapshot);
 
                 _realPositionsLoadedFromSnapshot = true;
+                _lastPositionSyncUtc = DateTime.UtcNow;
                 SafeDebug("Real positions snapshot loaded count=" + positions.Count);
             }
             catch (Exception ex)
@@ -2603,14 +2857,14 @@ namespace Matriks.Lean.Algotrader
             if (string.IsNullOrWhiteSpace(symbol))
                 return;
 
-            decimal qty = position.QtyAvailable != 0m ? position.QtyAvailable : position.QtyNet;
-            if (qty != 0m)
+            if (position.QtyNet != 0m || position.QtyAvailable != 0m)
                 EnsurePortfolioSymbolSubscribed(symbol);
-            _botPositionQtyBySymbol[symbol] = qty;
+            _accountNetQtyBySymbol[symbol] = position.QtyNet;
+            _accountAvailableQtyBySymbol[symbol] = position.QtyAvailable;
             SafeDebug(source + " position symbol=" + symbol
                 + " qtyAvailable=" + position.QtyAvailable
                 + " qtyNet=" + position.QtyNet
-                + " cachedQty=" + qty);
+                + " cachedAvailableQty=" + position.QtyAvailable);
         }
 
         /// <summary>
@@ -2836,6 +3090,13 @@ namespace Matriks.Lean.Algotrader
                 if (high <= 0m) high = close;
                 if (low <= 0m) low = close;
 
+                DateTime barTimestamp;
+                bool hasBarTimestamp = TryResolveBarTimestamp(barData.BarData, out barTimestamp);
+                if (!hasBarTimestamp)
+                {
+                    LogMarketDataWarning(symbol, "BAR_TIME", "Bar timestamp unavailable; close history not updated");
+                    barTimestamp = DateTime.Now;
+                }
                 var snapshot = new OhlcvSnapshot
                 {
                     Open = open,
@@ -2845,10 +3106,11 @@ namespace Matriks.Lean.Algotrader
                     Volume = volume,
                     Reliable = open > 0m && high > 0m && low > 0m && close > 0m,
                     Source = "BAR",
-                    UpdatedAt = DateTime.Now
+                    UpdatedAt = barTimestamp
                 };
                 _lastOhlcvBySymbol[symbol] = snapshot;
-                UpdateCloseHistory(symbol, close);
+                if (hasBarTimestamp)
+                    UpdateCloseHistory(symbol, close, barTimestamp);
             }
             catch (Exception ex)
             {
@@ -2898,7 +3160,7 @@ namespace Matriks.Lean.Algotrader
 
         // ── Close history (thread-safe) ──────────────────────────────
 
-        private void UpdateCloseHistory(string symbol, decimal lastPrice)
+        private void UpdateCloseHistory(string symbol, decimal lastPrice, DateTime barTimestamp)
         {
             if (lastPrice <= 0)
                 return;
@@ -2907,6 +3169,12 @@ namespace Matriks.Lean.Algotrader
 
             lock (_closeLock)
             {
+                DateTime previous;
+                DateTime timestampUtc = barTimestamp.ToUniversalTime();
+                if (_lastCloseBarUtcBySymbol.TryGetValue(symbol, out previous)
+                    && previous == timestampUtc)
+                    return;
+                _lastCloseBarUtcBySymbol[symbol] = timestampUtc;
                 var list = _closeHistoryBySymbol.GetOrAdd(symbol, _ => new List<decimal>());
                 list.Add(lastPrice);
                 if (list.Count > MaxCloseHistory)
@@ -3029,8 +3297,8 @@ namespace Matriks.Lean.Algotrader
         {
             var features = new Dictionary<string, object>();
             var consensus = CalculateIndicatorConsensus(lastPrice, rsi, ema20, ema50, macd, macdSignal);
-            double? atr = CalculateAtrFromClose(symbol, 14);
-            double? natr = CalculateNatrPct(symbol, 14);
+            double? averageAbsoluteCloseChange = CalculateAverageAbsoluteCloseChange(symbol, 14);
+            double? normalizedCloseChangePct = CalculateNormalizedCloseChangePct(symbol, 14);
 
             features["schemaVersion"] = "technical-features-v1";
             features["indicatorSource"] = indicatorSource;
@@ -3041,8 +3309,11 @@ namespace Matriks.Lean.Algotrader
             features["indicatorNeutralCount"] = consensus.NeutralCount;
             features["indicatorConsensus"] = consensus.Signal;
             features["indicatorConsensusRatio"] = consensus.Ratio;
-            AddIfNotNull(features, "atr", atr);
-            AddIfNotNull(features, "natr", natr);
+            AddIfNotNull(features, "averageAbsoluteCloseChange", averageAbsoluteCloseChange);
+            AddIfNotNull(features, "normalizedCloseChangePct", normalizedCloseChangePct);
+            features["atr"] = null; // close-only history is not true range
+            features["natr"] = null;
+            features["volatilityMetricSource"] = "CLOSE_CHANGE_PROXY";
             features["depthReliable"] = depthReliable;
             if (depthReliable)
             {
@@ -3050,7 +3321,7 @@ namespace Matriks.Lean.Algotrader
                 features["depthBid1MaxSize"] = ToDouble(maxBid1Size);
                 features["depthQueueDropPct"] = ToDouble(depthQueueDropPct);
             }
-            features["marketRegime"] = ClassifyMarketRegime(natr, consensus);
+            features["marketRegime"] = ClassifyMarketRegime(normalizedCloseChangePct, consensus);
 
             return features;
         }
@@ -3123,7 +3394,7 @@ namespace Matriks.Lean.Algotrader
             return "NEUTRAL";
         }
 
-        private double? CalculateAtrFromClose(string symbol, int period)
+        private double? CalculateAverageAbsoluteCloseChange(string symbol, int period)
         {
             var closes = new List<decimal>();
             lock (_closeLock)
@@ -3143,10 +3414,10 @@ namespace Matriks.Lean.Algotrader
             return ToDouble(totalRange / period);
         }
 
-        private double? CalculateNatrPct(string symbol, int period)
+        private double? CalculateNormalizedCloseChangePct(string symbol, int period)
         {
-            double? atr = CalculateAtrFromClose(symbol, period);
-            if (!atr.HasValue)
+            double? closeChange = CalculateAverageAbsoluteCloseChange(symbol, period);
+            if (!closeChange.HasValue)
                 return null;
 
             decimal lastClose = 0m;
@@ -3160,7 +3431,7 @@ namespace Matriks.Lean.Algotrader
             if (lastClose <= 0m)
                 return null;
 
-            return ToDouble(ToDecimal(atr.Value) / lastClose * 100m);
+            return ToDouble(ToDecimal(closeChange.Value) / lastClose * 100m);
         }
 
         private string ClassifyMarketRegime(double? natr, IndicatorConsensus consensus)
@@ -3396,7 +3667,7 @@ namespace Matriks.Lean.Algotrader
             var data = new List<byte>();
             int headerEnd = -1;
 
-            while (!token.IsCancellationRequested && data.Count < 65536)
+            while (!token.IsCancellationRequested && data.Count < MaxHttpHeaderBytes)
             {
                 int read = await stream.ReadAsync(buffer, 0, buffer.Length, token);
                 if (read <= 0)
@@ -3418,7 +3689,8 @@ namespace Matriks.Lean.Algotrader
 
             if (headerEnd < 0)
             {
-                return null;
+                return InvalidHttpRequest(data.Count >= MaxHttpHeaderBytes
+                    ? "request headers too large" : "incomplete request headers");
             }
 
             string headerText = Encoding.UTF8.GetString(data.GetRange(0, headerEnd).ToArray());
@@ -3429,10 +3701,9 @@ namespace Matriks.Lean.Algotrader
             }
 
             string[] requestLine = lines[0].Split(' ');
-            if (requestLine.Length < 2)
-            {
-                return null;
-            }
+            if (requestLine.Length != 3 || !requestLine[2].StartsWith("HTTP/1.")) return InvalidHttpRequest("invalid request line");
+            string method = requestLine[0].ToUpperInvariant();
+            if (method != "GET" && method != "POST") return InvalidHttpRequest("unsupported HTTP method");
 
             var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             for (int i = 1; i < lines.Length; i++)
@@ -3450,8 +3721,14 @@ namespace Matriks.Lean.Algotrader
             int contentLength = 0;
             if (headers.ContainsKey("Content-Length"))
             {
-                int.TryParse(headers["Content-Length"], out contentLength);
+                if (!int.TryParse(headers["Content-Length"], out contentLength)
+                    || contentLength < 0 || contentLength > MaxHttpBodyBytes)
+                    return InvalidHttpRequest("invalid Content-Length");
             }
+            string transferEncoding;
+            if (headers.TryGetValue("Transfer-Encoding", out transferEncoding)
+                && !string.IsNullOrWhiteSpace(transferEncoding))
+                return InvalidHttpRequest("unsupported Transfer-Encoding; chunked requests are not accepted");
 
             int bodyStart = headerEnd + 4;
             while (data.Count - bodyStart < contentLength && !token.IsCancellationRequested)
@@ -3466,6 +3743,7 @@ namespace Matriks.Lean.Algotrader
                     data.Add(buffer[i]);
                 }
             }
+            if (data.Count - bodyStart < contentLength) return InvalidHttpRequest("incomplete request body");
 
             string body = "";
             if (contentLength > 0 && data.Count >= bodyStart)
@@ -3496,12 +3774,17 @@ namespace Matriks.Lean.Algotrader
 
             return new HttpRequest
             {
-                Method = requestLine[0].ToUpperInvariant(),
+                Method = method,
                 Path = path,
                 Headers = headers,
                 Query = query,
                 Body = body
             };
+        }
+
+        private static HttpRequest InvalidHttpRequest(string error)
+        {
+            return new HttpRequest { ParseError = error };
         }
 
         private static int FindHeaderEnd(List<byte> data)
@@ -3574,6 +3857,7 @@ namespace Matriks.Lean.Algotrader
             public Dictionary<string, string> Headers { get; set; }
             public Dictionary<string, string> Query { get; set; }
             public string Body { get; set; }
+            public string ParseError { get; set; }
 
             public string GetQueryValue(string key)
             {
@@ -3628,6 +3912,11 @@ namespace Matriks.Lean.Algotrader
             public int NewsId { get; set; }
             public string Header { get; set; }
             public DateTime DateTime { get; set; }
+            [JsonProperty("publishedAt")]
+            public string PublishedAt
+            {
+                get { return DateTime == DateTime.MinValue ? null : DateTime.ToUniversalTime().ToString("o"); }
+            }
             public List<string> Categories { get; set; }
             public List<string> Symbols { get; set; }
             public List<string> Sources { get; set; }
@@ -3721,6 +4010,21 @@ namespace Matriks.Lean.Algotrader
             [JsonProperty("price")]
             public double Price { get; set; }
 
+            [JsonProperty("orderQty")]
+            public double OrderQty { get; set; }
+
+            [JsonProperty("filledQty")]
+            public double FilledQty { get; set; }
+
+            [JsonProperty("lastFillQty")]
+            public double LastFillQty { get; set; }
+
+            [JsonProperty("avgPrice")]
+            public double AvgPrice { get; set; }
+
+            [JsonProperty("limitPrice")]
+            public double LimitPrice { get; set; }
+
             [JsonProperty("status")]
             public string Status { get; set; }
 
@@ -3745,6 +4049,54 @@ namespace Matriks.Lean.Algotrader
             public bool Success { get; set; }
             public string OrderId { get; set; }
             public string Message { get; set; }
+        }
+
+        private static bool TryResolveBarTimestamp(object bar, out DateTime timestamp)
+        {
+            timestamp = DateTime.MinValue;
+            if (bar == null) return false;
+            string[] propertyNames = { "DateTime", "BarTime", "StartTime", "Time", "Timestamp" };
+            Type type = bar.GetType();
+            foreach (string name in propertyNames)
+            {
+                PropertyInfo property = type.GetProperty(name, BindingFlags.Instance | BindingFlags.Public);
+                if (property == null) continue;
+                object value = property.GetValue(bar, null);
+                if (value is DateTime)
+                {
+                    timestamp = (DateTime)value;
+                    return timestamp != DateTime.MinValue;
+                }
+                DateTime parsed;
+                if (value != null && DateTime.TryParse(Convert.ToString(value), out parsed))
+                {
+                    timestamp = parsed;
+                    return timestamp != DateTime.MinValue;
+                }
+            }
+            return false;
+        }
+
+        private sealed class IdempotencyEntry
+        {
+            public DateTime CreatedUtc { get; set; }
+            public bool Accepted { get; set; }
+            public string Status { get; set; }
+            public string Message { get; set; }
+        }
+
+        private struct OrderResultEnvelope
+        {
+            public PendingOrderContext Context { get; set; }
+            public string Status { get; set; }
+            public string MatriksMessage { get; set; }
+            public string OrderId { get; set; }
+            public decimal OrderQty { get; set; }
+            public decimal FilledQty { get; set; }
+            public decimal LastFillQty { get; set; }
+            public decimal AvgPrice { get; set; }
+            public decimal LimitPrice { get; set; }
+            public decimal Price { get; set; }
         }
     }
 }

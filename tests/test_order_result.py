@@ -7,7 +7,10 @@ from unittest.mock import patch
 import pytest
 
 from app.models.db.order_log import OrderLog
-from app.routers.order_result import OrderResultRequest
+from app.routers.order_result import OrderResultRequest, record_order_result, should_apply_status
+from app.db.init_db import drop_all, init_db
+from app.db.session import async_session_factory
+from sqlalchemy import func, select
 
 
 # ── Model tests ───────────────────────────────────────────────────────────────
@@ -164,3 +167,47 @@ class TestOrderResultRequest:
         assert entry.matrix_message == "Partial fill: 50/100"
         assert entry.order_id == "XCH-200"
         assert entry.request_id == "r-5"
+
+
+def test_status_progression_and_final_regression_guard():
+    assert should_apply_status("NEW", "PARTIALLY_FILLED")
+    assert should_apply_status("PARTIALLY_FILLED", "FILLED")
+    assert not should_apply_status("FILLED", "NEW")
+    assert not should_apply_status("FILLED", "PARTIALLY_FILLED")
+    assert should_apply_status("FILLED", "FILLED")
+
+
+def test_extended_fill_payload_is_backwards_compatible():
+    body = OrderResultRequest.model_validate({
+        "requestId": "r-fill", "orderId": "o-1", "symbol": "THYAO",
+        "action": "BUY", "orderQty": 100, "filledQty": 40,
+        "lastFillQty": 10, "avgPrice": 275.5, "limitPrice": 276,
+        "status": "PARTIALLY_FILLED", "matriksMessage": "partial",
+    })
+    assert body.order_qty == 100
+    assert body.filled_qty == 40
+    assert body.last_fill_qty == 10
+
+
+@pytest.mark.asyncio
+async def test_duplicate_events_update_one_order_log_and_preserve_final_status():
+    await drop_all()
+    await init_db()
+    partial = OrderResultRequest.model_validate({
+        "requestId": "r-idempotent", "orderId": "o-42", "symbol": "THYAO",
+        "action": "BUY", "orderQty": 100, "filledQty": 40,
+        "status": "PARTIALLY_FILLED", "matriksMessage": "partial",
+    })
+    filled = partial.model_copy(update={"status": "FILLED", "filled_qty": 100.0})
+    stale = partial.model_copy(update={"status": "NEW", "filled_qty": 0.0})
+    with patch("app.routers.order_result.notify_order_event"):
+        await record_order_result(partial)
+        await record_order_result(filled)
+        await record_order_result(filled)
+        await record_order_result(stale)
+    async with async_session_factory() as session:
+        count = await session.scalar(select(func.count()).select_from(OrderLog).where(OrderLog.request_id == "r-idempotent"))
+        row = (await session.execute(select(OrderLog).where(OrderLog.request_id == "r-idempotent"))).scalar_one()
+    assert count == 1
+    assert row.status == "FILLED"
+    assert row.qty == 100.0

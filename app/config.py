@@ -10,7 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,8 +27,16 @@ class AIProvider(str, Enum):
 
     MOCK = "mock"
     DEEPSEEK = "deepseek"
-    OPENAI = "openai"
-    ANTHROPIC = "anthropic"
+
+
+SUPPORTED_AI_PROVIDERS = frozenset(provider.value for provider in AIProvider)
+
+
+def is_supported_ai_provider(value: object) -> bool:
+    """Return whether *value* names an implemented AI provider."""
+    if isinstance(value, AIProvider):
+        value = value.value
+    return isinstance(value, str) and value.lower() in SUPPORTED_AI_PROVIDERS
 
 
 class Mode(str, Enum):
@@ -184,6 +192,18 @@ class Settings(BaseSettings):
 
     # ── Validation ────────────────────────────────────────────────────────
 
+    @field_validator("ai_provider", mode="before")
+    @classmethod
+    def _validate_ai_provider(cls, value: object) -> object:
+        """Reject configuration values with no provider implementation."""
+        candidate = value.value if isinstance(value, AIProvider) else value
+        if not is_supported_ai_provider(candidate):
+            raise ValueError(
+                f"Unsupported AI_PROVIDER={candidate!r}. "
+                "Supported providers: mock, deepseek"
+            )
+        return value
+
     @model_validator(mode="after")
     def _validate_production_safety(self) -> "Settings":
         """Block startup in production when secrets are missing or defaults are used."""
@@ -204,6 +224,12 @@ class Settings(BaseSettings):
                 "Set a secure admin password in production."
             )
 
+        if not self.matriks_gateway_token.strip():
+            errors.append(
+                "MATRIKS_GATEWAY_TOKEN is required in production. "
+                "Set a strong shared secret matching the gateway ApiToken."
+            )
+
         # AI provider key required
         if self.ai_provider == AIProvider.DEEPSEEK and not self.deepseek_api_key:
             errors.append("DEEPSEEK_API_KEY is required when AI_PROVIDER=deepseek")
@@ -212,7 +238,7 @@ class Settings(BaseSettings):
         if self.ai_provider == AIProvider.MOCK:
             errors.append(
                 "AI_PROVIDER=mock is not allowed in production. "
-                "Use deepseek, openai, or anthropic for live trading."
+                "Use AI_PROVIDER=deepseek. Supported providers: mock, deepseek"
             )
 
         # Database: must be set and must NOT be SQLite in production
@@ -221,10 +247,10 @@ class Settings(BaseSettings):
                 "DATABASE_URL is required in production. "
                 "Use PostgreSQL (e.g. postgresql+asyncpg://...)."
             )
-        elif self.database_url.startswith("sqlite"):
+        elif not self.database_url.lower().startswith("postgresql"):
             errors.append(
-                "DATABASE_URL must use PostgreSQL in production, not SQLite. "
-                f"Got: {self.database_url}"
+                "DATABASE_URL must use PostgreSQL in production "
+                "(e.g. postgresql+asyncpg://...)."
             )
 
         # Wildcard CORS is not allowed once authenticated endpoints are public

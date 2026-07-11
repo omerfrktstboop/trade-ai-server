@@ -362,6 +362,51 @@ provider, a SQLite database, or default tokens — see
 [Environment Variables](#environment-variables) above for the full list
 of checks.
 
+### Production / VDS first-install order
+
+Use this order on a new Windows server. The schema command is intentionally
+manual; server startup never runs it in production.
+
+1. Create `.env`.
+2. Set `DATABASE_URL` to PostgreSQL.
+3. Set a strong `API_TOKEN`.
+4. Set a strong `ADMIN_PASSWORD`.
+5. Set a strong `MATRIKS_GATEWAY_TOKEN`.
+6. Run `python -m scripts.init_db_once --yes`.
+7. Start `uvicorn app.main:app --host 127.0.0.1 --port 8000` (or the Windows service below).
+8. Compile `matriks/TradeAiGateway.cs` in Matriks.
+9. Run the gateway smoke test: `python scripts/gateway_smoke.py`.
+10. Run a PAPER test.
+11. Run one-lot `DEMO_LIVE` test.
+
+Safe initial `.env` values:
+
+```ini
+APP_ENV=development
+AI_PROVIDER=mock
+DEFAULT_MODE=paper
+SCANNER_ENABLED=false
+SCANNER_ALLOW_ORDERS=false
+MANUAL_APPROVAL_ALLOW_ORDERS=false
+```
+
+Immediately before a controlled DEMO_LIVE test, use only after the PAPER
+checks and gateway smoke test pass:
+
+```ini
+APP_ENV=development
+AI_PROVIDER=deepseek
+SCANNER_ENABLED=true
+SCANNER_ALLOW_ORDERS=true
+MANUAL_APPROVAL_ALLOW_ORDERS=true
+```
+
+In the admin panel verify all of the following: `killSwitchEnabled=false`,
+`tradingMode=DEMO_LIVE` (or `botMode=DEMO_LIVE`),
+`botEnableDemoOrders=true`, `botDemoAccountConfirmed=true`, and
+`botEnableRealOrders=false`. `REAL_LIVE` remains disabled in this phase,
+including in production.
+
 ### 5. Install the Matriks gateway
 
 1. Open `matriks/TradeAiGateway.cs` and copy it into a new algo in Matriks

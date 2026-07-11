@@ -50,6 +50,7 @@ from app.services.matriks_gateway import GatewayError, GatewayUnavailable, gatew
 from app.services.notifications import notification_service
 from app.services.scanner import scanner
 from app.services.replay import replay_batch
+from app.services.performance_report import build_performance_report
 from app.services.signal_override import SELL_ALL_SENTINEL_QTY, create_override
 from app.services.trade_profile import (
     EDITABLE_FIELDS,
@@ -275,6 +276,20 @@ async def admin_dashboard(request: Request) -> HTMLResponse:
             **dashboard,
         },
     )
+
+
+@admin_router.get("/performance", response_class=HTMLResponse)
+async def admin_performance(request: Request) -> HTMLResponse:
+    identity = await require_admin(request)
+    range_value = str(request.query_params.get("range") or "7d")
+    symbol = str(request.query_params.get("symbol") or "") or None
+    try:
+        report = await build_performance_report(range_value, symbol)
+        error = None
+    except Exception as exc:
+        logger.warning("Performance report failed: %s", exc)
+        report, error = {"totalDecisions": 0, "allowedOrders": 0, "blockedDecisions": 0, "ordersSent": 0, "filledOrders": 0, "rejectedOrders": 0, "estimatedRealizedPnl": 0, "topBlockReason": "-", "latestDecisions": []}, str(exc)
+    return templates.TemplateResponse(request, "admin/performance.html", {"identity": identity, "active": "performance", "report": report, "error": error, "range": range_value, "symbol": symbol or ""})
 
 
 @admin_router.get("/why-blocked", response_class=HTMLResponse)
@@ -1174,6 +1189,12 @@ async def admin_api_bot_status(request: Request) -> dict[str, Any]:
     """Return best-effort runtime status without making the admin API fragile."""
     await require_admin(request)
     return await _bot_status()
+
+
+@admin_api_router.get("/performance")
+async def admin_api_performance(request: Request) -> dict[str, Any]:
+    await require_admin(request)
+    return await build_performance_report(str(request.query_params.get("range") or "7d"), request.query_params.get("symbol"))
 
 
 @admin_api_router.post("/notifications/test")

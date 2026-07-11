@@ -351,6 +351,9 @@ class TestDataSurface:
         assert seen["path"] == "/overall"
         await client.get_method_catalog()
         assert seen["path"] == "/capabilities/methods"
+        await client.search_methods("kap")
+        assert seen["path"] == "/methods/search"
+        assert seen["params"]["keyword"] == "kap"
         await client.close()
 
     async def test_bars_count_clamped(self):

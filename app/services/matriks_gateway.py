@@ -215,6 +215,10 @@ class MatriksGatewayClient:
         """GET /capabilities/methods — gateway'in sunduğu tüm endpoint kataloğu."""
         return await self._get("/capabilities/methods")
 
+    async def search_methods(self, keyword: str) -> dict[str, Any]:
+        """Return reflection metadata only; this call never invokes methods."""
+        return await self._get("/methods/search", params={"keyword": keyword.strip()})
+
     async def get_active_orders(self) -> dict[str, Any]:
         """Return normalized exchange/gateway order states for reconciliation."""
         return await self._get("/orders/active")

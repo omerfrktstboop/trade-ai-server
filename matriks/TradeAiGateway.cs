@@ -616,6 +616,12 @@ namespace Matriks.Lean.Algotrader
                 return;
             }
 
+            if (request.Method == "GET" && request.Path == "/methods/search")
+            {
+                await HandleMethodSearchAsync(stream, request);
+                return;
+            }
+
             if (request.Method == "POST" && request.Path == "/config/reload")
             {
                 SafeDebug("Server config reload requested");
@@ -1451,6 +1457,35 @@ namespace Matriks.Lean.Algotrader
         }
 
         // Bu gateway'in sunduğu tüm endpoint'lerin kataloğu: /capabilities/methods
+        private async Task HandleMethodSearchAsync(NetworkStream stream, HttpRequest request)
+        {
+            string keyword = (request.GetQueryValue("keyword") ?? "").Trim();
+            try
+            {
+                var methods = FindMethodsByKeyword(keyword);
+                await WriteJsonAsync(stream, 200, new
+                {
+                    ok = true,
+                    available = true,
+                    keyword = keyword,
+                    methods = methods
+                });
+            }
+            catch (Exception ex)
+            {
+                // Discovery is metadata-only. Reflection failures must not
+                // affect gateway availability or invoke a Matriks API method.
+                await WriteJsonAsync(stream, 200, new
+                {
+                    ok = true,
+                    available = false,
+                    keyword = keyword,
+                    methods = new object[0],
+                    error = Unwrap(ex)
+                });
+            }
+        }
+
         private async Task HandleMethodCatalogAsync(NetworkStream stream)
         {
             await WriteJsonAsync(stream, 200, new
@@ -1458,6 +1493,7 @@ namespace Matriks.Lean.Algotrader
                 ok = true,
                 endpoints = new object[]
                 {
+                    new { path = "/methods/search?keyword=kap", desc = "Matriks method metadata discovery (does not invoke methods)" },
                     new { path = "/health", desc = "Gateway + veri + pozisyon durumu" },
                     new { path = "/snapshot?symbol=X", desc = "OHLCV + derinlik + teknik feature bloğu" },
                     new { path = "/positions", desc = "Bot pozisyon snapshot'ı" },
@@ -1488,6 +1524,55 @@ namespace Matriks.Lean.Algotrader
         // Bir objeyi düz bir sözlüğe indirger: public property'ler, per-property
         // try/catch. Nested objeler ToString()'e düşer — döngüsel referans /
         // dev graf patlaması olmaz. null → boş sözlük.
+        private List<Dictionary<string, object>> FindMethodsByKeyword(string keyword)
+        {
+            string needle = (keyword ?? "").Trim();
+            var matches = new List<Dictionary<string, object>>();
+            Type type = this.GetType();
+
+            while (type != null)
+            {
+                var methods = type.GetMethods(
+                    System.Reflection.BindingFlags.Public
+                    | System.Reflection.BindingFlags.NonPublic
+                    | System.Reflection.BindingFlags.Instance
+                    | System.Reflection.BindingFlags.DeclaredOnly);
+                foreach (var method in methods)
+                {
+                    if (!string.IsNullOrEmpty(needle)
+                        && method.Name.IndexOf(needle, StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+                    matches.Add(ReflectMethodSignature(method));
+                }
+                type = type.BaseType;
+            }
+
+            return matches;
+        }
+
+        private static Dictionary<string, object> ReflectMethodSignature(System.Reflection.MethodInfo method)
+        {
+            var parameters = new List<Dictionary<string, string>>();
+            foreach (var parameter in method.GetParameters())
+            {
+                parameters.Add(new Dictionary<string, string>
+                {
+                    { "name", parameter.Name ?? "" },
+                    { "type", parameter.ParameterType.FullName ?? parameter.ParameterType.Name }
+                });
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "name", method.Name },
+                { "returnType", method.ReturnType.FullName ?? method.ReturnType.Name },
+                { "parameters", parameters },
+                { "declaringType", method.DeclaringType == null ? "" : (method.DeclaringType.FullName ?? method.DeclaringType.Name) },
+                { "isPublic", method.IsPublic },
+                { "isStatic", method.IsStatic }
+            };
+        }
+
         private static Dictionary<string, object> ReflectToDict(object obj)
         {
             var result = new Dictionary<string, object>();

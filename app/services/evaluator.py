@@ -710,16 +710,8 @@ async def evaluate_symbol(
     decision = dict_to_risk_decision(raw, sig_req)
     sig_req = await with_resolved_daily_trade_count(sig_req)
     response = runtime_engine.evaluate(sig_req, decision, market_regime=market_regime)
-    if response.action == SignalAction.BUY and response.allow_order:
-        from app.services.news_risk_lock import active_news_risk
-        risk = await active_news_risk(sig_req.symbol)
-        if risk:
-            response.action = SignalAction.WAIT
-            response.allow_order = False
-            response.requires_confirmation = False
-            response.order_type = OrderType.NONE
-            response.qty = 0.0
-            response.reason = f"BUY blocked: negative news/KAP risk detected: {risk[0]}"
+    from app.services.news_risk_lock import apply_news_risk_lock
+    response = await apply_news_risk_lock(response, sig_req.symbol)
 
     # ── 8. Log + persist ─────────────────────────────────────────────────
     _log_evaluation(sig_req, response)

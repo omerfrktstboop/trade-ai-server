@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
-from app.models.db import WatchlistSymbol
+from app.models.db import WatchlistQualityScore, WatchlistSymbol
 from app.services.discovery_agent import (
     _ask_bid_ratio,
     list_active_watchlist_symbols,
@@ -94,6 +94,16 @@ class TestScreening:
 
         assert added == ["GARAN"]
         assert await list_active_watchlist_symbols() == ["GARAN"]
+        async with async_session_factory() as session:
+            score = (
+                await session.execute(
+                    select(WatchlistQualityScore).where(
+                        WatchlistQualityScore.symbol == "GARAN"
+                    )
+                )
+            ).scalar_one()
+        assert score.depth_score > 50
+        assert score.reason_json["askBidRatio"] == 1.2
 
     async def test_limit_locked_gainer_is_rejected(self):
         """Tavan kitlemiş (+%9.8) aday elenir."""

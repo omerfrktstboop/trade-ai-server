@@ -25,6 +25,7 @@ data-only olarak gateway aboneliğine ekler.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -46,6 +47,12 @@ logger = logging.getLogger(__name__)
 
 # Bu süre boyunca movers'ta hiç görünmeyen watchlist kaydı pasifleştirilir.
 _STALE_AFTER = timedelta(hours=24)
+
+
+@dataclass(frozen=True)
+class DiscoveryVerdict:
+    reason: str
+    wall_ratio: float | None
 
 
 async def run_discovery_scan(
@@ -84,7 +91,7 @@ async def run_discovery_scan(
         for symbol in movers.get(key) or []:
             candidates.setdefault(str(symbol).upper(), source)
 
-    accepted: list[tuple[str, str, dict[str, Any], str, dict[str, float]]] = []
+    accepted: list[tuple[str, str, dict[str, Any], str, dict[str, Any]]] = []
     for symbol, source in candidates.items():
         item = items.get(symbol)
         if item is None:
@@ -92,11 +99,11 @@ async def run_discovery_scan(
         verdict = await _screen(gw, symbol, item)
         if verdict is None:
             continue  # elendi
-        quality = calculate_quality(item, None)
+        quality = calculate_quality(item, verdict.wall_ratio)
         if quality["quality"] < settings.watchlist_min_quality_score:
             logger.debug("Discovery reject %s: quality %.1f", symbol, quality["quality"])
             continue
-        accepted.append((symbol, source, item, verdict, quality))
+        accepted.append((symbol, source, item, verdict.reason, quality))
 
     if accepted:
         await _upsert_watchlist(accepted)
@@ -107,7 +114,7 @@ async def run_discovery_scan(
 
 async def _screen(
     gw: MatriksGatewayClient, symbol: str, item: dict[str, Any]
-) -> str | None:
+) -> DiscoveryVerdict | None:
     """Aday elemeleri. Geçerse kabul gerekçesi (str), elenirse None."""
     change_pct = _to_float(item.get("changePct")) or 0.0
     volume = _to_float(item.get("volume")) or 0.0
@@ -146,7 +153,7 @@ async def _screen(
     parts = [f"changePct={change_pct:+.2f}", f"volumeTl={volume:,.0f}"]
     if wall_ratio is not None:
         parts.append(f"askBidRatio={wall_ratio:.2f}")
-    return "; ".join(parts)
+    return DiscoveryVerdict(reason="; ".join(parts), wall_ratio=wall_ratio)
 
 
 def _ask_bid_ratio(depth: dict[str, Any]) -> float | None:
@@ -162,7 +169,7 @@ def _ask_bid_ratio(depth: dict[str, Any]) -> float | None:
 
 
 async def _upsert_watchlist(
-    accepted: list[tuple[str, str, dict[str, Any], str, dict[str, float]]]
+    accepted: list[tuple[str, str, dict[str, Any], str, dict[str, Any]]]
 ) -> None:
     try:
         async with async_session_factory() as session:

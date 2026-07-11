@@ -9,3 +9,12 @@ def test_quality_rewards_positive_liquid_balanced_candidate():
 def test_quality_penalizes_extreme_move_and_thin_volume():
     score = calculate_quality({"changePct": 10, "volume": 1_000_000}, 5.0)
     assert score["quality"] < 60
+
+
+def test_depth_ratio_changes_score_and_is_in_reason_data():
+    healthy = calculate_quality({"changePct": 3, "volume": 500_000_000}, 0.8)
+    pressured = calculate_quality({"changePct": 3, "volume": 500_000_000}, 2.8)
+    missing = calculate_quality({"changePct": 3, "volume": 500_000_000}, None)
+    assert healthy["depth"] > pressured["depth"]
+    assert missing["depth"] == 50
+    assert pressured["askBidRatio"] == 2.8

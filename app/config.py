@@ -137,6 +137,10 @@ class Settings(BaseSettings):
     news_symbol_keyword_rules_csv: str = ""
     news_filters_only_in_headers: bool = True
     news_filters_exact_match: bool = False
+    news_risk_lock_enabled: bool = True
+    news_risk_buy_block_enabled: bool = True
+    news_risk_lookback_hours: int = 24
+    news_risk_keywords_csv: str = "tedbir,brüt takas,kredili işlem yasağı,açığa satış yasağı,manipülasyon,soruşturma,faaliyet durdurma,iflas,konkordato,haciz,ceza,dava,spk inceleme,pay satışı,ortak satışı,bedelli sermaye artırımı,bilanço zararı"
 
     # Dinamik watchlist keşif evreni — gateway'de kayıtlı olmayan bu semboller
     # periyodik olarak taranır; BUY sinyali gelince allowedSymbols'e eklenir.

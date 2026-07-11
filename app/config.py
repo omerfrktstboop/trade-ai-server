@@ -158,6 +158,7 @@ class Settings(BaseSettings):
     discovery_min_volume_tl: float = 100_000_000.0
     # Satış duvarı: toplam ask/bid oranı bu değeri aşan adaylar elenir.
     discovery_max_ask_bid_ratio: float = 3.0
+    watchlist_min_quality_score: float = 60.0
 
     # Portföy re-evaluasyon döngüsü: eldeki pozisyonlar bu aralıkla LLM'e
     # "kar al / zarar kes / tut" sorusuyla yeniden değerlendirilir.

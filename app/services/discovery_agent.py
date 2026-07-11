@@ -33,6 +33,8 @@ from sqlalchemy import select, update
 from app.config import settings
 from app.db.session import async_session_factory
 from app.models.db import WatchlistSymbol
+from app.models.db import WatchlistQualityScore
+from app.services.watchlist_quality import calculate_quality
 from app.services.matriks_gateway import (
     GatewayError,
     GatewayUnavailable,
@@ -82,7 +84,7 @@ async def run_discovery_scan(
         for symbol in movers.get(key) or []:
             candidates.setdefault(str(symbol).upper(), source)
 
-    accepted: list[tuple[str, str, dict[str, Any], str]] = []
+    accepted: list[tuple[str, str, dict[str, Any], str, dict[str, float]]] = []
     for symbol, source in candidates.items():
         item = items.get(symbol)
         if item is None:
@@ -90,7 +92,11 @@ async def run_discovery_scan(
         verdict = await _screen(gw, symbol, item)
         if verdict is None:
             continue  # elendi
-        accepted.append((symbol, source, item, verdict))
+        quality = calculate_quality(item, None)
+        if quality["quality"] < settings.watchlist_min_quality_score:
+            logger.debug("Discovery reject %s: quality %.1f", symbol, quality["quality"])
+            continue
+        accepted.append((symbol, source, item, verdict, quality))
 
     if accepted:
         await _upsert_watchlist(accepted)
@@ -156,11 +162,11 @@ def _ask_bid_ratio(depth: dict[str, Any]) -> float | None:
 
 
 async def _upsert_watchlist(
-    accepted: list[tuple[str, str, dict[str, Any], str]]
+    accepted: list[tuple[str, str, dict[str, Any], str, dict[str, float]]]
 ) -> None:
     try:
         async with async_session_factory() as session:
-            for symbol, source, item, reason in accepted:
+            for symbol, source, item, reason, quality in accepted:
                 row = (
                     await session.execute(
                         select(WatchlistSymbol).where(WatchlistSymbol.symbol == symbol)
@@ -187,6 +193,12 @@ async def _upsert_watchlist(
                     row.volume = _to_float(item.get("volume"))
                     row.is_active = True
                     row.last_seen_at = datetime.now(UTC)
+                score = (await session.execute(select(WatchlistQualityScore).where(WatchlistQualityScore.symbol == symbol))).scalar_one_or_none()
+                values = {"quality_score": quality["quality"], "momentum_score": quality["momentum"], "volume_score": quality["volume"], "depth_score": quality["depth"], "news_score": quality["news"], "risk_score": quality["risk"], "reason_json": quality}
+                if score is None:
+                    session.add(WatchlistQualityScore(symbol=symbol, **values))
+                else:
+                    for key, value in values.items(): setattr(score, key, value)
             await session.commit()
     except Exception:
         logger.exception("Watchlist upsert failed")

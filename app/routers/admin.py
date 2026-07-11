@@ -29,6 +29,7 @@ from app.models.db import (
     MarketSnapshot,
     ManualApprovalRequest,
     PositionManagementDecision,
+    WatchlistSymbol, WatchlistQualityScore,
     OrderLog,
     RiskDecision,
     TradeProfile,
@@ -313,6 +314,13 @@ async def admin_position_management(request: Request) -> HTMLResponse:
 async def admin_self_check(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
     return templates.TemplateResponse(request, "admin/self_check.html", {"identity": identity, "active": "self-check", "result": await run_self_check()})
+
+@admin_router.get("/watchlist", response_class=HTMLResponse)
+async def admin_watchlist(request: Request) -> HTMLResponse:
+    identity = await require_admin(request)
+    async with async_session_factory() as session:
+        rows=list((await session.execute(select(WatchlistSymbol, WatchlistQualityScore).outerjoin(WatchlistQualityScore, WatchlistQualityScore.symbol == WatchlistSymbol.symbol))).all())
+    return templates.TemplateResponse(request, "admin/watchlist.html", {"identity":identity,"active":"watchlist","rows":rows})
 
 @admin_router.post("/self-check/run", response_class=HTMLResponse)
 async def admin_self_check_run(request: Request) -> HTMLResponse:

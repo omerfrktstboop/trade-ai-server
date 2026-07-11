@@ -103,6 +103,8 @@ class FakeGateway:
         self.order_rejection: str | None = None
         # Gateway'e ulaşan emir istekleri (parse edilmiş body'ler)
         self.orders: list[dict[str, Any]] = []
+        self.order_states: list[dict[str, Any]] = []
+        self.cancelled_order_ids: list[str] = []
         self.transport = httpx.MockTransport(self._handle)
 
     # ── Request handling ───────────────────────────────────────────────────
@@ -196,6 +198,15 @@ class FakeGateway:
                     "reason": "Limit order SENT_PENDING; final status will be reported by OnOrderUpdate",
                 },
             )
+
+        if path == "/orders/active" and request.method == "GET":
+            return self._json(200, {"ok": True, "available": True, "orders": self.order_states})
+
+        if path == "/order/cancel" and request.method == "POST":
+            body = json.loads(request.content.decode("utf-8"))
+            order_id = str(body.get("orderId") or "")
+            self.cancelled_order_ids.append(order_id)
+            return self._json(200, {"ok": True, "accepted": True, "status": "CANCEL_REQUESTED", "orderId": order_id})
 
         return self._json(404, {"ok": False, "error": "not found", "path": path})
 

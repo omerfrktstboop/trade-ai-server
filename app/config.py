@@ -126,6 +126,9 @@ class Settings(BaseSettings):
     scanner_allow_orders: bool = False
     # Manual admin approval is a separate order gate and defaults closed.
     manual_approval_allow_orders: bool = False
+    order_sync_enabled: bool = True
+    order_sync_interval_seconds: int = 900
+    order_pending_timeout_minutes: int = 15
 
     # Makro filtre: piyasa geneli rejim bu endeks sembolünden okunur.
     # Boş string makro filtreyi tamamen kapatır.

@@ -41,12 +41,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         scanner.start()
         print("🔍 Scanner started (Phase 1: PAPER-only).")
 
+    if settings.order_sync_enabled:
+        from app.services.order_sync import order_synchronizer
+
+        order_synchronizer.start()
+
     yield
     # Shutdown
     if settings.scanner_enabled:
         from app.services.scanner import scanner
 
         await scanner.stop()
+    if settings.order_sync_enabled:
+        from app.services.order_sync import order_synchronizer
+
+        await order_synchronizer.stop()
     print(f"👋 {settings.app_name} shutting down...")
 
 

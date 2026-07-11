@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from app.core.auth import verify_token
 from app.db.session import async_session_factory
 from app.models.db import OrderLog
+from sqlalchemy import select
 from app.services.notifications import notify_order_event
 
 logger = logging.getLogger(__name__)
@@ -53,17 +54,31 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
     """
     try:
         async with async_session_factory() as session:
-            entry = OrderLog(
-                request_id=body.request_id,
-                symbol=body.symbol,
-                action=body.action,
-                qty=body.qty,
-                price=body.price,
-                status=body.status,
-                order_id=body.order_id,
-                matrix_message=body.matriks_message,
-            )
-            session.add(entry)
+            entry = (
+                await session.execute(
+                    select(OrderLog)
+                    .where(
+                        OrderLog.request_id == body.request_id,
+                        OrderLog.status.in_(
+                            ("SENT_PENDING", "NEW", "PARTIALLY_FILLED", "CANCEL_REQUESTED")
+                        ),
+                    )
+                    .order_by(OrderLog.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if entry is None:
+                entry = OrderLog(request_id=body.request_id, symbol=body.symbol,
+                    action=body.action, qty=body.qty, price=body.price,
+                    status=body.status, order_id=body.order_id,
+                    matrix_message=body.matriks_message)
+                session.add(entry)
+            else:
+                entry.status = body.status
+                entry.qty = body.qty
+                entry.price = body.price
+                entry.order_id = body.order_id or entry.order_id
+                entry.matrix_message = body.matriks_message
             await session.commit()
     except Exception:
         logger.exception(

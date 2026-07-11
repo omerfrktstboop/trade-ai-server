@@ -359,3 +359,23 @@ class TestDataSurface:
         await client.get_bars("thyao", count=9999)
         assert seen["params"]["count"] == "500"
         await client.close()
+
+
+class TestOrderStateEndpoints:
+    async def test_active_orders_are_returned(self):
+        fake = FakeGateway()
+        fake.order_states = [
+            {"orderId": "O-1", "requestId": "R-1", "status": "FILLED"}
+        ]
+        client = make_client(fake)
+        result = await client.get_active_orders()
+        assert result["orders"][0]["status"] == "FILLED"
+        await client.close()
+
+    async def test_cancel_order_is_single_request(self):
+        fake = FakeGateway()
+        client = make_client(fake)
+        result = await client.cancel_order("O-1")
+        assert result["status"] == "CANCEL_REQUESTED"
+        assert fake.cancelled_order_ids == ["O-1"]
+        await client.close()

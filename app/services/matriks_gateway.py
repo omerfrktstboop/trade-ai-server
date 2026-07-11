@@ -215,6 +215,10 @@ class MatriksGatewayClient:
         """GET /capabilities/methods — gateway'in sunduğu tüm endpoint kataloğu."""
         return await self._get("/capabilities/methods")
 
+    async def get_active_orders(self) -> dict[str, Any]:
+        """Return normalized exchange/gateway order states for reconciliation."""
+        return await self._get("/orders/active")
+
     async def send_order(
         self,
         *,
@@ -271,6 +275,22 @@ class MatriksGatewayClient:
             response = await client.post("/config/reload")
         except (httpx.TransportError, asyncio.TimeoutError) as exc:
             raise GatewayUnavailable(f"Gateway config reload failed: {exc}") from exc
+        if response.status_code != 200:
+            raise GatewayError(response.status_code, response.text)
+        data = response.json()
+        if not isinstance(data, dict) or not data.get("ok"):
+            raise GatewayError(response.status_code, str(data))
+        return data
+
+    async def cancel_order(self, order_id: str) -> dict[str, Any]:
+        """Request cancellation once; never retry a side-effecting operation."""
+        client = self._ensure_client()
+        try:
+            response = await client.post("/order/cancel", json={"orderId": order_id})
+        except (httpx.TransportError, asyncio.TimeoutError) as exc:
+            raise GatewayUnavailable(
+                f"Gateway cancel failed for orderId={order_id}: {exc}"
+            ) from exc
         if response.status_code != 200:
             raise GatewayError(response.status_code, response.text)
         data = response.json()

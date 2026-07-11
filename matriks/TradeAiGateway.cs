@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -7,6 +8,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reflection;
 using Matriks.Data.Symbol;
 using Matriks.Engines;
 using Matriks.Indicators;
@@ -150,6 +152,7 @@ namespace Matriks.Lean.Algotrader
         private readonly ConcurrentDictionary<string, int> _dailyTradeCountBySymbol = new ConcurrentDictionary<string, int>();
         private readonly ConcurrentDictionary<string, PendingOrderContext> _pendingOrdersBySymbolSide = new ConcurrentDictionary<string, PendingOrderContext>();
         private readonly ConcurrentDictionary<string, PendingOrderContext> _pendingOrdersByOrderId = new ConcurrentDictionary<string, PendingOrderContext>();
+        private readonly ConcurrentDictionary<string, GatewayOrderSnapshot> _recentOrderStatesByOrderId = new ConcurrentDictionary<string, GatewayOrderSnapshot>();
 
         private DateTime _dailyCounterDate = DateTime.Today;
         private bool _realPositionsLoadedFromSnapshot;
@@ -328,6 +331,23 @@ namespace Matriks.Lean.Algotrader
                 + " filledQty=" + filledQty
                 + " avgPx=" + avgPx;
 
+            if (!string.IsNullOrWhiteSpace(orderId))
+            {
+                _recentOrderStatesByOrderId[orderId] = new GatewayOrderSnapshot
+                {
+                    OrderId = orderId,
+                    RequestId = context.RequestId,
+                    Symbol = symbol,
+                    Side = context.Action,
+                    Status = status,
+                    Qty = orderQty > 0 ? orderQty : context.Qty,
+                    FilledQty = filledQty,
+                    Price = order.Price > 0 ? order.Price : context.Price,
+                    AvgPrice = avgPx,
+                    UpdatedAt = DateTime.Now
+                };
+            }
+
             PendingOrderContext capturedContext = context;
             Task.Run(async () =>
             {
@@ -478,6 +498,12 @@ namespace Matriks.Lean.Algotrader
                 return;
             }
 
+            if (request.Method == "GET" && request.Path == "/orders/active")
+            {
+                await HandleActiveOrdersAsync(stream);
+                return;
+            }
+
             if (request.Method == "GET" && request.Path == "/capabilities")
             {
                 await HandleCapabilitiesAsync(stream);
@@ -610,6 +636,12 @@ namespace Matriks.Lean.Algotrader
             if (request.Method == "POST" && request.Path == "/order")
             {
                 await HandleOrderAsync(stream, request);
+                return;
+            }
+
+            if (request.Method == "POST" && request.Path == "/order/cancel")
+            {
+                await HandleCancelOrderAsync(stream, request);
                 return;
             }
 
@@ -856,6 +888,158 @@ namespace Matriks.Lean.Algotrader
         }
 
         // ── Order path (Phase 2 — kilitler TradeAiAgenticBot'tan) ───
+
+        private async Task HandleActiveOrdersAsync(NetworkStream stream)
+        {
+            bool exchangeAvailable;
+            string exchangeError;
+            List<GatewayOrderSnapshot> orders = ReadRealOrdersSnapshot(out exchangeAvailable, out exchangeError);
+            var byOrderId = orders
+                .Where(x => !string.IsNullOrWhiteSpace(x.OrderId))
+                .ToDictionary(x => x.OrderId, x => x, StringComparer.OrdinalIgnoreCase);
+            foreach (GatewayOrderSnapshot cached in _recentOrderStatesByOrderId.Values)
+            {
+                if (!string.IsNullOrWhiteSpace(cached.OrderId))
+                    byOrderId[cached.OrderId] = cached;
+            }
+            List<GatewayOrderSnapshot> merged = byOrderId.Values
+                .OrderByDescending(x => x.UpdatedAt).ToList();
+            await WriteJsonAsync(stream, 200, new
+            {
+                ok = true,
+                available = exchangeAvailable || merged.Count > 0,
+                exchangeAvailable = exchangeAvailable,
+                error = exchangeError,
+                orders = merged,
+                activeOrderIds = merged.Where(x => !IsFinalOrderStatus(x.Status))
+                    .Select(x => x.OrderId).Where(x => !string.IsNullOrWhiteSpace(x)).ToList()
+            });
+        }
+
+        private async Task HandleCancelOrderAsync(NetworkStream stream, HttpRequest request)
+        {
+            CancelOrderRequest cancel;
+            try
+            {
+                cancel = JsonConvert.DeserializeObject<CancelOrderRequest>(request.Body ?? "");
+            }
+            catch (Exception ex)
+            {
+                await WriteJsonAsync(stream, 400, new { ok = false, error = "invalid JSON body: " + ex.Message });
+                return;
+            }
+            string orderId = (cancel.OrderId ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(orderId))
+            {
+                await WriteJsonAsync(stream, 400, new { ok = false, error = "missing required field: orderId" });
+                return;
+            }
+            try
+            {
+                SendCancelOrder(orderId);
+                SafeDebug("Cancel requested orderId=" + orderId);
+                await WriteJsonAsync(stream, 200, new { ok = true, accepted = true, status = "CANCEL_REQUESTED", orderId = orderId });
+            }
+            catch (Exception ex)
+            {
+                SafeDebug("Cancel failed orderId=" + orderId + " error=" + ex.Message);
+                await WriteJsonAsync(stream, 200, new { ok = true, accepted = false, status = "CANCEL_FAILED", orderId = orderId, reason = ex.Message });
+            }
+        }
+
+        private List<GatewayOrderSnapshot> ReadRealOrdersSnapshot(out bool available, out string error)
+        {
+            available = false;
+            error = null;
+            var result = new List<GatewayOrderSnapshot>();
+            try
+            {
+                MethodInfo method = FindZeroArgumentMethod("GetRealOrders");
+                if (method == null)
+                {
+                    error = "GetRealOrders is not available in this Matriks IQ build";
+                    return result;
+                }
+                object raw = method.Invoke(this, null);
+                IEnumerable entries = raw as IEnumerable;
+                if (entries == null)
+                {
+                    error = "GetRealOrders returned a non-enumerable result";
+                    return result;
+                }
+                available = true;
+                foreach (object entry in entries)
+                {
+                    object order = ReadMember(entry, "Value") ?? entry;
+                    GatewayOrderSnapshot snapshot = BuildOrderSnapshot(order);
+                    if (snapshot != null)
+                        result.Add(snapshot);
+                }
+            }
+            catch (Exception ex)
+            {
+                error = ex.GetBaseException().Message;
+            }
+            return result;
+        }
+
+        private MethodInfo FindZeroArgumentMethod(string name)
+        {
+            Type type = GetType();
+            while (type != null)
+            {
+                MethodInfo method = type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .FirstOrDefault(x => x.Name == name && x.GetParameters().Length == 0);
+                if (method != null)
+                    return method;
+                type = type.BaseType;
+            }
+            return null;
+        }
+
+        private GatewayOrderSnapshot BuildOrderSnapshot(object order)
+        {
+            if (order == null)
+                return null;
+            string orderId = Convert.ToString(ReadMember(order, "OrderID") ?? ReadMember(order, "OrderId"));
+            object rawStatus = ReadMember(order, "OrdStatus") ?? ReadMember(order, "Status");
+            object statusValue = ReadMember(rawStatus, "Obj") ?? rawStatus;
+            PendingOrderContext context;
+            _pendingOrdersByOrderId.TryGetValue(orderId ?? "", out context);
+            return new GatewayOrderSnapshot
+            {
+                OrderId = orderId,
+                RequestId = !string.IsNullOrWhiteSpace(context.RequestId) ? context.RequestId : Convert.ToString(ReadMember(order, "CliOrdID") ?? ReadMember(order, "ClOrdID")),
+                Symbol = NormalizeSymbol(Convert.ToString(ReadMember(order, "Symbol"))),
+                Side = NormalizeOrderSide(Convert.ToString(ReadMember(order, "Side"))),
+                Status = NormalizeOrderStatus(statusValue),
+                Qty = ToSafeDecimal(ReadMember(order, "OrderQty")),
+                FilledQty = ToSafeDecimal(ReadMember(order, "FilledQty") ?? ReadMember(order, "CumQty")),
+                Price = ToSafeDecimal(ReadMember(order, "Price")),
+                AvgPrice = ToSafeDecimal(ReadMember(order, "AvgPx")),
+                UpdatedAt = DateTime.Now
+            };
+        }
+
+        private static object ReadMember(object source, string name)
+        {
+            if (source == null)
+                return null;
+            Type type = source.GetType();
+            PropertyInfo property = type.GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                .FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (property != null)
+                return property.GetValue(source, null);
+            FieldInfo field = type.GetFields(BindingFlags.Instance | BindingFlags.Public)
+                .FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
+            return field == null ? null : field.GetValue(source);
+        }
+
+        private static decimal ToSafeDecimal(object value)
+        {
+            try { return value == null ? 0m : Convert.ToDecimal(value); }
+            catch { return 0m; }
+        }
 
         private async Task HandleCapabilitiesAsync(NetworkStream stream)
         {
@@ -1903,7 +2087,7 @@ namespace Matriks.Lean.Algotrader
         private static bool IsFinalOrderStatus(string status)
         {
             string value = (status ?? "").Trim().ToUpperInvariant();
-            return value == "FILLED" || value == "CANCELED" || value == "CANCELLED" || value == "REJECTED";
+            return value == "FILLED" || value == "CANCELED" || value == "CANCELLED" || value == "REJECTED" || value == "EXPIRED";
         }
 
         private static bool TryConvertOrderQuantity(decimal qty, out int quantity, out string error)
@@ -3015,6 +3199,8 @@ namespace Matriks.Lean.Algotrader
                 return "CANCELED";
             if (ordStatus.Equals(OrdStatus.Rejected))
                 return "REJECTED";
+            if (ordStatus.Equals(OrdStatus.Expired))
+                return "EXPIRED";
 
             return ordStatus.ToString().Trim().ToUpperInvariant();
         }
@@ -3341,6 +3527,36 @@ namespace Matriks.Lean.Algotrader
 
             [JsonProperty("mode")]
             public string Mode { get; set; }
+        }
+
+        private struct CancelOrderRequest
+        {
+            [JsonProperty("orderId")]
+            public string OrderId { get; set; }
+        }
+
+        private sealed class GatewayOrderSnapshot
+        {
+            [JsonProperty("orderId")]
+            public string OrderId { get; set; }
+            [JsonProperty("requestId")]
+            public string RequestId { get; set; }
+            [JsonProperty("symbol")]
+            public string Symbol { get; set; }
+            [JsonProperty("side")]
+            public string Side { get; set; }
+            [JsonProperty("status")]
+            public string Status { get; set; }
+            [JsonProperty("qty")]
+            public decimal Qty { get; set; }
+            [JsonProperty("filledQty")]
+            public decimal FilledQty { get; set; }
+            [JsonProperty("price")]
+            public decimal Price { get; set; }
+            [JsonProperty("avgPrice")]
+            public decimal AvgPrice { get; set; }
+            [JsonProperty("updatedAt")]
+            public DateTime UpdatedAt { get; set; }
         }
 
         private struct OrderResultRequest

@@ -48,6 +48,7 @@ from app.services.matriks_gateway import (
 )
 from app.services.notifications import notify_gateway_event, notify_order_event, notify_risk_block
 from app.services.manual_approvals import queue_response
+from app.services.order_sync import cancel_timed_out_orders
 from app.services.position_sync import sync_positions_from_gateway
 from app.services.signal_override import list_pending_override_symbols
 from app.services.trade_profile import get_active_profile
@@ -79,6 +80,7 @@ class SymbolScanner:
         self._last_portfolio_scan: datetime | None = None
         self._last_tick_at: datetime | None = None
         self._last_evaluated_symbols: list[str] = []
+        self._last_order_timeout_check: datetime | None = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -142,6 +144,7 @@ class SymbolScanner:
     async def tick(self) -> list[str]:
         self._last_tick_at = datetime.now(timezone.utc)
         self._last_evaluated_symbols = []
+        await self._run_order_timeout_check()
         """Tek tarama turu. Değerlendirilen sembollerin listesini döndürür (test için)."""
         # ── Runtime config (kill switch, cutoff, semboller, interval) ──────
         kill_switch = False
@@ -271,6 +274,15 @@ class SymbolScanner:
 
         self._last_evaluated_symbols = list(evaluated)
         return evaluated
+
+    async def _run_order_timeout_check(self) -> None:
+        now = datetime.now(timezone.utc)
+        if self._last_order_timeout_check and (
+            now - self._last_order_timeout_check
+        ) < timedelta(minutes=1):
+            return
+        self._last_order_timeout_check = now
+        await cancel_timed_out_orders(self._gateway, now=now)
 
     async def _run_discovery(self) -> None:
         """Discovery agent'ı periyodik çalıştır: movers → elemeler → watchlist.

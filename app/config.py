@@ -134,6 +134,9 @@ class Settings(BaseSettings):
     scanner_allow_orders: bool = False
     # Manual admin approval is a separate order gate and defaults closed.
     manual_approval_allow_orders: bool = False
+    # Operational data refresh; it never evaluates symbols or sends orders.
+    position_sync_enabled: bool = True
+    position_sync_interval_seconds: int = 60
     order_sync_enabled: bool = True
     order_sync_interval_seconds: int = 900
     order_pending_timeout_minutes: int = 15

@@ -41,6 +41,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         scanner.start()
         print("🔍 Scanner started (Phase 1: PAPER-only).")
 
+    if settings.position_sync_enabled:
+        from app.services.position_sync import position_synchronizer
+
+        position_synchronizer.start()
+
     if settings.order_sync_enabled:
         from app.services.order_sync import order_synchronizer
 
@@ -52,6 +57,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from app.services.scanner import scanner
 
         await scanner.stop()
+    if settings.position_sync_enabled:
+        from app.services.position_sync import position_synchronizer
+
+        await position_synchronizer.stop()
     if settings.order_sync_enabled:
         from app.services.order_sync import order_synchronizer
 

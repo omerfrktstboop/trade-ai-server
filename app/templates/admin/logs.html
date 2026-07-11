@@ -41,7 +41,7 @@
               <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
             </td>
             <td>{{ row.confidence if row.confidence is not none else '—' }}</td>
-            <td class="text-muted">{{ row.model or '—' }}</td>
+            <td class="text-muted">{% set source = row.raw_request.get('decisionSource') if row.raw_request else none %}{{ row.model or source or '—' }}</td>
             <td class="mono text-muted">{{ row.created_at | local_time }}</td>
           </tr>
           {% else %}

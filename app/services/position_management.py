@@ -1,4 +1,6 @@
 from __future__ import annotations
+from sqlalchemy import select
+
 from app.db.session import async_session_factory
 from app.models.db import BotPosition, PositionManagementDecision
 
@@ -7,7 +9,11 @@ _ACTIONS = {"HOLD", "TAKE_PROFIT", "STOP_LOSS", "REDUCE_POSITION", "EXIT_FULL", 
 async def record_position_management(request, raw: dict, response) -> None:
     if request.bot_position_qty <= 0: return
     async with async_session_factory() as session:
-        position = await session.get(BotPosition, request.symbol)
+        position = (
+            await session.execute(
+                select(BotPosition).where(BotPosition.symbol == request.symbol)
+            )
+        ).scalar_one_or_none()
         avg = position.avg_price if position else None
         pnl = ((request.last_price - avg) / avg * 100) if avg else None
         action = str(raw.get("positionAction") or ("EXIT_FULL" if response.action.value == "SELL" else "HOLD")).upper()

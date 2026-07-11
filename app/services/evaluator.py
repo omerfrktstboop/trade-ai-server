@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from app.config import AIProvider, settings
 from app.core.logger import log_signal_evaluation
 from app.core.risk_config import RiskConfig, risk_config
 from app.db.session import async_session_factory
@@ -70,6 +71,15 @@ logger = logging.getLogger(__name__)
 
 # Statik singleton — runtime config yüklenemediğinde kullanılan yedek motor.
 _static_risk_engine = RiskEngine(risk_config)
+
+
+def _decision_persistence_metadata(payload: dict[str, Any]) -> tuple[str, str | None]:
+    """Label AI-decision rows accurately without claiming a model was called."""
+    source = str(payload.get("decisionSource") or "system-gate")
+    if source != "llm":
+        return source, None
+    model = settings.deepseek_model if settings.ai_provider == AIProvider.DEEPSEEK else None
+    return settings.ai_provider.value, model
 
 # Kök sembol değerlendirilirken derinliği de çekilen ilişkili hisseler.
 # (Eski agent_planner.RELATED_SYMBOLS — planner silindi, kural burada yaşıyor.)
@@ -379,6 +389,7 @@ async def persist_evaluation(
     Errors are swallowed so that a DB outage never blocks evaluation.
     """
     try:
+        provider_name, model_name = _decision_persistence_metadata(payload)
         async with async_session_factory() as session:
             session.add(
                 MarketSnapshot(
@@ -405,8 +416,8 @@ async def persist_evaluation(
                 AiDecisionModel(
                     request_id=req.request_id,
                     symbol=req.symbol,
-                    provider="deepseek",
-                    model=None,
+                    provider=provider_name,
+                    model=model_name,
                     raw_request=payload,
                     raw_response=raw_ai,
                     action=raw_ai.get("action", "WAIT"),

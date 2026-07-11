@@ -51,6 +51,7 @@ from app.services.fundamentals_service import (
 )
 from app.services.matriks_gateway import GatewayError, GatewayUnavailable, gateway_client
 from app.services.notifications import notification_service
+from app.services.position_sync import position_synchronizer
 from app.services.scanner import scanner
 from app.services.replay import replay_batch
 from app.services.performance_report import build_performance_report
@@ -1630,6 +1631,7 @@ async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
     result: dict[str, Any] = {
         "gateway": {"reachable": False, "health": None, "error": None},
         "scanner": scanner.get_status(),
+        "positionSync": position_synchronizer.get_status(),
         "runtime": {"dbAvailable": db_error is None, "dbError": db_error},
     }
     try:

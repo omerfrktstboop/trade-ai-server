@@ -25,6 +25,7 @@ os.environ["MARKET_INDEX_SYMBOL"] = ""
 # Env var, .env dosyasına baskın geldiği için burada sabitliyoruz.
 os.environ["SCANNER_ENABLED"] = "false"
 os.environ["SCANNER_ALLOW_ORDERS"] = "false"
+os.environ["POSITION_SYNC_ENABLED"] = "false"
 os.environ["DISCOVERY_SYMBOLS"] = ""
 # Testler dev token'ı hard-code'lar; üretim .env'inin gerçek token'ı sızmasın.
 os.environ["API_TOKEN"] = "dev-token-change-me"

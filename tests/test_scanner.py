@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from app.config import Mode
 from app.core.risk_config import RiskConfig
 from app.models.signal import (
     EntryRange,
@@ -169,6 +170,29 @@ class TestScannerTick:
 
         assert result == ["THYAO", "AKBNK", "OPT25F"]
         assert evaluated_symbols == ["THYAO", "AKBNK", "OPT25F"]
+
+    async def test_scanner_uses_configured_default_mode_when_no_db_override(
+        self, runtime_stubs, monkeypatch
+    ):
+        calls: list[SignalMode] = []
+
+        async def fake_evaluate(_symbol: str, **kwargs: Any):
+            calls.append(kwargs["mode"])
+            assert kwargs["force_paper"] is False
+            return None
+
+        monkeypatch.setattr(scanner_module, "evaluate_symbol", fake_evaluate)
+        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+        monkeypatch.setattr(
+            scanner_module.settings,
+            "default_mode",
+            Mode.DEMO_LIVE,
+        )
+        scanner = SymbolScanner(gateway=make_gateway_client(FakeGateway()))
+
+        await scanner.tick()
+
+        assert calls == [SignalMode.DEMO_LIVE, SignalMode.DEMO_LIVE]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

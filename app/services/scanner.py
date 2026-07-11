@@ -49,11 +49,15 @@ from app.services.matriks_gateway import (
 from app.services.notifications import notify_gateway_event, notify_order_event, notify_risk_block
 from app.services.manual_approvals import queue_response
 from app.services.order_sync import cancel_timed_out_orders
-from app.services.position_sync import sync_positions_from_gateway
 from app.services.signal_override import list_pending_override_symbols
 from app.services.trade_profile import get_active_profile
 
 logger = logging.getLogger(__name__)
+
+
+def _configured_default_mode() -> SignalMode:
+    """Translate the configured default mode for scanner-originated requests."""
+    return SignalMode(settings.default_mode.value.upper())
 
 # Aynı uyarıyı her tick'te loglamamak için susturma süresi.
 _WARN_SUPPRESS = timedelta(minutes=5)
@@ -200,7 +204,8 @@ class SymbolScanner:
         # Admin panelinin Positions sayfası ve acil "tümünü sat" akışı
         # bot_positions'tan okuyor; eski push endpoint'i kaldırıldığı için
         # bu tabloyu güncel tutmak scanner'ın sorumluluğunda.
-        await sync_positions_from_gateway(self._gateway)
+        # Position cache refresh runs in PositionSynchronizer so cutoff and
+        # kill-switch scanner exits cannot leave the admin panel stale.
 
         # ── Sırası gelen sembolleri değerlendir ────────────────────────────
         symbols = [
@@ -231,7 +236,9 @@ class SymbolScanner:
             try:
                 # SCANNER_ALLOW_ORDERS=false → PAPER'a sabit (Phase 1 davranışı).
                 result = await evaluate_symbol(
-                    symbol, force_paper=not settings.scanner_allow_orders
+                    symbol,
+                    mode=_configured_default_mode(),
+                    force_paper=not settings.scanner_allow_orders,
                 )
             except GatewayUnavailable:
                 self._warn_throttled(
@@ -347,7 +354,9 @@ class SymbolScanner:
                 continue
             try:
                 result = await evaluate_symbol(
-                    symbol, force_paper=not settings.scanner_allow_orders
+                    symbol,
+                    mode=_configured_default_mode(),
+                    force_paper=not settings.scanner_allow_orders,
                 )
             except GatewayUnavailable:
                 self._warn_throttled(

@@ -11,16 +11,21 @@ operasyonel bir gerekliliktir.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable
 
 from sqlalchemy import delete, select
 
+from app.config import settings
 from app.db.session import async_session_factory
 from app.models.db import BotPosition
 from app.services.matriks_gateway import (
     GatewayError,
     GatewayUnavailable,
     MatriksGatewayClient,
+    gateway_client,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,3 +93,82 @@ async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
 
     logger.info("Positions synced from gateway count=%d", synced)
     return synced
+
+
+class PositionSynchronizer:
+    """Refresh positions independently from trading and scanner controls."""
+
+    def __init__(
+        self,
+        *,
+        gateway: MatriksGatewayClient | Any = gateway_client,
+        interval_seconds: float = 60.0,
+        sync_func: Callable[[MatriksGatewayClient | Any], Awaitable[int]] = sync_positions_from_gateway,
+    ) -> None:
+        self._gateway = gateway
+        self._interval_seconds = interval_seconds
+        self._sync_func = sync_func
+        self._task: asyncio.Task[None] | None = None
+        self._stop_event = asyncio.Event()
+        self._last_attempt_at: datetime | None = None
+        self._last_completed_at: datetime | None = None
+        self._last_synced_count: int | None = None
+        self._last_error: str | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    def get_status(self) -> dict[str, object]:
+        return {
+            "enabled": settings.position_sync_enabled,
+            "running": self.running,
+            "intervalSeconds": self._interval_seconds,
+            "lastAttemptAt": self._last_attempt_at.isoformat() if self._last_attempt_at else None,
+            "lastCompletedAt": self._last_completed_at.isoformat() if self._last_completed_at else None,
+            "lastSyncedCount": self._last_synced_count,
+            "lastError": self._last_error,
+        }
+
+    def start(self) -> None:
+        if self.running:
+            return
+        self._stop_event.clear()
+        self._task = asyncio.create_task(self._run_loop(), name="position-synchronizer")
+        logger.info("Position synchronizer started interval=%ss", self._interval_seconds)
+
+    async def stop(self) -> None:
+        self._stop_event.set()
+        if self._task is not None:
+            await self._task
+            self._task = None
+        logger.info("Position synchronizer stopped")
+
+    async def sync_once(self) -> int:
+        """Run one gateway-to-DB refresh; this method cannot create orders."""
+        self._last_attempt_at = datetime.now(timezone.utc)
+        try:
+            synced = await self._sync_func(self._gateway)
+        except Exception as exc:
+            self._last_error = str(exc)
+            logger.exception("Position synchronizer tick failed")
+            return 0
+        self._last_completed_at = datetime.now(timezone.utc)
+        self._last_synced_count = synced
+        self._last_error = None
+        return synced
+
+    async def _run_loop(self) -> None:
+        while not self._stop_event.is_set():
+            await self.sync_once()
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(), timeout=max(5, self._interval_seconds)
+                )
+            except asyncio.TimeoutError:
+                pass
+
+
+position_synchronizer = PositionSynchronizer(
+    interval_seconds=max(5, settings.position_sync_interval_seconds)
+)

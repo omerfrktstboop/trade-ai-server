@@ -325,10 +325,8 @@ async def admin_why_blocked(request: Request) -> HTMLResponse:
 @admin_router.get("/replay", response_class=HTMLResponse)
 async def admin_replay(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
-    async with async_session_factory() as session:
-        profiles = await list_profiles(session)
-        status_ctx = await _status_strip_context(session)
-    return templates.TemplateResponse(request, "admin/replay.html", {"identity": identity, "active": "replay", "profiles": profiles, "result": None, **status_ctx})
+    profiles, status_ctx, error = await _replay_page_context()
+    return templates.TemplateResponse(request, "admin/replay.html", {"identity": identity, "active": "replay", "profiles": profiles, "result": None, "error": error, **status_ctx})
 
 
 @admin_router.post("/replay/run", response_class=HTMLResponse)
@@ -339,11 +337,15 @@ async def admin_replay_run(request: Request) -> HTMLResponse:
     mode = str(form.get("mode") or "PAPER")
     symbols = [s.strip().upper() for s in str(form.get("symbols") or "").split(",") if s.strip()]
     limit = min(200, max(1, int(form.get("limit") or 100)))
-    result = await replay_batch(profile_code=profile_code, symbols=symbols or None, limit=limit, mode=mode)
-    async with async_session_factory() as session:
-        profiles = await list_profiles(session)
-        status_ctx = await _status_strip_context(session)
-    return templates.TemplateResponse(request, "admin/replay.html", {"identity": identity, "active": "replay", "profiles": profiles, "result": result, **status_ctx})
+    try:
+        result = await replay_batch(profile_code=profile_code, symbols=symbols or None, limit=limit, mode=mode)
+        error = None
+    except Exception as exc:
+        logger.exception("Replay run failed")
+        result = None
+        error = f"Replay unavailable: {exc}"
+    profiles, status_ctx, context_error = await _replay_page_context()
+    return templates.TemplateResponse(request, "admin/replay.html", {"identity": identity, "active": "replay", "profiles": profiles, "result": result, "error": error or context_error, **status_ctx})
 
 
 @admin_router.get("/config", response_class=HTMLResponse)
@@ -1532,6 +1534,21 @@ async def _dashboard_context() -> dict[str, Any]:
         "dashboard_db_error": db_error,
         **status_ctx,
     }
+
+
+async def _replay_page_context() -> tuple[list[TradeProfile], dict[str, Any], str | None]:
+    """Keep replay diagnostics available even when the database is transiently down."""
+    try:
+        async with async_session_factory() as session:
+            profiles = await list_profiles(session)
+            status_ctx = await _status_strip_context(session)
+        return profiles, status_ctx, None
+    except Exception as exc:
+        logger.warning("Replay page DB query failed: %s", exc)
+        return [], {
+            "status_mode": "UNKNOWN", "status_kill_switch": False,
+            "status_profile_code": "UNKNOWN", "status_profile_risk_level": "UNKNOWN",
+        }, f"Database unavailable: {exc}"
 
 
 async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:

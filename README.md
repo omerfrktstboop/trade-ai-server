@@ -38,7 +38,9 @@ Copy `.env.example` → `.env` and fill in the required values:
 | Variable            | Required | Default                 | Description                              |
 |---------------------|----------|-------------------------|------------------------------------------|
 | `APP_ENV`           | Yes      | `development`           | `development` / `staging` / `production` |
-| `API_TOKEN`         | Prod     | `dev-token-change-me`   | API auth token                           |
+| `EVALUATION_API_TOKEN` | Prod  | —                       | Signal evaluation API token              |
+| `GATEWAY_API_TOKEN` | Prod     | —                       | Gateway callback/config API token         |
+| `ADMIN_API_TOKEN`   | Prod     | —                       | Admin API bearer token                    |
 | `AI_PROVIDER`       | Yes      | `mock`                  | `mock` (dev) / `deepseek`. `openai` / `anthropic` are accepted by config validation but **not implemented yet** — selecting them raises `ValueError` at first signal evaluation. |
 | `DEEPSEEK_API_KEY`  | *        | —                       | Required when `AI_PROVIDER=deepseek`     |
 | `DEEPSEEK_MODEL`    | No       | `deepseek-chat`         | Model name                               |
@@ -54,10 +56,11 @@ Copy `.env.example` → `.env` and fill in the required values:
 \* `DEEPSEEK_API_KEY` is only required in production or when `AI_PROVIDER=deepseek`.
 
 **Production safety:** When `APP_ENV=production`, the server will refuse to start if:
-- `API_TOKEN` is empty or still set to the dev default
+- scoped evaluation, gateway, or admin tokens are weak, placeholders, or equal to each other
 - `AI_PROVIDER=mock` (mock is not allowed in production)
 - `AI_PROVIDER=deepseek` but `DEEPSEEK_API_KEY` is empty
 - `DATABASE_URL` is missing or uses SQLite
+- `MATRIKS_GATEWAY_URL` is not an HTTP(S) loopback URL
 
 **Database:** In development, `DATABASE_URL` can be left empty — the server
 auto-creates a SQLite database (`dev.db`) on first request. No PostgreSQL
@@ -121,7 +124,8 @@ Aşağıdaki adımları **LIVE** moda geçmeden önce mutlaka tamamlayın:
 | Method | Path                    | Auth     | Description              |
 |--------|-------------------------|----------|--------------------------|
 | GET    | `/`                     | —        | Root (docs links)        |
-| GET    | `/api/health`           | —        | Health check             |
+| GET    | `/api/health/live`      | —        | Process liveness         |
+| GET    | `/api/health/ready`     | —        | Dependency/order readiness |
 | POST   | `/api/signal/evaluate`  | Bearer   | Evaluate trading signal (caller supplies market data; manual testing / debugging) |
 | POST   | `/api/order-result`     | Bearer   | Receive order result from the Matriks gateway |
 | GET    | `/admin`                | Admin    | Admin dashboard          |
@@ -138,8 +142,8 @@ Aşağıdaki adımları **LIVE** moda geçmeden önce mutlaka tamamlayın:
 ### Admin Panel MVP
 
 - UI routes use `/admin`; JSON routes use `/api/admin`.
-- Browser login uses `ADMIN_PASSWORD`; admin API calls also accept the existing Bearer `API_TOKEN`.
-- Secrets are not exposed by admin config endpoints: `API_TOKEN`, `DEEPSEEK_API_KEY`, and `DATABASE_URL` are not returned.
+- Browser login uses `ADMIN_PASSWORD`; admin API calls accept `ADMIN_API_TOKEN`.
+- Secrets are not exposed by admin config endpoints: scoped API tokens, `DEEPSEEK_API_KEY`, and `DATABASE_URL` are not returned.
 - Config edits are stored in `system_configs`; every changed value writes `config_audit_logs`.
 - Risky changes require confirmation value `CONFIRM`: switching `tradingMode` or `botMode` to a live mode, disabling `killSwitchEnabled`, and enabling `botEnableRealOrders`/`botDemoAccountConfirmed`.
 - `killSwitchEnabled=true` makes `/api/signal/evaluate` return `WAIT` with `allowOrder=false`.
@@ -344,7 +348,9 @@ Key values for a production install:
 
 ```ini
 APP_ENV=production
-API_TOKEN=<long random string>
+EVALUATION_API_TOKEN=<unique long random string>
+GATEWAY_API_TOKEN=<different long random string>
+ADMIN_API_TOKEN=<different long random string>
 ADMIN_PASSWORD=<strong password>
 AI_PROVIDER=deepseek
 DEEPSEEK_API_KEY=<your key>
@@ -369,10 +375,10 @@ manual; server startup never runs it in production.
 
 1. Create `.env`.
 2. Set `DATABASE_URL` to PostgreSQL.
-3. Set a strong `API_TOKEN`.
+3. Set strong, distinct `EVALUATION_API_TOKEN`, `GATEWAY_API_TOKEN`, and `ADMIN_API_TOKEN` values.
 4. Set a strong `ADMIN_PASSWORD`.
 5. Set a strong `MATRIKS_GATEWAY_TOKEN`.
-6. Run `python -m scripts.init_db_once --yes`.
+6. Back up PostgreSQL, then run `python -m alembic upgrade head`.
 7. Start `uvicorn app.main:app --host 127.0.0.1 --port 8000` (or the Windows service below).
 8. Compile `matriks/TradeAiGateway.cs` in Matriks.
 9. Run the gateway smoke test: `python scripts/gateway_smoke.py`.
@@ -438,7 +444,7 @@ blocks the order.
    | `SymbolsCsv` | e.g. `THYAO,AKBNK,SISE,KCHOL,TUPRS,ANELE` | tradeable universe |
    | `LockedLongTermCsv` | e.g. `THYAO:100,ASELS:50` | lots that can never be sold |
    | `ServerBaseUrl` | `http://127.0.0.1:8000` | where this FastAPI server listens |
-   | `ServerApiToken` | same as `API_TOKEN` in `.env` | used for the `/api/order-result` report |
+   | `ServerApiToken` | same as `GATEWAY_API_TOKEN` in `.env` | used for callback and config APIs |
    | `EnableDemoOrders` / `EnableRealOrders` | `false` / `false` | flip on only when you're ready (see checklist) |
    | `RequireDemoAccount` | `true` | extra guard before any real-mode order |
    | `DemoAccountConfirmed` | `false` | manual confirmation flag |
@@ -461,7 +467,8 @@ nssm set TradeAiServer AppDirectory "C:\trade-ai-server"
 nssm start TradeAiServer
 ```
 
-Confirm it's up: `curl http://localhost:8000/api/health`.
+Confirm liveness with `curl http://localhost:8000/api/health/live`, then verify
+readiness with `curl http://localhost:8000/api/health/ready`.
 
 ### 7. Remote access to the admin panel
 

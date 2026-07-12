@@ -20,7 +20,7 @@ class ManualApprovalRequest(Base):
     confidence: Mapped[float] = mapped_column(Float, default=0)
     risk_score: Mapped[float] = mapped_column(Float, default=0)
     reason: Mapped[str] = mapped_column(Text, default="")
-    status: Mapped[str] = mapped_column(String(16), default="PENDING", index=True)
+    status: Mapped[str] = mapped_column(String(24), default="PENDING_APPROVAL", index=True)
     source: Mapped[str] = mapped_column(String(16), default="SCANNER")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     approved_by: Mapped[str | None] = mapped_column(String(64))

@@ -19,7 +19,7 @@ kararıyla döner.
 | **URL** | `https://<sunucu>/api/signal/evaluate` |
 | **Method** | `POST` |
 | **Content-Type** | `application/json` |
-| **Auth** | `Authorization: Bearer <API_TOKEN>` |
+| **Auth** | `Authorization: Bearer <EVALUATION_API_TOKEN>` |
 | **Timeout** | 15 saniye önerilir (AI çağrısı 3-10s sürebilir) |
 
 ---
@@ -217,7 +217,7 @@ public class SignalResponse
 
 // ── Kullanım ─────────────────────────────────────────────────────────────
 
-var client = new SignalClient("https://sunucu-adresi", "API_TOKEN_HERE");
+var client = new SignalClient("https://sunucu-adresi", "EVALUATION_API_TOKEN_HERE");
 
 var request = new SignalRequest
 {

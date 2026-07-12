@@ -19,13 +19,13 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
 from app.config import settings
-from app.core.auth import verify_token
+from app.core.auth import verify_gateway_token
 from app.db.session import async_session_factory
 from app.models.db import BotPosition, LockedPosition, WatchlistSymbol
 from app.services.admin_config import list_admin_configs
 from app.services.trade_profile import get_active_profile
 
-router = APIRouter(tags=["Gateway"], dependencies=[Depends(verify_token)])
+router = APIRouter(tags=["Gateway"], dependencies=[Depends(verify_gateway_token)])
 
 _LIVE_REAL_MODES = {"REAL_LIVE"}
 _LIVE_DEMO_MODES = {"DEMO_LIVE"}

@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.core.auth import verify_token
+from app.core.auth import verify_gateway_token
 from app.db.session import async_session_factory
 from app.models.db import OrderLog
 from sqlalchemy import select
@@ -18,7 +18,7 @@ from app.services.decision_gate import decision_cache
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["Order"], dependencies=[Depends(verify_token)])
+router = APIRouter(tags=["Order"], dependencies=[Depends(verify_gateway_token)])
 
 
 # ── Schema ───────────────────────────────────────────────────────────────────

@@ -919,16 +919,20 @@ namespace Matriks.Lean.Algotrader
         private async Task HandleHealthAsync(NetworkStream stream)
         {
             var quoteAgeSeconds = new Dictionary<string, double?>();
+            var depthAgeSeconds = new Dictionary<string, double?>();
             foreach (string symbolRaw in AllowedSymbols)
             {
                 string symbol = NormalizeSymbol(symbolRaw);
                 if (_lastValidQuoteBySymbol.TryGetValue(symbol, out var quote))
                 {
                     quoteAgeSeconds[symbol] = Math.Round((DateTime.Now - quote.UpdatedAt).TotalSeconds, 1);
+                    DateTime marketEventUtc;
+                    depthAgeSeconds[symbol] = _lastMarketDataEventUtcBySymbol.TryGetValue(symbol, out marketEventUtc) ? Math.Round((DateTime.UtcNow - marketEventUtc).TotalSeconds, 1) : (double?)null;
                 }
                 else
                 {
                     quoteAgeSeconds[symbol] = null;
+                    depthAgeSeconds[symbol] = null;
                 }
             }
 
@@ -957,7 +961,11 @@ namespace Matriks.Lean.Algotrader
                 lastNewsReceivedUtc = _lastNewsReceivedUtc == DateTime.MinValue ? null : _lastNewsReceivedUtc.ToString("o"),
                 autoOrderEnabled = _autoOrderEnabled,
                 testAutoOrderEnabled = _testAutoOrderEnabled,
+                accountVerificationAgeSeconds = _lastAccountVerificationUtc == DateTime.MinValue ? (double?)null : Math.Round((DateTime.UtcNow - _lastAccountVerificationUtc).TotalSeconds, 1),
                 quoteAgeSeconds = quoteAgeSeconds,
+                depthAgeSeconds = depthAgeSeconds,
+                callbackQueueDepth = _orderResultQueue.Count,
+                callbackOutboxBacklog = _orderResultQueue.Count,
                 orderLimits = new
                 {
                     enableDemoOrders = EnableDemoOrders,
@@ -2642,7 +2650,7 @@ namespace Matriks.Lean.Algotrader
                 bool accountChanged = !string.IsNullOrWhiteSpace(_lastVerifiedAccountId)
                     && !string.Equals(_lastVerifiedAccountId, accountId, StringComparison.Ordinal);
                 if (accountChanged)
-                    SafeDebug("Demo account changed from " + _lastVerifiedAccountId + " to " + accountId);
+                    SafeDebug("Demo account changed from " + MaskAccountId(_lastVerifiedAccountId) + " to " + MaskAccountId(accountId));
 
                 _autoOrderEnabled = tradeUser.AutoOrder;
                 _testAutoOrderEnabled = testAutoOrder;
@@ -3271,7 +3279,7 @@ namespace Matriks.Lean.Algotrader
 
                 _autoOrderEnabled = tradeUser.AutoOrder;
                 _testAutoOrderEnabled = tradeUser.TestAutoOrder;
-                SafeDebug("TradeUser accountId=" + tradeUser.AccountId
+                SafeDebug("TradeUser accountId=" + MaskAccountId(Convert.ToString(tradeUser.AccountId))
                     + " autoOrder=" + _autoOrderEnabled
                     + " testAutoOrder=" + _testAutoOrderEnabled);
             }
@@ -4087,6 +4095,13 @@ namespace Matriks.Lean.Algotrader
                 Query = query,
                 Body = body
             };
+        }
+
+        private static string MaskAccountId(string accountId)
+        {
+            string value = (accountId ?? "").Trim();
+            if (value.Length <= 4) return "****";
+            return new string('*', Math.Min(8, value.Length - 4)) + value.Substring(value.Length - 4);
         }
 
         private static HttpRequest InvalidHttpRequest(string error)

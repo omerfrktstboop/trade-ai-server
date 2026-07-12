@@ -6,11 +6,11 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import verify_token
+from app.core.auth import verify_evaluation_token
 from app.db.session import get_async_session
 from app.models.db import RiskDecision
 
-router = APIRouter(tags=["Signals"], dependencies=[Depends(verify_token)])
+router = APIRouter(tags=["Signals"], dependencies=[Depends(verify_evaluation_token)])
 
 
 @router.get("/signals/latest")

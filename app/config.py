@@ -9,6 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,6 +31,17 @@ class AIProvider(str, Enum):
 
 
 SUPPORTED_AI_PROVIDERS = frozenset(provider.value for provider in AIProvider)
+_SECRET_PLACEHOLDERS = {"", "change-me", "changeme", "dev-token-change-me", "admin-change-me", "buraya_server_token", "buraya_gateway_token"}
+
+
+def _strong_secret(value: str, *, min_length: int = 32) -> bool:
+    normalized = (value or "").strip()
+    return (
+        len(normalized) >= min_length
+        and len(set(normalized)) >= 12
+        and normalized.casefold() not in _SECRET_PLACEHOLDERS
+        and "change-me" not in normalized.casefold()
+    )
 
 
 def is_supported_ai_provider(value: object) -> bool:
@@ -89,6 +101,9 @@ class Settings(BaseSettings):
         default="dev-token-change-me",
         description="API authentication token. Default is for local dev only.",
     )
+    evaluation_api_token: str = ""
+    gateway_api_token: str = ""
+    admin_api_token: str = ""
     admin_password: str = Field(
         default="admin-change-me",
         description="Admin panel password. Change for staging/production.",
@@ -215,23 +230,31 @@ class Settings(BaseSettings):
 
         errors: list[str] = []
 
-        # API token must be set and not the dev default
-        if not self.api_token or self.api_token == "dev-token-change-me":
-            errors.append(
-                "API_TOKEN is empty or still set to dev default. "
-                "Set a secure token in production."
-            )
-        if not self.admin_password or self.admin_password == "admin-change-me":
+        scoped_tokens = {
+            "EVALUATION_API_TOKEN": self.evaluation_api_token,
+            "GATEWAY_API_TOKEN": self.gateway_api_token,
+            "ADMIN_API_TOKEN": self.admin_api_token,
+        }
+        for name, secret in scoped_tokens.items():
+            if not _strong_secret(secret):
+                errors.append(f"{name} must be non-placeholder, >=32 chars, and contain >=12 unique characters.")
+        if len(set(scoped_tokens.values())) != len(scoped_tokens):
+            errors.append("Evaluation, gateway, and admin API tokens must be distinct.")
+        if not _strong_secret(self.admin_password, min_length=16):
             errors.append(
                 "ADMIN_PASSWORD is empty or still set to dev default. "
                 "Set a secure admin password in production."
             )
 
-        if not self.matriks_gateway_token.strip():
+        if not _strong_secret(self.matriks_gateway_token):
             errors.append(
                 "MATRIKS_GATEWAY_TOKEN is required in production. "
                 "Set a strong shared secret matching the gateway ApiToken."
             )
+
+        gateway_url = urlparse(self.matriks_gateway_url)
+        if gateway_url.scheme not in {"http", "https"} or gateway_url.hostname not in {"127.0.0.1", "localhost", "::1"}:
+            errors.append("MATRIKS_GATEWAY_URL must target localhost/127.0.0.1 in production.")
 
         # AI provider key required
         if self.ai_provider == AIProvider.DEEPSEEK and not self.deepseek_api_key:
@@ -269,6 +292,18 @@ class Settings(BaseSettings):
             )
 
         return self
+
+    @property
+    def effective_evaluation_token(self) -> str:
+        return self.evaluation_api_token or self.api_token
+
+    @property
+    def effective_gateway_api_token(self) -> str:
+        return self.gateway_api_token or self.api_token
+
+    @property
+    def effective_admin_api_token(self) -> str:
+        return self.admin_api_token or self.api_token
 
     @property
     def is_production(self) -> bool:

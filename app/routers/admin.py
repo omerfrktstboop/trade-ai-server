@@ -41,6 +41,7 @@ from app.services.admin_config import (
     get_admin_config_value,
     list_admin_configs,
     set_admin_config_value,
+    set_admin_config_values,
 )
 from app.services.block_reason_classifier import classify_block_reason
 from app.services.daily_trade_count import get_today_trade_counts
@@ -135,6 +136,12 @@ class AdminConfigUpdate(BaseModel):
     confirmation: str | None = None
 
 
+class AdminConfigBatchUpdate(BaseModel):
+    values: dict[str, Any]
+    reason: str | None = None
+    confirmation: str | None = None
+
+
 class EmergencyAction(BaseModel):
     reason: str | None = None
     confirmation: str | None = None
@@ -213,7 +220,7 @@ async def _admin_identity(request: Request) -> str | None:
     auth_header = request.headers.get("authorization", "")
     if auth_header.lower().startswith("bearer "):
         token = auth_header.split(" ", 1)[1].strip()
-        if hmac.compare_digest(token, settings.api_token):
+        if hmac.compare_digest(token, settings.effective_admin_api_token):
             return "api-token"
 
     cookie = request.cookies.get(ADMIN_COOKIE_NAME)
@@ -452,17 +459,18 @@ async def admin_config_update(request: Request) -> Any:
     try:
         async with async_session_factory() as session:
             configs = await list_admin_configs(session)
-            for item in configs:
-                if item.key not in form:
-                    continue
-                await set_admin_config_value(
-                    session,
-                    item.key,
-                    form[item.key],
-                    changed_by=identity,
-                    reason=reason,
-                    confirmation=confirmation,
-                )
+            values = {
+                item.key: form[item.key]
+                for item in configs
+                if item.key in form
+            }
+            await set_admin_config_values(
+                session,
+                values,
+                changed_by=identity,
+                reason=reason,
+                confirmation=confirmation,
+            )
     except ValueError as exc:
         async with async_session_factory() as session:
             configs = await _config_lookup(session)
@@ -1322,6 +1330,18 @@ async def admin_api_update_config(
     return _config_dict(item)
 
 
+@admin_api_router.put("/config")
+async def admin_api_update_config_batch(request: Request, body: AdminConfigBatchUpdate) -> dict[str, Any]:
+    identity = await require_admin(request)
+    try:
+        async with async_session_factory() as session:
+            items = await set_admin_config_values(session, body.values, changed_by=identity, reason=body.reason, confirmation=body.confirmation)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _notify_gateway_config_reload()
+    return {"status": "ok", "updated": [_config_dict(item) for item in items]}
+
+
 @admin_api_router.post("/emergency/{action}")
 async def admin_api_emergency(
     request: Request,
@@ -1822,5 +1842,5 @@ def _verify_admin_cookie(cookie: str) -> bool:
 
 
 def _sign(payload: str) -> str:
-    secret = f"{settings.admin_password}:{settings.api_token}".encode("utf-8")
+    secret = f"{settings.admin_password}:{settings.effective_admin_api_token}".encode("utf-8")
     return hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()

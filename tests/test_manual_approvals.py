@@ -93,7 +93,7 @@ def test_approval_gates_do_not_call_gateway(
         monkeypatch.setattr(approvals_service, "gateway_client", gateway)
         row_id = await _approval_with_config(**override)
         result = await approve_request(row_id, "admin")
-        assert result.status == "SEND_FAILED"
+        assert result.status == "REJECTED"
         assert expected_reason in result.admin_note
         assert gateway.sent == []
     asyncio.run(run())
@@ -107,8 +107,20 @@ def test_approval_success_sends_only_demo_live_limit(monkeypatch):
         monkeypatch.setattr(approvals_service, "gateway_client", gateway)
         row_id = await _approval_with_config()
         result = await approve_request(row_id, "admin")
-        assert result.status == "SENT"
+        assert result.status == "SENT_PENDING"
         assert len(gateway.sent) == 1
         assert gateway.sent[0]["mode"] == "DEMO_LIVE"
         assert "order_type" not in gateway.sent[0]
+    asyncio.run(run())
+
+
+def test_sending_approval_cannot_be_rejected():
+    async def run():
+        await drop_all(); await init_db()
+        async with async_session_factory() as session:
+            row = ManualApprovalRequest(request_id="sending", symbol="THYAO", action="BUY", qty=1, price=100, order_type="LIMIT", status="SENDING", expires_at=datetime.now(timezone.utc) + timedelta(minutes=5))
+            session.add(row); await session.commit(); await session.refresh(row); row_id = row.id
+        result = await reject_request(row_id, "admin", "too late")
+        assert result.status == "SENDING"
+        assert result.rejected_by is None
     asyncio.run(run())

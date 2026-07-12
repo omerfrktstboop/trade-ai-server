@@ -211,6 +211,7 @@ async def set_admin_config_value(
     changed_by: str,
     reason: str | None = None,
     confirmation: str | None = None,
+    commit: bool = True,
 ) -> AdminConfigItem:
     """Validate, persist, and audit one admin config value."""
     definition = _ensure_allowed_key(key)
@@ -249,11 +250,14 @@ async def set_admin_config_value(
             )
         )
 
-    await session.commit()
-    if old_value != new_value:
-        from app.services.decision_gate import decision_cache
-        decision_cache.clear()
-    await session.refresh(row)
+    if commit:
+        await session.commit()
+        if old_value != new_value:
+            from app.services.decision_gate import decision_cache
+            decision_cache.clear()
+        await session.refresh(row)
+    else:
+        await session.flush()
     return AdminConfigItem(
         key=key,
         value=row.value,
@@ -263,6 +267,28 @@ async def set_admin_config_value(
         source="db",
         updated_at=row.updated_at,
     )
+
+
+async def set_admin_config_values(
+    session: AsyncSession,
+    values: dict[str, Any],
+    *, changed_by: str,
+    reason: str | None = None,
+    confirmation: str | None = None,
+) -> list[AdminConfigItem]:
+    """Validate and persist a config snapshot in one DB transaction."""
+    if not values:
+        raise ValueError("At least one config value is required")
+    items: list[AdminConfigItem] = []
+    async with session.begin():
+        for key, value in values.items():
+            items.append(await set_admin_config_value(
+                session, key, value, changed_by=changed_by, reason=reason,
+                confirmation=confirmation, commit=False,
+            ))
+    from app.services.decision_gate import decision_cache
+    decision_cache.clear()
+    return items
 
 
 async def is_kill_switch_enabled(session: AsyncSession) -> bool:

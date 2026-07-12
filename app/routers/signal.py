@@ -21,7 +21,7 @@ import logging
 
 from fastapi import APIRouter, Depends
 
-from app.core.auth import verify_token
+from app.core.auth import verify_evaluation_token
 from app.core.logger import log_signal_evaluation
 from app.models.signal import SignalRequest, SignalResponse
 from app.services.ai_provider import get_default_provider
@@ -38,7 +38,7 @@ from app.services.news_service import get_news_context
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["Signal"], dependencies=[Depends(verify_token)])
+router = APIRouter(tags=["Signal"], dependencies=[Depends(verify_evaluation_token)])
 
 _provider = get_default_provider()
 

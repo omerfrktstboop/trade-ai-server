@@ -22,9 +22,12 @@ class OrderLog(Base):
     action: Mapped[str] = mapped_column(String(8), nullable=False)
     qty: Mapped[float] = mapped_column(Float, default=0.0)
     price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    order_qty: Mapped[float] = mapped_column(Float, default=0.0)
+    limit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="PENDING")
+    state: Mapped[str] = mapped_column(String(32), default="RESERVED")
 
     mode: Mapped[str] = mapped_column(String(16), default="PAPER")
     order_type: Mapped[str] = mapped_column(String(16), default="LIMIT")
@@ -42,6 +45,7 @@ class OrderLog(Base):
     config_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     profile_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     matrix_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

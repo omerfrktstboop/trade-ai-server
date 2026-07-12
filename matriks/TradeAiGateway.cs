@@ -89,6 +89,8 @@ namespace Matriks.Lean.Algotrader
         // Server config gelene kadar bütün emir kapıları fail-closed.
         private bool EnableDemoOrders;
         private bool EnableRealOrders;
+        private bool RealLiveModeAllowed;
+        private bool RealLiveArmed;
         private bool RequireDemoAccount = true;
         private bool DemoAccountConfirmed;
         private decimal MaxOrderValueTl;
@@ -100,6 +102,7 @@ namespace Matriks.Lean.Algotrader
         private string ActiveProfileCode = "UNAVAILABLE";
         private DateTime _lastConfigFetchUtc = DateTime.MinValue;
         private string _lastAppliedConfigSignature = string.Empty;
+        private string _configVersion = "UNAVAILABLE";
 
         private SymbolPeriod IndicatorPeriod = SymbolPeriod.Min5;
 
@@ -114,6 +117,7 @@ namespace Matriks.Lean.Algotrader
         private const int MaxHttpHeaderBytes = 16384;
         private const int MaxHttpBodyBytes = 1048576;
         private const int ConfigStaleSeconds = 180;
+        private const int AccountVerificationMaxAgeSeconds = 5;
         private const int PositionSyncIntervalSeconds = 45;
         private static readonly TimeSpan IdempotencyTtl = TimeSpan.FromHours(24);
 
@@ -166,6 +170,9 @@ namespace Matriks.Lean.Algotrader
         private bool _realPositionsLoadedFromSnapshot;
         private bool? _autoOrderEnabled;
         private bool? _testAutoOrderEnabled;
+        private bool _demoAccountVerified;
+        private DateTime _lastAccountVerificationUtc = DateTime.MinValue;
+        private string _lastVerifiedAccountId = string.Empty;
         private bool _subscriptionsInitialized;
         private readonly object _symbolSubscriptionLock = new object();
         private readonly SemaphoreSlim _configFetchLock = new SemaphoreSlim(1, 1);
@@ -752,6 +759,8 @@ namespace Matriks.Lean.Algotrader
                     string runtimeMode = NormalizeMode(cfg.Value<string>("mode"));
                     bool enableDemoOrders = cfg.Value<bool?>("enableDemoOrders") ?? false;
                     bool enableRealOrders = cfg.Value<bool?>("enableRealOrders") ?? false;
+                    bool realLiveModeAllowed = cfg.Value<bool?>("realLiveModeAllowed") ?? false;
+                    bool realLiveArmed = cfg.Value<bool?>("realLiveArmed") ?? false;
                     bool requireDemoAccount = cfg.Value<bool?>("requireDemoAccount") ?? true;
                     bool demoAccountConfirmed = cfg.Value<bool?>("demoAccountConfirmed") ?? false;
                     decimal maxOrderValueTl = cfg.Value<decimal?>("maxOrderValueTl") ?? 0m;
@@ -760,6 +769,7 @@ namespace Matriks.Lean.Algotrader
                     int maxOrdersPerSymbolPerDay = cfg.Value<int?>("maxOrdersPerSymbolPerDay") ?? 0;
                     string orderTimeInForce = cfg.Value<string>("orderTimeInForce") ?? "Day";
                     string activeProfileCode = cfg.Value<string>("profileCode") ?? "UNKNOWN";
+                    string configVersion = cfg.Value<string>("configHash") ?? "UNKNOWN";
 
                     bool liveMode = runtimeMode == "DEMO_LIVE" || runtimeMode == "REAL_LIVE";
                     if (liveMode && (symbols.Length == 0 || maxOrderValueTl <= 0m
@@ -783,14 +793,21 @@ namespace Matriks.Lean.Algotrader
                     RuntimeMode = runtimeMode;
                     EnableDemoOrders = enableDemoOrders;
                     EnableRealOrders = enableRealOrders;
+                    RealLiveModeAllowed = realLiveModeAllowed;
+                    RealLiveArmed = realLiveArmed;
                     RequireDemoAccount = requireDemoAccount;
                     DemoAccountConfirmed = demoAccountConfirmed;
+                    // A server-side confirmation/account policy change must
+                    // never inherit a previous five-second verification.
+                    _demoAccountVerified = false;
+                    _lastAccountVerificationUtc = DateTime.MinValue;
                     MaxOrderValueTl = maxOrderValueTl;
                     MaxQtyPerOrder = maxQtyPerOrder;
                     MaxOrdersPerDay = maxOrdersPerDay;
                     MaxOrdersPerSymbolPerDay = maxOrdersPerSymbolPerDay;
                     OrderTimeInForce = orderTimeInForce;
                     ActiveProfileCode = activeProfileCode;
+                    _configVersion = configVersion;
 
                     // Haber ayarları da server'dan gelir (algo panelinde değil).
                     // Boş bırakılırsa: keyword aboneliği yok, sembol bazlı pasif
@@ -814,6 +831,8 @@ namespace Matriks.Lean.Algotrader
                         string.Join(",", AllowedSymbols.OrderBy(x => x, StringComparer.Ordinal)),
                         EnableDemoOrders.ToString(),
                         EnableRealOrders.ToString(),
+                        RealLiveModeAllowed.ToString(),
+                        RealLiveArmed.ToString(),
                         RequireDemoAccount.ToString(),
                         DemoAccountConfirmed.ToString(),
                         MaxOrderValueTl.ToString(),
@@ -831,6 +850,8 @@ namespace Matriks.Lean.Algotrader
                             + " symbols=" + string.Join(",", AllowedSymbols)
                             + " enableDemoOrders=" + EnableDemoOrders
                             + " enableRealOrders=" + EnableRealOrders
+                            + " realLiveModeAllowed=" + RealLiveModeAllowed
+                            + " realLiveArmed=" + RealLiveArmed
                             + " maxOrderValueTl=" + MaxOrderValueTl
                             + " maxQtyPerOrder=" + MaxQtyPerOrder);
                     }
@@ -890,6 +911,7 @@ namespace Matriks.Lean.Algotrader
                     : Math.Round((DateTime.UtcNow - _lastConfigFetchUtc).TotalSeconds, 1),
                 configStale = IsConfigStale(),
                 profileCode = ActiveProfileCode,
+                configVersion = _configVersion,
                 runtimeMode = RuntimeMode,
                 positionsLoaded = _realPositionsLoadedFromSnapshot,
                 lastPositionSyncUtc = _lastPositionSyncUtc == DateTime.MinValue ? null : _lastPositionSyncUtc.ToString("o"),
@@ -904,6 +926,8 @@ namespace Matriks.Lean.Algotrader
                 {
                     enableDemoOrders = EnableDemoOrders,
                     enableRealOrders = EnableRealOrders,
+                    realLiveModeAllowed = RealLiveModeAllowed,
+                    realLiveArmed = RealLiveArmed,
                     requireDemoAccount = RequireDemoAccount,
                     demoAccountConfirmed = DemoAccountConfirmed,
                     maxOrderValueTl = ToDouble(MaxOrderValueTl),
@@ -2155,16 +2179,18 @@ namespace Matriks.Lean.Algotrader
             }
             catch (Exception ex)
             {
-                RollbackOrderReservation(order.RequestId, symbol, side, true);
-                SafeDebug("Order exception requestId=" + order.RequestId + " error=" + ex.Message);
+                reservation.Accepted = false;
+                reservation.Status = "SEND_UNKNOWN";
+                reservation.Message = "SendLimitOrder outcome is unknown; reconciliation required";
+                SafeDebug("Order send outcome unknown requestId=" + order.RequestId + " error=" + ex.Message);
                 await WriteJsonAsync(stream, 200, new
                 {
                     ok = true,
                     accepted = false,
-                    status = "ERROR",
+                    status = "SEND_UNKNOWN",
                     requestId = order.RequestId,
                     symbol = symbol,
-                    reason = "order send failed"
+                    reason = reservation.Message
                 });
             }
             }
@@ -2190,8 +2216,10 @@ namespace Matriks.Lean.Algotrader
             {
                 if (!EnableDemoOrders)
                     return "EnableDemoOrders=false";
-                if (!IsDemoAccount())
-                    return "DEMO_LIVE blocked: demo account is not confirmed";
+                if (!RequireDemoAccount)
+                    return "DEMO_LIVE blocked: RequireDemoAccount=false";
+                if (!VerifyDemoAccountFresh())
+                    return "DEMO_LIVE blocked: demo account verification failed or is not current";
                 return null;
             }
 
@@ -2199,7 +2227,11 @@ namespace Matriks.Lean.Algotrader
             {
                 if (!EnableRealOrders)
                     return "REAL_LIVE blocked: EnableRealOrders=false";
-                if (RequireDemoAccount && !IsDemoAccount())
+                if (!RealLiveModeAllowed)
+                    return "REAL_LIVE blocked: realLiveModeAllowed=false";
+                if (!RealLiveArmed)
+                    return "REAL_LIVE blocked: realLiveArmed=false";
+                if (RequireDemoAccount && !VerifyDemoAccountFresh())
                     return "RequireDemoAccount=true and demo account is not confirmed";
                 return null;
             }
@@ -2271,9 +2303,8 @@ namespace Matriks.Lean.Algotrader
             }
             catch
             {
-                PendingOrderContext ignored;
-                _pendingOrdersBySymbolSide.TryRemove(symbolSideKey, out ignored);
-                _pendingOrdersByRequestId.TryRemove(requestId, out ignored);
+                // The broker may have accepted the call before throwing.  Do
+                // not release the pending indexes or permit a resend.
                 throw;
             }
 
@@ -2445,20 +2476,6 @@ namespace Matriks.Lean.Algotrader
             }
         }
 
-        private bool IsDemoAccount()
-        {
-            if (!RequireDemoAccount)
-                return true;
-
-            if (!DemoAccountConfirmed)
-                return false;
-
-            if (_testAutoOrderEnabled.HasValue)
-                return _testAutoOrderEnabled.Value;
-
-            return true;
-        }
-
         private void IncrementDailyTradeCount(string symbol)
         {
             symbol = NormalizeSymbol(symbol);
@@ -2491,6 +2508,47 @@ namespace Matriks.Lean.Algotrader
             string value = (status ?? "").Trim().ToUpperInvariant();
             return value == "FILLED" || value == "CANCELED" || value == "CANCELLED"
                 || value == "REJECTED" || value == "EXPIRED" || value == "ERROR";
+        }
+
+        /// <summary>
+        /// Re-check the only compile-safe account API immediately before a
+        /// DEMO_LIVE order when the cached result is older than five seconds.
+        /// A failed read never reuses a previous successful verification.
+        /// </summary>
+        private bool VerifyDemoAccountFresh()
+        {
+            if ((DateTime.UtcNow - _lastAccountVerificationUtc).TotalSeconds <= AccountVerificationMaxAgeSeconds)
+                return _demoAccountVerified;
+
+            try
+            {
+                var tradeUser = GetTradeUser();
+                if (tradeUser == null)
+                    throw new InvalidOperationException("GetTradeUser returned null");
+
+                string accountId = Convert.ToString(tradeUser.AccountId) ?? string.Empty;
+                bool testAutoOrder = tradeUser.TestAutoOrder;
+                bool accountChanged = !string.IsNullOrWhiteSpace(_lastVerifiedAccountId)
+                    && !string.Equals(_lastVerifiedAccountId, accountId, StringComparison.Ordinal);
+                if (accountChanged)
+                    SafeDebug("Demo account changed from " + _lastVerifiedAccountId + " to " + accountId);
+
+                _autoOrderEnabled = tradeUser.AutoOrder;
+                _testAutoOrderEnabled = testAutoOrder;
+                _lastVerifiedAccountId = accountId;
+                _lastAccountVerificationUtc = DateTime.UtcNow;
+                // Reject the first order after an account switch. A new
+                // verification is required before a subsequent order can run.
+                _demoAccountVerified = DemoAccountConfirmed && testAutoOrder && !accountChanged;
+                return _demoAccountVerified;
+            }
+            catch (Exception ex)
+            {
+                _demoAccountVerified = false;
+                _lastAccountVerificationUtc = DateTime.MinValue;
+                SafeDebug("Demo account verification failed: " + ex.Message);
+                return false;
+            }
         }
 
         private static int GetOrderStatusRank(string status)
@@ -3675,7 +3733,6 @@ namespace Matriks.Lean.Algotrader
             string value = (mode ?? "PAPER").Trim().ToUpperInvariant();
             if (value != "PAPER"
                 && value != "MANUAL"
-                && value != "LIVE"
                 && value != "DEMO_LIVE"
                 && value != "REAL_LIVE")
             {

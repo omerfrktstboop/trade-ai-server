@@ -49,6 +49,7 @@ from app.services.matriks_gateway import (
 from app.services.notifications import notify_gateway_event, notify_order_event, notify_risk_block
 from app.services.manual_approvals import queue_response
 from app.services.order_sync import cancel_timed_out_orders
+from app.services.order_ledger import mark_send_result, mark_send_started, reserve_order
 from app.services.signal_override import list_pending_override_symbols
 from app.services.trade_profile import get_active_profile
 
@@ -476,6 +477,17 @@ class SymbolScanner:
             )
             return
 
+        async with async_session_factory() as session:
+            ledger_row, may_send, ledger_rejection = await reserve_order(
+                session, request_id=response.request_id, symbol=response.symbol,
+                side=response.action.value, qty=response.qty, limit_price=response.price,
+                mode=result.mode.value,
+            )
+            if not may_send:
+                logger.warning("Order replay blocked requestId=%s reason=%s", response.request_id, ledger_rejection or ledger_row.status)
+                return
+            await mark_send_started(session, ledger_row)
+
         try:
             outcome = await self._gateway.send_order(
                 request_id=response.request_id,
@@ -505,7 +517,7 @@ class SymbolScanner:
                 reason=reason,
             )
         except (GatewayUnavailable, GatewayError) as exc:
-            status = "ERROR"
+            status = "SEND_UNKNOWN"
             reason = str(exc)
             logger.error(
                 "Order send failed symbol=%s requestId=%s error=%s",
@@ -519,6 +531,17 @@ class SymbolScanner:
                 reason=reason,
             )
 
+        async with async_session_factory() as session:
+            row = (await session.execute(select(OrderLog).where(OrderLog.request_id == response.request_id))).scalar_one()
+            await mark_send_result(
+                session,
+                row,
+                status=status,
+                message=f"scanner: {reason}",
+                uncertain=status == "SEND_UNKNOWN",
+            )
+        # Compatibility hook for notifications/tests; the ledger has already
+        # committed the authoritative state above.
         await self._persist_order_outcome(response, status, reason)
 
     async def _persist_order_outcome(self, response, status: str, reason: str) -> None:
@@ -530,8 +553,11 @@ class SymbolScanner:
         """
         try:
             async with async_session_factory() as session:
-                session.add(
-                    OrderLog(
+                entry = (await session.execute(
+                    select(OrderLog).where(OrderLog.request_id == response.request_id)
+                )).scalar_one_or_none()
+                if entry is None:
+                    entry = OrderLog(
                         request_id=response.request_id,
                         symbol=response.symbol,
                         action=response.action.value,
@@ -541,7 +567,10 @@ class SymbolScanner:
                         order_id=None,
                         matrix_message=f"scanner: {reason}",
                     )
-                )
+                    session.add(entry)
+                else:
+                    entry.status = status
+                    entry.matrix_message = f"scanner: {reason}"
                 await session.commit()
         except Exception:
             logger.exception(

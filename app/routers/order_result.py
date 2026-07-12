@@ -42,15 +42,23 @@ class OrderResultRequest(BaseModel):
 
 
 class OrderResultResponse(BaseModel):
-    """Simple acknowledgement."""
+    """ACK is issued only after the database transaction commits."""
 
     status: str
+    persisted: bool
+    request_id: str = Field(alias="requestId")
+    applied_status: str | None = Field(None, alias="appliedStatus")
+
+    model_config = {"populate_by_name": True}
 
 
-FINAL_STATUSES = {"FILLED", "REJECTED", "CANCELED", "CANCELLED", "EXPIRED", "ERROR"}
+FINAL_STATUSES = {"FILLED", "REJECTED", "CANCELED", "CANCELLED", "EXPIRED"}
 STATUS_RANK = {
+    "RESERVED": 1,
+    "SEND_IN_PROGRESS": 5,
     "PENDING": 0,
     "SENT_PENDING": 10,
+    "SEND_UNKNOWN": 15,
     "NEW": 20,
     "SENT": 25,
     "CANCEL_REQUESTED": 30,
@@ -60,7 +68,7 @@ STATUS_RANK = {
     "CANCELED": 100,
     "CANCELLED": 100,
     "EXPIRED": 100,
-    "ERROR": 100,
+    "ERROR_RECONCILIATION_REQUIRED": 90,
 }
 
 
@@ -84,6 +92,8 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
     DB errors are swallowed so that the endpoint never blocks Matriks IQ.
     """
     event_applied = False
+    persisted = False
+    applied_status: str | None = None
     try:
         async with async_session_factory() as session:
             entry = (
@@ -102,7 +112,9 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
             if entry is None:
                 entry = OrderLog(request_id=body.request_id, symbol=body.symbol,
                     action=body.action, qty=effective_qty, price=effective_price,
-                    status=incoming_status, order_id=body.order_id,
+                    status=incoming_status, order_id=body.order_id, order_type="LIMIT",
+                    filled_qty=filled_qty or 0.0, last_fill_qty=body.last_fill_qty or 0.0,
+                    avg_price=body.avg_price, rounded_limit_price=body.limit_price,
                     matrix_message=body.matriks_message)
                 session.add(entry)
                 event_applied = True
@@ -111,9 +123,15 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
                 entry.status = incoming_status
                 entry.qty = max(entry.qty or 0.0, effective_qty)
                 entry.price = effective_price or entry.price
+                entry.filled_qty = max(entry.filled_qty or 0.0, filled_qty or 0.0)
+                entry.last_fill_qty = max(0.0, body.last_fill_qty or 0.0)
+                entry.avg_price = body.avg_price or entry.avg_price
+                entry.rounded_limit_price = body.limit_price or entry.rounded_limit_price
                 entry.order_id = body.order_id or entry.order_id
                 entry.matrix_message = body.matriks_message
             await session.commit()
+            persisted = True
+            applied_status = entry.status
     except Exception:
         logger.exception(
             "Failed to persist order result request_id=%s symbol=%s",
@@ -133,4 +151,9 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
             request_id=body.request_id,
         )
 
-    return OrderResultResponse(status="ok")
+    return OrderResultResponse(
+        status="ok" if persisted else "error",
+        persisted=persisted,
+        requestId=body.request_id,
+        appliedStatus=applied_status,
+    )

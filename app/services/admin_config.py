@@ -89,6 +89,18 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "false",
         "Matriks botun real hesaba emir gondermesine izin verir.",
     ),
+    "botRealLiveModeAllowed": ConfigDefinition(
+        "botRealLiveModeAllowed",
+        "bool",
+        "false",
+        "REAL_LIVE modunun profile disinda backend tarafindan kullanilabilmesini belirler.",
+    ),
+    "botRealLiveArmed": ConfigDefinition(
+        "botRealLiveArmed",
+        "bool",
+        "false",
+        "REAL_LIVE emir yolunu kasitli olarak kurar; tek basina emir yetkisi vermez.",
+    ),
     "botRequireDemoAccount": ConfigDefinition(
         "botRequireDemoAccount",
         "bool",
@@ -120,6 +132,8 @@ RISKY_CONFIG_KEYS = {
     "killSwitchEnabled",
     "botMode",
     "botEnableRealOrders",
+    "botRealLiveModeAllowed",
+    "botRealLiveArmed",
     "botDemoAccountConfirmed",
 }
 
@@ -263,6 +277,8 @@ async def build_runtime_risk_config(session: AsyncSession) -> RiskConfig:
     values = {item.key: item.value for item in await list_admin_configs(session)}
     profile = await get_active_profile(session)
     bot_enable_real_orders = _parse_bool(values["botEnableRealOrders"])
+    real_live_mode_allowed = _parse_bool(values["botRealLiveModeAllowed"])
+    real_live_armed = _parse_bool(values["botRealLiveArmed"])
     return RiskConfig(
         allowed_symbols=values["allowedSymbols"],
         locked_long_term_symbols=values["lockedLongTermSymbols"],
@@ -285,7 +301,12 @@ async def build_runtime_risk_config(session: AsyncSession) -> RiskConfig:
         block_buy_on_strong_sell_pressure=profile.block_buy_on_strong_sell_pressure,
         block_buy_on_near_ask_wall=profile.block_buy_on_near_ask_wall,
         near_wall_distance_pct=profile.near_wall_distance_pct,
-        real_live_mode_allowed=profile.allow_real_live and bot_enable_real_orders,
+        real_live_mode_allowed=(
+            profile.allow_real_live
+            and bot_enable_real_orders
+            and real_live_mode_allowed
+            and real_live_armed
+        ),
         demo_live_mode_allowed=profile.allow_demo_live,
         disable_trading_after=values["disableTradingAfter"],
         timezone=values["timezone"],
@@ -400,6 +421,11 @@ def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
             SignalMode.DEMO_LIVE.value,
             SignalMode.REAL_LIVE.value,
         } and old_value != new_value
-    if key in {"botEnableRealOrders", "botDemoAccountConfirmed"}:
+    if key in {
+        "botEnableRealOrders",
+        "botRealLiveModeAllowed",
+        "botRealLiveArmed",
+        "botDemoAccountConfirmed",
+    }:
         return _parse_bool(new_value) is True and old_value != new_value
     return False

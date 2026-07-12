@@ -404,8 +404,26 @@ MANUAL_APPROVAL_ALLOW_ORDERS=true
 In the admin panel verify all of the following: `killSwitchEnabled=false`,
 `tradingMode=DEMO_LIVE` (or `botMode=DEMO_LIVE`),
 `botEnableDemoOrders=true`, `botDemoAccountConfirmed=true`, and
-`botEnableRealOrders=false`. `REAL_LIVE` remains disabled in this phase,
-including in production.
+`botEnableRealOrders=false`, `botRealLiveModeAllowed=false`, and
+`botRealLiveArmed=false`. `REAL_LIVE` remains disabled in this phase,
+including in production. `LIVE` is not accepted as a real-order alias; the
+gateway resolves it to `PAPER`.
+
+### DEMO_LIVE emergency stop and reconciliation
+
+For schema migrations, gateway deployments, idempotency/callback changes, or
+open-order reconciliation, first set `SCANNER_ALLOW_ORDERS=false`. Then:
+
+1. Enable the backend kill switch and reload gateway configuration.
+2. Verify `/health` reports the expected `configVersion`, then inspect
+   `/orders/active`.
+3. Cancel only the required open orders, and stop the gateway only if needed.
+4. Reconcile gateway orders and positions against backend `order_logs` before
+   setting `SCANNER_ALLOW_ORDERS=true` again.
+
+Every DEMO_LIVE order refreshes `GetTradeUser()` if its account check is more
+than five seconds old. A failed check, a non-demo account, or a changed account
+blocks the order.
 
 ### 5. Install the Matriks gateway
 

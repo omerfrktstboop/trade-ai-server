@@ -26,14 +26,20 @@ from app.services.trade_profile import get_active_profile
 
 router = APIRouter(tags=["Gateway"], dependencies=[Depends(verify_token)])
 
-_LIVE_REAL_MODES = {"REAL_LIVE", "LIVE"}
+_LIVE_REAL_MODES = {"REAL_LIVE"}
 _LIVE_DEMO_MODES = {"DEMO_LIVE"}
 
 
-def _effective_mode(bot_mode: str, profile) -> str:
+def _effective_mode(bot_mode: str, profile, *, real_live_mode_allowed: bool, real_live_armed: bool) -> str:
     """Downgrade the configured mode to PAPER when the profile disallows it."""
     mode = (bot_mode or "PAPER").strip().upper()
-    if mode in _LIVE_REAL_MODES and not profile.allow_real_live:
+    # LIVE is deliberately never an alias for REAL_LIVE.  Keeping an
+    # ambiguous historical value fail-closed avoids an accidental real route.
+    if mode == "LIVE":
+        return "PAPER"
+    if mode in _LIVE_REAL_MODES and not (
+        profile.allow_real_live and real_live_mode_allowed and real_live_armed
+    ):
         return "PAPER"
     if mode in _LIVE_DEMO_MODES and not profile.allow_demo_live:
         return "PAPER"
@@ -83,9 +89,16 @@ async def gateway_runtime_config() -> dict:
         "ok": True,
         "symbols": sorted(symbols),
         "lockedLongTermQty": locked_qty,
-        "mode": _effective_mode(values["botMode"], profile),
+        "mode": _effective_mode(
+            values["botMode"],
+            profile,
+            real_live_mode_allowed=values["botRealLiveModeAllowed"] == "true",
+            real_live_armed=values["botRealLiveArmed"] == "true",
+        ),
         "enableDemoOrders": values["botEnableDemoOrders"] == "true",
         "enableRealOrders": values["botEnableRealOrders"] == "true",
+        "realLiveModeAllowed": values["botRealLiveModeAllowed"] == "true",
+        "realLiveArmed": values["botRealLiveArmed"] == "true",
         "requireDemoAccount": values["botRequireDemoAccount"] == "true",
         "demoAccountConfirmed": values["botDemoAccountConfirmed"] == "true",
         "maxOrderValueTl": profile.max_order_value_tl,

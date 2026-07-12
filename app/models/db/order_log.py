@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -12,9 +12,11 @@ from app.db.base import Base
 
 class OrderLog(Base):
     __tablename__ = "order_logs"
+    __table_args__ = (UniqueConstraint("request_id", name="uq_order_logs_request_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     request_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     symbol: Mapped[str] = mapped_column(String(16), index=True, nullable=False)
 
     action: Mapped[str] = mapped_column(String(8), nullable=False)
@@ -25,8 +27,23 @@ class OrderLog(Base):
     status: Mapped[str] = mapped_column(String(16), default="PENDING")
 
     mode: Mapped[str] = mapped_column(String(16), default="PAPER")
+    order_type: Mapped[str] = mapped_column(String(16), default="LIMIT")
+    rounded_limit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    filled_qty: Mapped[float] = mapped_column(Float, default=0.0)
+    last_fill_qty: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reservation_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    send_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    config_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    profile_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     matrix_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

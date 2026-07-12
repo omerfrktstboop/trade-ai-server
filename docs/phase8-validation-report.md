@@ -15,8 +15,8 @@ Date: 2026-07-12 (Europe/Istanbul)
 - `ruff check .`: all checks passed.
 - `pytest -q`: 590 passed, 1 skipped in 348.61 seconds, exit code 0.
 - The skipped test is the PostgreSQL migration integration test because this
-  workstation has no `TEST_POSTGRES_URL`. It is mandatory in the PostgreSQL CI
-  job.
+  workstation has no `TEST_POSTGRES_URL`. The same test passed in the
+  PostgreSQL CI job.
 - Windows still emits an access-violation diagnostic from httpx/Starlette
   after pytest's successful summary. This is an environment diagnostic, not a
   C# compile result and not hidden from the report.
@@ -30,6 +30,8 @@ Date: 2026-07-12 (Europe/Istanbul)
 - Test bootstrap rejects inherited non-test/production database URLs before
   importing application settings. Only test-named SQLite databases or
   loopback/test-named PostgreSQL databases are accepted.
+- GitHub Actions run `29204223369` passed: `lint-and-test` in 2m54s and
+  `postgres-migration` in 42s.
 
 ## Automated coverage
 
@@ -80,6 +82,5 @@ sessions and reconcile exchange, ledger and callback/outbox records.
 ## Release decision
 
 DEMO_LIVE automated development may continue with REAL_LIVE disabled. REAL_LIVE
-is **NO-GO** until the open P0 items above, PostgreSQL CI job, target Matriks IQ
-compile and multi-session DEMO_LIVE fault drills all pass with recorded
-evidence.
+is **NO-GO** until the open P0 items above, target Matriks IQ compile and
+multi-session DEMO_LIVE fault drills all pass with recorded evidence.

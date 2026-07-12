@@ -101,8 +101,18 @@ class FakeGateway:
         # sembol → snapshot payload override'ları
         self.snapshot_overrides: dict[str, dict[str, Any]] = {}
         self.positions: list[dict[str, Any]] = [
-            {"symbol": "THYAO", "botQty": 0.0, "lockedLongTermQty": 100.0, "totalQty": 100.0},
-            {"symbol": "AKBNK", "botQty": 25.0, "lockedLongTermQty": 0.0, "totalQty": 25.0},
+            {
+                "symbol": "THYAO",
+                "botQty": 0.0,
+                "lockedLongTermQty": 100.0,
+                "totalQty": 100.0,
+            },
+            {
+                "symbol": "AKBNK",
+                "botQty": 25.0,
+                "lockedLongTermQty": 0.0,
+                "totalQty": 25.0,
+            },
         ]
         # /order davranışı: None → kabul (SENT_PENDING); string → red gerekçesi
         self.order_rejection: str | None = None
@@ -119,7 +129,9 @@ class FakeGateway:
         path = request.url.path
 
         if path == "/ping":
-            return self._json(200, {"ok": True, "message": "pong", "server": "TradeAiGateway"})
+            return self._json(
+                200, {"ok": True, "message": "pong", "server": "TradeAiGateway"}
+            )
 
         if request.headers.get("Authorization") != f"Bearer {self.token}":
             return self._json(401, {"ok": False, "error": "unauthorized"})
@@ -146,7 +158,9 @@ class FakeGateway:
         if path == "/snapshot":
             symbol = (request.url.params.get("symbol") or "").upper()
             if not symbol:
-                return self._json(400, {"ok": False, "error": "missing query parameter: symbol"})
+                return self._json(
+                    400, {"ok": False, "error": "missing query parameter: symbol"}
+                )
             if symbol not in self.symbols:
                 return self._json(
                     400,
@@ -214,13 +228,23 @@ class FakeGateway:
             )
 
         if path == "/orders/active" and request.method == "GET":
-            return self._json(200, {"ok": True, "available": True, "orders": self.order_states})
+            return self._json(
+                200, {"ok": True, "available": True, "orders": self.order_states}
+            )
 
         if path == "/order/cancel" and request.method == "POST":
             body = json.loads(request.content.decode("utf-8"))
             order_id = str(body.get("orderId") or "")
             self.cancelled_order_ids.append(order_id)
-            return self._json(200, {"ok": True, "accepted": True, "status": "CANCEL_REQUESTED", "orderId": order_id})
+            return self._json(
+                200,
+                {
+                    "ok": True,
+                    "accepted": True,
+                    "status": "CANCEL_REQUESTED",
+                    "orderId": order_id,
+                },
+            )
 
         return self._json(404, {"ok": False, "error": "not found", "path": path})
 

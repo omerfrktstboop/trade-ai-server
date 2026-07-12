@@ -89,10 +89,30 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "false",
         "Matriks botun real hesaba emir gondermesine izin verir.",
     ),
-    "tradingKillSwitchActive": ConfigDefinition("tradingKillSwitchActive", "bool", "false", "true iken tum order dispatch yollarini kapatir."),
-    "forceSafeMode": ConfigDefinition("forceSafeMode", "bool", "false", "true iken analiz surer, order dispatch kapanir."),
-    "buyAllowedSymbols": ConfigDefinition("buyAllowedSymbols", "string", risk_config.allowed_symbols, "Yeni BUY emirlerine izinli semboller."),
-    "sellExitAllowedSymbols": ConfigDefinition("sellExitAllowedSymbols", "string", risk_config.allowed_symbols, "Mevcut pozisyonlardan SELL_EXIT izinli semboller."),
+    "tradingKillSwitchActive": ConfigDefinition(
+        "tradingKillSwitchActive",
+        "bool",
+        "false",
+        "true iken tum order dispatch yollarini kapatir.",
+    ),
+    "forceSafeMode": ConfigDefinition(
+        "forceSafeMode",
+        "bool",
+        "false",
+        "true iken analiz surer, order dispatch kapanir.",
+    ),
+    "buyAllowedSymbols": ConfigDefinition(
+        "buyAllowedSymbols",
+        "string",
+        risk_config.allowed_symbols,
+        "Yeni BUY emirlerine izinli semboller.",
+    ),
+    "sellExitAllowedSymbols": ConfigDefinition(
+        "sellExitAllowedSymbols",
+        "string",
+        risk_config.allowed_symbols,
+        "Mevcut pozisyonlardan SELL_EXIT izinli semboller.",
+    ),
     "botRealLiveModeAllowed": ConfigDefinition(
         "botRealLiveModeAllowed",
         "bool",
@@ -254,6 +274,7 @@ async def set_admin_config_value(
         await session.commit()
         if old_value != new_value:
             from app.services.decision_gate import decision_cache
+
             decision_cache.clear()
         await session.refresh(row)
     else:
@@ -272,7 +293,8 @@ async def set_admin_config_value(
 async def set_admin_config_values(
     session: AsyncSession,
     values: dict[str, Any],
-    *, changed_by: str,
+    *,
+    changed_by: str,
     reason: str | None = None,
     confirmation: str | None = None,
 ) -> list[AdminConfigItem]:
@@ -282,17 +304,29 @@ async def set_admin_config_values(
     items: list[AdminConfigItem] = []
     async with session.begin():
         for key, value in values.items():
-            items.append(await set_admin_config_value(
-                session, key, value, changed_by=changed_by, reason=reason,
-                confirmation=confirmation, commit=False,
-            ))
+            items.append(
+                await set_admin_config_value(
+                    session,
+                    key,
+                    value,
+                    changed_by=changed_by,
+                    reason=reason,
+                    confirmation=confirmation,
+                    commit=False,
+                )
+            )
     from app.services.decision_gate import decision_cache
+
     decision_cache.clear()
     return items
 
 
 async def is_kill_switch_enabled(session: AsyncSession) -> bool:
-    return _parse_bool(await get_admin_config_value(session, "killSwitchEnabled")) or _parse_bool(await get_admin_config_value(session, "tradingKillSwitchActive")) or _parse_bool(await get_admin_config_value(session, "forceSafeMode"))
+    return (
+        _parse_bool(await get_admin_config_value(session, "killSwitchEnabled"))
+        or _parse_bool(await get_admin_config_value(session, "tradingKillSwitchActive"))
+        or _parse_bool(await get_admin_config_value(session, "forceSafeMode"))
+    )
 
 
 async def get_trading_mode_override(session: AsyncSession) -> SignalMode | None:
@@ -369,7 +403,9 @@ def _serialize_value(key: str, raw_value: Any, value_type: str) -> str:
     if value_type == "bool":
         value = _parse_bool(raw_value)
         if key == "botAllowMarketOrders" and value:
-            raise ValueError("botAllowMarketOrders=true is not allowed; MARKET orders are disabled")
+            raise ValueError(
+                "botAllowMarketOrders=true is not allowed; MARKET orders are disabled"
+            )
         return str(value).lower()
     if value_type == "int":
         value = int(raw_value)
@@ -445,18 +481,26 @@ def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
     if key not in RISKY_CONFIG_KEYS:
         return False
     if key == "tradingMode":
-        return new_value in {
-            SignalMode.LIVE.value,
-            SignalMode.DEMO_LIVE.value,
-            SignalMode.REAL_LIVE.value,
-        } and old_value != new_value
+        return (
+            new_value
+            in {
+                SignalMode.LIVE.value,
+                SignalMode.DEMO_LIVE.value,
+                SignalMode.REAL_LIVE.value,
+            }
+            and old_value != new_value
+        )
     if key == "killSwitchEnabled":
         return _parse_bool(old_value) is True and _parse_bool(new_value) is False
     if key == "botMode":
-        return new_value in {
-            SignalMode.DEMO_LIVE.value,
-            SignalMode.REAL_LIVE.value,
-        } and old_value != new_value
+        return (
+            new_value
+            in {
+                SignalMode.DEMO_LIVE.value,
+                SignalMode.REAL_LIVE.value,
+            }
+            and old_value != new_value
+        )
     if key in {
         "botEnableRealOrders",
         "botRealLiveModeAllowed",

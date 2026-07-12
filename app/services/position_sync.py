@@ -59,15 +59,27 @@ async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
             # Bot ownership comes exclusively from cumulative ledger fills.
             # Replaying a partial/final callback cannot double count because
             # each request_id has one row and filled_qty is monotonic.
-            orders = (await session.execute(
-                select(OrderLog).where(OrderLog.status.in_(("PARTIALLY_FILLED", "FILLED")))
-            )).scalars().all()
+            orders = (
+                (
+                    await session.execute(
+                        select(OrderLog).where(
+                            OrderLog.status.in_(("PARTIALLY_FILLED", "FILLED"))
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
             positions: dict[str, float] = {}
             for order in orders:
                 symbol = order.symbol.strip().upper()
-                signed = float(order.filled_qty or 0.0) * (1 if order.action.upper() == "BUY" else -1)
+                signed = float(order.filled_qty or 0.0) * (
+                    1 if order.action.upper() == "BUY" else -1
+                )
                 positions[symbol] = positions.get(symbol, 0.0) + signed
-            positions = {symbol: max(0.0, qty) for symbol, qty in positions.items() if qty > 0}
+            positions = {
+                symbol: max(0.0, qty) for symbol, qty in positions.items() if qty > 0
+            }
             for symbol, qty in positions.items():
                 row = (
                     await session.execute(
@@ -104,7 +116,9 @@ class PositionSynchronizer:
         *,
         gateway: MatriksGatewayClient | Any = gateway_client,
         interval_seconds: float = 60.0,
-        sync_func: Callable[[MatriksGatewayClient | Any], Awaitable[int]] = sync_positions_from_gateway,
+        sync_func: Callable[
+            [MatriksGatewayClient | Any], Awaitable[int]
+        ] = sync_positions_from_gateway,
     ) -> None:
         self._gateway = gateway
         self._interval_seconds = interval_seconds
@@ -125,8 +139,12 @@ class PositionSynchronizer:
             "enabled": settings.position_sync_enabled,
             "running": self.running,
             "intervalSeconds": self._interval_seconds,
-            "lastAttemptAt": self._last_attempt_at.isoformat() if self._last_attempt_at else None,
-            "lastCompletedAt": self._last_completed_at.isoformat() if self._last_completed_at else None,
+            "lastAttemptAt": self._last_attempt_at.isoformat()
+            if self._last_attempt_at
+            else None,
+            "lastCompletedAt": self._last_completed_at.isoformat()
+            if self._last_completed_at
+            else None,
             "lastSyncedCount": self._last_synced_count,
             "lastError": self._last_error,
         }
@@ -136,7 +154,9 @@ class PositionSynchronizer:
             return
         self._stop_event.clear()
         self._task = asyncio.create_task(self._run_loop(), name="position-synchronizer")
-        logger.info("Position synchronizer started interval=%ss", self._interval_seconds)
+        logger.info(
+            "Position synchronizer started interval=%ss", self._interval_seconds
+        )
 
     async def stop(self) -> None:
         self._stop_event.set()

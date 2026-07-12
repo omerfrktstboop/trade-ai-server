@@ -30,7 +30,8 @@ from app.models.db import (
     MarketSnapshot,
     ManualApprovalRequest,
     PositionManagementDecision,
-    WatchlistSymbol, WatchlistQualityScore,
+    WatchlistSymbol,
+    WatchlistQualityScore,
     OrderLog,
     RiskDecision,
     TradeProfile,
@@ -51,7 +52,11 @@ from app.services.fundamentals_service import (
     list_fundamentals,
     upsert_fundamental,
 )
-from app.services.matriks_gateway import GatewayError, GatewayUnavailable, gateway_client
+from app.services.matriks_gateway import (
+    GatewayError,
+    GatewayUnavailable,
+    gateway_client,
+)
 from app.services.notifications import notification_service
 from app.services.position_sync import position_synchronizer
 from app.services.scanner import scanner
@@ -154,20 +159,34 @@ class TradeProfileFieldsBody(BaseModel):
     allowed_modes: str | None = Field(None, alias="allowedModes")
     max_order_value_tl: float | None = Field(None, alias="maxOrderValueTl")
     max_qty_per_order: float | None = Field(None, alias="maxQtyPerOrder")
-    max_position_value_per_symbol: float | None = Field(None, alias="maxPositionValuePerSymbol")
+    max_position_value_per_symbol: float | None = Field(
+        None, alias="maxPositionValuePerSymbol"
+    )
     max_orders_per_day: int | None = Field(None, alias="maxOrdersPerDay")
-    max_orders_per_symbol_per_day: int | None = Field(None, alias="maxOrdersPerSymbolPerDay")
+    max_orders_per_symbol_per_day: int | None = Field(
+        None, alias="maxOrdersPerSymbolPerDay"
+    )
     min_confidence_for_buy: float | None = Field(None, alias="minConfidenceForBuy")
     min_confidence_for_sell: float | None = Field(None, alias="minConfidenceForSell")
     max_natr_for_buy: float | None = Field(None, alias="maxNatrForBuy")
-    max_depth_queue_drop_pct_for_buy: float | None = Field(None, alias="maxDepthQueueDropPctForBuy")
+    max_depth_queue_drop_pct_for_buy: float | None = Field(
+        None, alias="maxDepthQueueDropPctForBuy"
+    )
     max_spread_pct_for_buy: float | None = Field(None, alias="maxSpreadPctForBuy")
-    min_depth_bid_ask_ratio_top10_for_buy: float | None = Field(None, alias="minDepthBidAskRatioTop10ForBuy")
-    max_depth_sell_pressure_score_for_buy: float | None = Field(None, alias="maxDepthSellPressureScoreForBuy")
-    block_buy_on_strong_sell_pressure: bool | None = Field(None, alias="blockBuyOnStrongSellPressure")
+    min_depth_bid_ask_ratio_top10_for_buy: float | None = Field(
+        None, alias="minDepthBidAskRatioTop10ForBuy"
+    )
+    max_depth_sell_pressure_score_for_buy: float | None = Field(
+        None, alias="maxDepthSellPressureScoreForBuy"
+    )
+    block_buy_on_strong_sell_pressure: bool | None = Field(
+        None, alias="blockBuyOnStrongSellPressure"
+    )
     block_buy_on_near_ask_wall: bool | None = Field(None, alias="blockBuyOnNearAskWall")
     near_wall_distance_pct: float | None = Field(None, alias="nearWallDistancePct")
-    require_alpha_trend_alignment: bool | None = Field(None, alias="requireAlphaTrendAlignment")
+    require_alpha_trend_alignment: bool | None = Field(
+        None, alias="requireAlphaTrendAlignment"
+    )
     require_indicator_consensus_alignment: bool | None = Field(
         None, alias="requireIndicatorConsensusAlignment"
     )
@@ -308,48 +327,130 @@ async def admin_performance(request: Request) -> HTMLResponse:
         error = None
     except Exception as exc:
         logger.warning("Performance report failed: %s", exc)
-        report, error = {"totalDecisions": 0, "allowedOrders": 0, "blockedDecisions": 0, "ordersSent": 0, "filledOrders": 0, "rejectedOrders": 0, "estimatedRealizedPnl": 0, "topBlockReason": "-", "latestDecisions": []}, str(exc)
-    return templates.TemplateResponse(request, "admin/performance.html", {"identity": identity, "active": "performance", "report": report, "error": error, "range": range_value, "symbol": symbol or ""})
+        report, error = (
+            {
+                "totalDecisions": 0,
+                "allowedOrders": 0,
+                "blockedDecisions": 0,
+                "ordersSent": 0,
+                "filledOrders": 0,
+                "rejectedOrders": 0,
+                "estimatedRealizedPnl": 0,
+                "topBlockReason": "-",
+                "latestDecisions": [],
+            },
+            str(exc),
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin/performance.html",
+        {
+            "identity": identity,
+            "active": "performance",
+            "report": report,
+            "error": error,
+            "range": range_value,
+            "symbol": symbol or "",
+        },
+    )
+
 
 @admin_router.get("/approvals", response_class=HTMLResponse)
 async def admin_approvals(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
     async with async_session_factory() as session:
-        rows = list((await session.execute(select(ManualApprovalRequest).order_by(ManualApprovalRequest.created_at.desc()))).scalars().all())
-    return templates.TemplateResponse(request, "admin/approvals.html", {"identity": identity, "active": "approvals", "rows": rows})
+        rows = list(
+            (
+                await session.execute(
+                    select(ManualApprovalRequest).order_by(
+                        ManualApprovalRequest.created_at.desc()
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin/approvals.html",
+        {"identity": identity, "active": "approvals", "rows": rows},
+    )
+
 
 @admin_router.get("/positions/management", response_class=HTMLResponse)
 async def admin_position_management(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
     async with async_session_factory() as session:
-        rows = list((await session.execute(select(PositionManagementDecision).order_by(PositionManagementDecision.created_at.desc()).limit(200))).scalars().all())
-    return templates.TemplateResponse(request, "admin/position_management.html", {"identity": identity, "active": "positions", "rows": rows})
+        rows = list(
+            (
+                await session.execute(
+                    select(PositionManagementDecision)
+                    .order_by(PositionManagementDecision.created_at.desc())
+                    .limit(200)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin/position_management.html",
+        {"identity": identity, "active": "positions", "rows": rows},
+    )
+
 
 @admin_router.get("/self-check", response_class=HTMLResponse)
 async def admin_self_check(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
-    return templates.TemplateResponse(request, "admin/self_check.html", {"identity": identity, "active": "self-check", "result": await run_self_check()})
+    return templates.TemplateResponse(
+        request,
+        "admin/self_check.html",
+        {
+            "identity": identity,
+            "active": "self-check",
+            "result": await run_self_check(),
+        },
+    )
+
 
 @admin_router.get("/watchlist", response_class=HTMLResponse)
 async def admin_watchlist(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
     async with async_session_factory() as session:
-        rows=list((await session.execute(select(WatchlistSymbol, WatchlistQualityScore).outerjoin(WatchlistQualityScore, WatchlistQualityScore.symbol == WatchlistSymbol.symbol))).all())
-    return templates.TemplateResponse(request, "admin/watchlist.html", {"identity":identity,"active":"watchlist","rows":rows})
+        rows = list(
+            (
+                await session.execute(
+                    select(WatchlistSymbol, WatchlistQualityScore).outerjoin(
+                        WatchlistQualityScore,
+                        WatchlistQualityScore.symbol == WatchlistSymbol.symbol,
+                    )
+                )
+            ).all()
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin/watchlist.html",
+        {"identity": identity, "active": "watchlist", "rows": rows},
+    )
+
 
 @admin_router.post("/self-check/run", response_class=HTMLResponse)
 async def admin_self_check_run(request: Request) -> HTMLResponse:
     return await admin_self_check(request)
 
+
 @admin_router.post("/approvals/{approval_id}/approve")
 async def admin_approve(request: Request, approval_id: int) -> RedirectResponse:
-    identity = await require_admin(request); form = await request.form()
+    identity = await require_admin(request)
+    form = await request.form()
     await approve_request(approval_id, identity, str(form.get("admin_note") or ""))
     return RedirectResponse("/admin/approvals", status_code=303)
 
+
 @admin_router.post("/approvals/{approval_id}/reject")
 async def admin_reject(request: Request, approval_id: int) -> RedirectResponse:
-    identity = await require_admin(request); form = await request.form()
+    identity = await require_admin(request)
+    form = await request.form()
     await reject_request(approval_id, identity, str(form.get("admin_note") or ""))
     return RedirectResponse("/admin/approvals", status_code=303)
 
@@ -371,39 +472,101 @@ async def admin_why_blocked(request: Request) -> HTMLResponse:
             if only_blocked and row.allow_order:
                 continue
             reason = row.reason or ""
-            rows.append({"created_at": row.created_at, "request_id": row.request_id, "symbol": row.symbol,
-                "action": row.action, "confidence": row.confidence, "risk_score": row.risk_score,
-                "allow_order": row.allow_order, "order_type": row.order_type, "qty": row.qty,
-                "price": row.entry_max, "reason": reason, "category": classify_block_reason(reason)})
+            rows.append(
+                {
+                    "created_at": row.created_at,
+                    "request_id": row.request_id,
+                    "symbol": row.symbol,
+                    "action": row.action,
+                    "confidence": row.confidence,
+                    "risk_score": row.risk_score,
+                    "allow_order": row.allow_order,
+                    "order_type": row.order_type,
+                    "qty": row.qty,
+                    "price": row.entry_max,
+                    "reason": reason,
+                    "category": classify_block_reason(reason),
+                }
+            )
         for row in orders:
             if row.status.upper() not in {"REJECTED", "ERROR", "CANCELED"}:
                 continue
             reason = row.matrix_message or row.status
-            rows.append({"created_at": row.created_at, "request_id": row.request_id, "symbol": row.symbol,
-                "action": row.action, "confidence": None, "risk_score": None, "allow_order": False,
-                "order_type": "LIMIT", "qty": row.qty, "price": row.price, "reason": reason,
-                "category": classify_block_reason(reason)})
+            rows.append(
+                {
+                    "created_at": row.created_at,
+                    "request_id": row.request_id,
+                    "symbol": row.symbol,
+                    "action": row.action,
+                    "confidence": None,
+                    "risk_score": None,
+                    "allow_order": False,
+                    "order_type": "LIMIT",
+                    "qty": row.qty,
+                    "price": row.price,
+                    "reason": reason,
+                    "category": classify_block_reason(reason),
+                }
+            )
     except Exception as exc:
         logger.warning("Why blocked query failed: %s", exc)
-        status_ctx = {"status_mode": "UNKNOWN", "status_kill_switch": False,
-                      "status_profile_code": "UNKNOWN", "status_profile_risk_level": "UNKNOWN"}
-    rows = [r for r in rows if (not symbol or r["symbol"] == symbol) and (not category or r["category"] == category) and (not action or r["action"] == action)]
+        status_ctx = {
+            "status_mode": "UNKNOWN",
+            "status_kill_switch": False,
+            "status_profile_code": "UNKNOWN",
+            "status_profile_risk_level": "UNKNOWN",
+        }
+    rows = [
+        r
+        for r in rows
+        if (not symbol or r["symbol"] == symbol)
+        and (not category or r["category"] == category)
+        and (not action or r["action"] == action)
+    ]
     rows.sort(key=lambda r: r["created_at"] or datetime.min, reverse=True)
     categories = Counter(r["category"] for r in rows)
     symbols = Counter(r["symbol"] for r in rows)
-    summary = {"total": len(rows), "category": categories.most_common(1)[0][0] if categories else "-",
-               "symbol": symbols.most_common(1)[0][0] if symbols else "-",
-               "confidence_low": categories.get("CONFIDENCE_LOW", 0)}
-    return templates.TemplateResponse(request, "admin/why_blocked.html", {"identity": identity,
-        "active": "why-blocked", "rows": rows, "summary": summary,
-        "filters": {"symbol": symbol, "category": category, "action": action, "only_blocked": only_blocked}, **status_ctx})
+    summary = {
+        "total": len(rows),
+        "category": categories.most_common(1)[0][0] if categories else "-",
+        "symbol": symbols.most_common(1)[0][0] if symbols else "-",
+        "confidence_low": categories.get("CONFIDENCE_LOW", 0),
+    }
+    return templates.TemplateResponse(
+        request,
+        "admin/why_blocked.html",
+        {
+            "identity": identity,
+            "active": "why-blocked",
+            "rows": rows,
+            "summary": summary,
+            "filters": {
+                "symbol": symbol,
+                "category": category,
+                "action": action,
+                "only_blocked": only_blocked,
+            },
+            **status_ctx,
+        },
+    )
 
 
 @admin_router.get("/replay", response_class=HTMLResponse)
 async def admin_replay(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
     profiles, status_ctx, error = await _replay_page_context()
-    return templates.TemplateResponse(request, "admin/replay.html", {"identity": identity, "active": "replay", "profiles": profiles, "result": None, "error": error, **status_ctx})
+    return templates.TemplateResponse(
+        request,
+        "admin/replay.html",
+        {
+            "identity": identity,
+            "active": "replay",
+            "profiles": profiles,
+            "result": None,
+            "error": error,
+            **status_ctx,
+        },
+    )
 
 
 @admin_router.post("/replay/run", response_class=HTMLResponse)
@@ -412,17 +575,34 @@ async def admin_replay_run(request: Request) -> HTMLResponse:
     form = await request.form()
     profile_code = str(form.get("profile_code") or "") or None
     mode = str(form.get("mode") or "PAPER")
-    symbols = [s.strip().upper() for s in str(form.get("symbols") or "").split(",") if s.strip()]
+    symbols = [
+        s.strip().upper()
+        for s in str(form.get("symbols") or "").split(",")
+        if s.strip()
+    ]
     limit = min(200, max(1, int(form.get("limit") or 100)))
     try:
-        result = await replay_batch(profile_code=profile_code, symbols=symbols or None, limit=limit, mode=mode)
+        result = await replay_batch(
+            profile_code=profile_code, symbols=symbols or None, limit=limit, mode=mode
+        )
         error = None
     except Exception as exc:
         logger.exception("Replay run failed")
         result = None
         error = f"Replay unavailable: {exc}"
     profiles, status_ctx, context_error = await _replay_page_context()
-    return templates.TemplateResponse(request, "admin/replay.html", {"identity": identity, "active": "replay", "profiles": profiles, "result": result, "error": error or context_error, **status_ctx})
+    return templates.TemplateResponse(
+        request,
+        "admin/replay.html",
+        {
+            "identity": identity,
+            "active": "replay",
+            "profiles": profiles,
+            "result": result,
+            "error": error or context_error,
+            **status_ctx,
+        },
+    )
 
 
 @admin_router.get("/config", response_class=HTMLResponse)
@@ -459,11 +639,7 @@ async def admin_config_update(request: Request) -> Any:
     try:
         async with async_session_factory() as session:
             configs = await list_admin_configs(session)
-            values = {
-                item.key: form[item.key]
-                for item in configs
-                if item.key in form
-            }
+            values = {item.key: form[item.key] for item in configs if item.key in form}
             await set_admin_config_values(
                 session,
                 values,
@@ -500,7 +676,9 @@ async def admin_config_update(request: Request) -> Any:
 async def admin_positions(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
     async with async_session_factory() as session:
-        bot_positions = await _latest(session, BotPosition, 100, order_field="updated_at")
+        bot_positions = await _latest(
+            session, BotPosition, 100, order_field="updated_at"
+        )
         locked_positions = await _latest(
             session, LockedPosition, 100, order_field="created_at"
         )
@@ -526,9 +704,13 @@ async def admin_positions(request: Request) -> HTMLResponse:
     )
 
 
-async def _positions_page_error(request: Request, identity: str, error: str) -> HTMLResponse:
+async def _positions_page_error(
+    request: Request, identity: str, error: str
+) -> HTMLResponse:
     async with async_session_factory() as session:
-        bot_positions = await _latest(session, BotPosition, 100, order_field="updated_at")
+        bot_positions = await _latest(
+            session, BotPosition, 100, order_field="updated_at"
+        )
         locked_positions = await _latest(
             session, LockedPosition, 100, order_field="created_at"
         )
@@ -563,7 +745,9 @@ async def admin_force_override(request: Request, symbol: str) -> Any:
 
     if confirmation != RISKY_CONFIRMATION:
         return await _positions_page_error(
-            request, identity, f"force-override requires confirmation={RISKY_CONFIRMATION}"
+            request,
+            identity,
+            f"force-override requires confirmation={RISKY_CONFIRMATION}",
         )
     if action not in ("BUY", "SELL"):
         return await _positions_page_error(
@@ -597,7 +781,9 @@ async def admin_force_sell_all(request: Request) -> Any:
 
     if confirmation != RISKY_CONFIRMATION:
         return await _positions_page_error(
-            request, identity, f"force-sell-all requires confirmation={RISKY_CONFIRMATION}"
+            request,
+            identity,
+            f"force-sell-all requires confirmation={RISKY_CONFIRMATION}",
         )
 
     async with async_session_factory() as session:
@@ -743,7 +929,9 @@ async def admin_trade_profiles_create(request: Request) -> Any:
         return await _trade_profiles_page(request, identity, error=str(exc))
 
     await _notify_gateway_config_reload()
-    return RedirectResponse("/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        "/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER
+    )
 
 
 @admin_router.post("/trade-profiles/{code}/update")
@@ -768,7 +956,9 @@ async def admin_trade_profiles_update(request: Request, code: str) -> Any:
         return await _trade_profiles_page(request, identity, error=str(exc))
 
     await _notify_gateway_config_reload()
-    return RedirectResponse("/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        "/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER
+    )
 
 
 @admin_router.post("/trade-profiles/{code}/activate")
@@ -781,13 +971,19 @@ async def admin_trade_profiles_activate(request: Request, code: str) -> Any:
     try:
         async with async_session_factory() as session:
             await activate_profile(
-                session, code, changed_by=identity, reason=reason, confirmation=confirmation
+                session,
+                code,
+                changed_by=identity,
+                reason=reason,
+                confirmation=confirmation,
             )
     except ValueError as exc:
         return await _trade_profiles_page(request, identity, error=str(exc))
 
     await _notify_gateway_config_reload()
-    return RedirectResponse("/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        "/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER
+    )
 
 
 @admin_router.post("/trade-profiles/{code}/clone")
@@ -805,7 +1001,9 @@ async def admin_trade_profiles_clone(request: Request, code: str) -> Any:
     except ValueError as exc:
         return await _trade_profiles_page(request, identity, error=str(exc))
 
-    return RedirectResponse("/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        "/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER
+    )
 
 
 @admin_router.post("/trade-profiles/{code}/disable")
@@ -817,7 +1015,9 @@ async def admin_trade_profiles_disable(request: Request, code: str) -> Any:
     except ValueError as exc:
         return await _trade_profiles_page(request, identity, error=str(exc))
 
-    return RedirectResponse("/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        "/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER
+    )
 
 
 @admin_router.post("/trade-profiles/{code}/delete")
@@ -829,7 +1029,9 @@ async def admin_trade_profiles_delete(request: Request, code: str) -> Any:
     except ValueError as exc:
         return await _trade_profiles_page(request, identity, error=str(exc))
 
-    return RedirectResponse("/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        "/admin/trade-profiles", status_code=status.HTTP_303_SEE_OTHER
+    )
 
 
 # ── Fundamentals (admin-entered quarterly balance-sheet data) ────────────────
@@ -874,16 +1076,43 @@ async def admin_fundamentals(request: Request) -> HTMLResponse:
 async def admin_kap(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
     async with async_session_factory() as session:
-        rows = list((await session.execute(select(KapEvent).order_by(KapEvent.cached_at.desc()).limit(200))).scalars().all())
-    return templates.TemplateResponse(request, "admin/kap.html", {"identity": identity, "active": "kap", "rows": rows, "risk_only": False})
+        rows = list(
+            (
+                await session.execute(
+                    select(KapEvent).order_by(KapEvent.cached_at.desc()).limit(200)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin/kap.html",
+        {"identity": identity, "active": "kap", "rows": rows, "risk_only": False},
+    )
 
 
 @admin_router.get("/kap-risk", response_class=HTMLResponse)
 async def admin_kap_risk(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
     async with async_session_factory() as session:
-        rows = list((await session.execute(select(KapEvent).where(KapEvent.risk_level.in_(("HIGH", "BLOCKING"))).order_by(KapEvent.cached_at.desc()).limit(200))).scalars().all())
-    return templates.TemplateResponse(request, "admin/kap.html", {"identity": identity, "active": "kap", "rows": rows, "risk_only": True})
+        rows = list(
+            (
+                await session.execute(
+                    select(KapEvent)
+                    .where(KapEvent.risk_level.in_(("HIGH", "BLOCKING")))
+                    .order_by(KapEvent.cached_at.desc())
+                    .limit(200)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin/kap.html",
+        {"identity": identity, "active": "kap", "rows": rows, "risk_only": True},
+    )
 
 
 @admin_router.post("/fundamentals/{symbol}")
@@ -907,15 +1136,19 @@ async def admin_fundamentals_upsert(request: Request, symbol: str) -> Any:
     except ValueError as exc:
         return await _fundamentals_page(request, identity, error=str(exc))
 
-    return RedirectResponse("/admin/fundamentals", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        "/admin/fundamentals", status_code=status.HTTP_303_SEE_OTHER
+    )
 
 
 @admin_router.post("/fundamentals/{symbol}/delete")
 async def admin_fundamentals_delete(request: Request, symbol: str) -> Any:
-    identity = await require_admin(request)
+    await require_admin(request)
     async with async_session_factory() as session:
         await delete_fundamental(session, symbol)
-    return RedirectResponse("/admin/fundamentals", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        "/admin/fundamentals", status_code=status.HTTP_303_SEE_OTHER
+    )
 
 
 # ── Research report ("Fırsat Sıralaması") ────────────────────────────────────
@@ -1076,7 +1309,9 @@ async def admin_logs_delete_all(request: Request, table: str) -> Any:
 
     if confirmation != RISKY_CONFIRMATION:
         return await _logs_page(
-            request, identity, error=f"delete-all requires confirmation={RISKY_CONFIRMATION}"
+            request,
+            identity,
+            error=f"delete-all requires confirmation={RISKY_CONFIRMATION}",
         )
 
     async with async_session_factory() as session:
@@ -1085,7 +1320,10 @@ async def admin_logs_delete_all(request: Request, table: str) -> Any:
 
     logger.warning(
         "Admin %s deleted ALL %d rows from %s (reason: %s)",
-        identity, result.rowcount or 0, table, reason,
+        identity,
+        result.rowcount or 0,
+        table,
+        reason,
     )
     return RedirectResponse("/admin/logs", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -1101,7 +1339,9 @@ async def admin_logs_delete_selected(request: Request, table: str) -> Any:
 
     if confirmation != RISKY_CONFIRMATION:
         return await _logs_page(
-            request, identity, error=f"delete-selected requires confirmation={RISKY_CONFIRMATION}"
+            request,
+            identity,
+            error=f"delete-selected requires confirmation={RISKY_CONFIRMATION}",
         )
     if not ids:
         return await _logs_page(request, identity, error="Silinecek kayıt seçilmedi")
@@ -1112,7 +1352,10 @@ async def admin_logs_delete_selected(request: Request, table: str) -> Any:
 
     logger.warning(
         "Admin %s deleted %d selected rows from %s (reason: %s)",
-        identity, result.rowcount or 0, table, reason,
+        identity,
+        result.rowcount or 0,
+        table,
+        reason,
     )
     return RedirectResponse("/admin/logs", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -1140,12 +1383,16 @@ async def admin_log_detail(request: Request, request_id: str) -> HTMLResponse:
             )
         ).scalar_one_or_none()
         order_logs = (
-            await session.execute(
-                select(OrderLog)
-                .where(OrderLog.request_id == request_id)
-                .order_by(OrderLog.created_at.asc())
+            (
+                await session.execute(
+                    select(OrderLog)
+                    .where(OrderLog.request_id == request_id)
+                    .order_by(OrderLog.created_at.asc())
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         status_ctx = await _status_strip_context(session)
 
     def _pretty(value: Any) -> str | None:
@@ -1164,8 +1411,12 @@ async def admin_log_detail(request: Request, request_id: str) -> HTMLResponse:
             "ai_decision": ai_decision,
             "risk_decision": risk_decision,
             "order_logs": order_logs,
-            "raw_request_json": _pretty(ai_decision.raw_request) if ai_decision else None,
-            "raw_response_json": _pretty(ai_decision.raw_response) if ai_decision else None,
+            "raw_request_json": _pretty(ai_decision.raw_request)
+            if ai_decision
+            else None,
+            "raw_response_json": _pretty(ai_decision.raw_response)
+            if ai_decision
+            else None,
             **status_ctx,
         },
     )
@@ -1273,7 +1524,11 @@ async def admin_api_bot_status(request: Request) -> dict[str, Any]:
 @admin_api_router.get("/performance")
 async def admin_api_performance(request: Request) -> dict[str, Any]:
     await require_admin(request)
-    return await build_performance_report(str(request.query_params.get("range") or "7d"), request.query_params.get("symbol"))
+    return await build_performance_report(
+        str(request.query_params.get("range") or "7d"),
+        request.query_params.get("symbol"),
+    )
+
 
 @admin_api_router.get("/self-check")
 @admin_api_router.post("/self-check/run")
@@ -1288,7 +1543,9 @@ async def admin_api_notification_test(request: Request) -> dict[str, str]:
     await require_admin(request)
     if not notification_service.enabled:
         return {"status": "disabled"}
-    await notification_service.send("info", "Trade AI test bildirimi", event_key="admin:test")
+    await notification_service.send(
+        "info", "Trade AI test bildirimi", event_key="admin:test"
+    )
     return {"status": "ok"}
 
 
@@ -1331,11 +1588,19 @@ async def admin_api_update_config(
 
 
 @admin_api_router.put("/config")
-async def admin_api_update_config_batch(request: Request, body: AdminConfigBatchUpdate) -> dict[str, Any]:
+async def admin_api_update_config_batch(
+    request: Request, body: AdminConfigBatchUpdate
+) -> dict[str, Any]:
     identity = await require_admin(request)
     try:
         async with async_session_factory() as session:
-            items = await set_admin_config_values(session, body.values, changed_by=identity, reason=body.reason, confirmation=body.confirmation)
+            items = await set_admin_config_values(
+                session,
+                body.values,
+                changed_by=identity,
+                reason=body.reason,
+                confirmation=body.confirmation,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _notify_gateway_config_reload()
@@ -1423,7 +1688,9 @@ async def admin_api_create_trade_profile(
     request: Request, body: TradeProfileCreateBody
 ) -> dict[str, Any]:
     identity = await require_admin(request)
-    fields = body.model_dump(exclude={"code", "name", "description", "risk_level"}, exclude_none=True)
+    fields = body.model_dump(
+        exclude={"code", "name", "description", "risk_level"}, exclude_none=True
+    )
     try:
         async with async_session_factory() as session:
             profile = await create_profile(
@@ -1448,7 +1715,9 @@ async def admin_api_get_trade_profile(request: Request, code: str) -> dict[str, 
     async with async_session_factory() as session:
         profile = await get_profile(session, code)
         if profile is None:
-            raise HTTPException(status_code=404, detail=f"Unknown trade profile: {code}")
+            raise HTTPException(
+                status_code=404, detail=f"Unknown trade profile: {code}"
+            )
         active = await get_active_profile(session)
     return _trade_profile_dict(profile, active.code)
 
@@ -1505,7 +1774,11 @@ async def admin_api_clone_trade_profile(
     try:
         async with async_session_factory() as session:
             clone = await clone_profile(
-                session, code, new_code=body.new_code, new_name=body.new_name, changed_by=identity
+                session,
+                code,
+                new_code=body.new_code,
+                new_name=body.new_name,
+                changed_by=identity,
             )
             active = await get_active_profile(session)
     except ValueError as exc:
@@ -1515,7 +1788,9 @@ async def admin_api_clone_trade_profile(
 
 
 @admin_api_router.post("/trade-profiles/{code}/disable")
-async def admin_api_disable_trade_profile(request: Request, code: str) -> dict[str, Any]:
+async def admin_api_disable_trade_profile(
+    request: Request, code: str
+) -> dict[str, Any]:
     identity = await require_admin(request)
     try:
         async with async_session_factory() as session:
@@ -1660,7 +1935,9 @@ async def _dashboard_context() -> dict[str, Any]:
     }
 
 
-async def _replay_page_context() -> tuple[list[TradeProfile], dict[str, Any], str | None]:
+async def _replay_page_context() -> tuple[
+    list[TradeProfile], dict[str, Any], str | None
+]:
     """Keep replay diagnostics available even when the database is transiently down."""
     try:
         async with async_session_factory() as session:
@@ -1669,10 +1946,16 @@ async def _replay_page_context() -> tuple[list[TradeProfile], dict[str, Any], st
         return profiles, status_ctx, None
     except Exception as exc:
         logger.warning("Replay page DB query failed: %s", exc)
-        return [], {
-            "status_mode": "UNKNOWN", "status_kill_switch": False,
-            "status_profile_code": "UNKNOWN", "status_profile_risk_level": "UNKNOWN",
-        }, f"Database unavailable: {exc}"
+        return (
+            [],
+            {
+                "status_mode": "UNKNOWN",
+                "status_kill_switch": False,
+                "status_profile_code": "UNKNOWN",
+                "status_profile_risk_level": "UNKNOWN",
+            },
+            f"Database unavailable: {exc}",
+        )
 
 
 async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
@@ -1728,11 +2011,15 @@ async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
                     "riskLevel": profile.risk_level,
                 },
                 "todayTradeCount": counts.bot_count,
-                "latestRiskDecision": _row_dict(latest_risk[0]) if latest_risk else None,
+                "latestRiskDecision": _row_dict(latest_risk[0])
+                if latest_risk
+                else None,
                 "latestOrderLog": _row_dict(latest_order[0]) if latest_order else None,
                 "configHash": config_hash,
                 "profileCode": profile.code,
-                "symbolsCount": len(_split_csv_symbols(config_values.get("allowedSymbols", ""))),
+                "symbolsCount": len(
+                    _split_csv_symbols(config_values.get("allowedSymbols", ""))
+                ),
             }
         )
     except Exception as exc:
@@ -1842,5 +2129,7 @@ def _verify_admin_cookie(cookie: str) -> bool:
 
 
 def _sign(payload: str) -> str:
-    secret = f"{settings.admin_password}:{settings.effective_admin_api_token}".encode("utf-8")
+    secret = f"{settings.admin_password}:{settings.effective_admin_api_token}".encode(
+        "utf-8"
+    )
     return hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()

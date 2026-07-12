@@ -42,7 +42,11 @@ from app.core.prompts import get_review_system_prompt
 from app.db.session import async_session_factory
 from app.models.db import AiDecision, AiLessonLearned, OrderLog, RiskDecision
 from app.models.db.ai_lesson_learned import ROOT_CAUSES, STATUS_PENDING
-from app.services.ai_provider import AiProvider, extract_json_object, get_default_provider
+from app.services.ai_provider import (
+    AiProvider,
+    extract_json_object,
+    get_default_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -108,17 +112,21 @@ async def find_closed_trades(
     incelemenin kapsamı dışında kalır.
     """
     sells = (
-        await session.execute(
-            select(OrderLog)
-            .where(
-                OrderLog.status == "FILLED",
-                OrderLog.action == "SELL",
-                OrderLog.created_at >= period_start,
-                OrderLog.created_at < period_end,
+        (
+            await session.execute(
+                select(OrderLog)
+                .where(
+                    OrderLog.status == "FILLED",
+                    OrderLog.action == "SELL",
+                    OrderLog.created_at >= period_start,
+                    OrderLog.created_at < period_end,
+                )
+                .order_by(OrderLog.created_at.asc())
             )
-            .order_by(OrderLog.created_at.asc())
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     trades: list[RoundTripTrade] = []
     for sell in sells:
@@ -223,7 +231,9 @@ def build_review_payload(trades: list[RoundTripTrade]) -> list[dict[str, Any]]:
         # Giriş anında görülen haber/akıllı-para bağlamı — mevcutsa ekle,
         # payload'ı şişirmemek için sadece ilgili alt-anahtarlar.
         news = entry_ctx.get("newsContext") if isinstance(entry_ctx, dict) else None
-        flow = entry_ctx.get("brokerFlowContext") if isinstance(entry_ctx, dict) else None
+        flow = (
+            entry_ctx.get("brokerFlowContext") if isinstance(entry_ctx, dict) else None
+        )
         if news:
             item["newsContextAtEntry"] = news
         if flow:
@@ -323,13 +333,16 @@ async def run_weekly_review(
             row = AiLessonLearned(
                 period_start=period_start,
                 period_end=period_end,
-                symbols_involved=",".join(clean["affected_symbols"]) or symbols_involved,
+                symbols_involved=",".join(clean["affected_symbols"])
+                or symbols_involved,
                 trades_reviewed_count=len(flagged),
                 total_realized_pnl=total_pnl,
                 root_cause=clean["root_cause"],
                 lesson=clean["lesson"],
                 proposed_rule=clean["proposed_rule"],
-                raw_llm_response=parsed if isinstance(parsed, dict) else {"raw_text": raw_text},
+                raw_llm_response=parsed
+                if isinstance(parsed, dict)
+                else {"raw_text": raw_text},
                 status=STATUS_PENDING,
             )
             session.add(row)

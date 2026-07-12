@@ -39,7 +39,9 @@ async def verify_token(
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if not hmac.compare_digest(credentials.credentials, settings.effective_evaluation_token):
+    if not hmac.compare_digest(
+        credentials.credentials, settings.effective_evaluation_token
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
@@ -48,19 +50,33 @@ async def verify_token(
     return credentials.credentials
 
 
-async def verify_evaluation_token(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)]) -> str:
+async def verify_evaluation_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> str:
     return await _verify_scoped(credentials, settings.effective_evaluation_token)
 
 
-async def verify_gateway_token(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)]) -> str:
+async def verify_gateway_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> str:
     return await _verify_scoped(credentials, settings.effective_gateway_api_token)
 
 
-async def verify_admin_token(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)]) -> str:
+async def verify_admin_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> str:
     return await _verify_scoped(credentials, settings.effective_admin_api_token)
 
 
-async def _verify_scoped(credentials: HTTPAuthorizationCredentials | None, expected: str) -> str:
-    if credentials is None or not hmac.compare_digest(credentials.credentials, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid scoped token", headers={"WWW-Authenticate": "Bearer"})
+async def _verify_scoped(
+    credentials: HTTPAuthorizationCredentials | None, expected: str
+) -> str:
+    if credentials is None or not hmac.compare_digest(
+        credentials.credentials, expected
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid scoped token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return credentials.credentials

@@ -44,9 +44,7 @@ def _disable_fulltext(monkeypatch):
     async def _identity(items):
         return items
 
-    monkeypatch.setattr(
-        "app.services.news_service._enrich_with_fulltext", _identity
-    )
+    monkeypatch.setattr("app.services.news_service._enrich_with_fulltext", _identity)
 
 
 async def _mock_fetch(symbol: str) -> list[dict]:
@@ -156,7 +154,12 @@ class TestGetNewsContext:
 
         result = await get_news_context(["THYAO"])
 
-        assert result["THYAO"] == {"latestNews": [], "kapNews": [], "sentiment": "UNKNOWN", "trustBoundary": "UNTRUSTED_EXTERNAL_CONTENT"}
+        assert result["THYAO"] == {
+            "latestNews": [],
+            "kapNews": [],
+            "sentiment": "UNKNOWN",
+            "trustBoundary": "UNTRUSTED_EXTERNAL_CONTENT",
+        }
 
     @pytest.mark.asyncio
     async def test_symbol_normalized_to_uppercase(self, monkeypatch):

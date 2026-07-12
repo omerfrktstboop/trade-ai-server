@@ -94,9 +94,9 @@ class TestAdminConfig:
         assert "DEEPSEEK_API_KEY" not in keys
         assert "DATABASE_URL" not in keys
         descriptions = {item["key"]: item["description"] for item in resp.json()}
-        assert "İşlem yapılmasına izin verilen semboller" in descriptions[
-            "allowedSymbols"
-        ]
+        assert (
+            "İşlem yapılmasına izin verilen semboller" in descriptions["allowedSymbols"]
+        )
 
     def test_config_update_writes_audit_log(
         self, client: TestClient, auth_headers: dict[str, str]
@@ -267,29 +267,67 @@ class TestLogDetailView:
 
     async def _seed(self, request_id: str) -> None:
         async with async_session_factory() as session:
-            session.add(MarketSnapshot(
-                request_id=request_id, symbol="THYAO", timeframe="1h",
-                open=99.0, high=102.0, low=98.0, close=100.0, volume=1000.0,
-                rsi=45.0, ema20=98.5, ema50=97.0, macd=0.1, macd_signal=0.05,
-                mode="DEMO_LIVE",
-            ))
-            session.add(AiDecision(
-                request_id=request_id, symbol="THYAO", provider="deepseek",
-                raw_request={"symbol": "THYAO", "rsi": 45.0},
-                raw_response={"action": "SELL", "confidence": 82, "reason": "bearish"},
-                action="SELL", confidence=82.0, qty=300.0, reason="bearish",
-            ))
-            session.add(RiskDecision(
-                request_id=request_id, symbol="THYAO", action="SELL",
-                confidence=82.0, risk_score=10.0, allow_order=True,
-                reason="RiskEngine approved", qty=300.0, order_type="LIMIT",
-                mode="DEMO_LIVE",
-            ))
-            session.add(OrderLog(
-                request_id=request_id, symbol="THYAO", action="SELL",
-                qty=300.0, price=41.6, status="FILLED", mode="DEMO_LIVE",
-                matrix_message="Order accepted",
-            ))
+            session.add(
+                MarketSnapshot(
+                    request_id=request_id,
+                    symbol="THYAO",
+                    timeframe="1h",
+                    open=99.0,
+                    high=102.0,
+                    low=98.0,
+                    close=100.0,
+                    volume=1000.0,
+                    rsi=45.0,
+                    ema20=98.5,
+                    ema50=97.0,
+                    macd=0.1,
+                    macd_signal=0.05,
+                    mode="DEMO_LIVE",
+                )
+            )
+            session.add(
+                AiDecision(
+                    request_id=request_id,
+                    symbol="THYAO",
+                    provider="deepseek",
+                    raw_request={"symbol": "THYAO", "rsi": 45.0},
+                    raw_response={
+                        "action": "SELL",
+                        "confidence": 82,
+                        "reason": "bearish",
+                    },
+                    action="SELL",
+                    confidence=82.0,
+                    qty=300.0,
+                    reason="bearish",
+                )
+            )
+            session.add(
+                RiskDecision(
+                    request_id=request_id,
+                    symbol="THYAO",
+                    action="SELL",
+                    confidence=82.0,
+                    risk_score=10.0,
+                    allow_order=True,
+                    reason="RiskEngine approved",
+                    qty=300.0,
+                    order_type="LIMIT",
+                    mode="DEMO_LIVE",
+                )
+            )
+            session.add(
+                OrderLog(
+                    request_id=request_id,
+                    symbol="THYAO",
+                    action="SELL",
+                    qty=300.0,
+                    price=41.6,
+                    status="FILLED",
+                    mode="DEMO_LIVE",
+                    matrix_message="Order accepted",
+                )
+            )
             await session.commit()
 
     def test_requires_auth(self, client: TestClient):
@@ -340,7 +378,10 @@ class TestAdminDashboard:
         assert "NORMAL" in resp.text
 
     def test_bot_status_is_safe_when_gateway_is_unavailable(
-        self, client: TestClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
     ):
         from app.routers import admin
         from app.services.matriks_gateway import GatewayUnavailable
@@ -373,7 +414,9 @@ class TestAdminDashboard:
         admin.notification_service._token = ""
         admin.notification_service._chat_id = ""
         try:
-            response = client.post("/api/admin/notifications/test", headers=auth_headers)
+            response = client.post(
+                "/api/admin/notifications/test", headers=auth_headers
+            )
         finally:
             admin.notification_service._token = old_token
             admin.notification_service._chat_id = old_chat_id
@@ -383,7 +426,9 @@ class TestAdminDashboard:
 
 
 class TestWhyBlocked:
-    def test_empty_page_returns_200(self, client: TestClient, auth_headers: dict[str, str]):
+    def test_empty_page_returns_200(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
         response = client.get("/admin/why-blocked", headers=auth_headers)
         assert response.status_code == 200
         assert "No blocked decision found" in response.text
@@ -396,20 +441,33 @@ class TestLogsListBugFixes:
 
     async def _seed_ai_decision(self, request_id: str) -> None:
         async with async_session_factory() as session:
-            session.add(AiDecision(
-                request_id=request_id, symbol="THYAO", provider="deepseek",
-                raw_request={"symbol": "THYAO"}, raw_response={"action": "BUY"},
-                action="BUY", confidence=91.5, qty=100.0, reason="bullish",
-                model="deepseek-chat",
-            ))
+            session.add(
+                AiDecision(
+                    request_id=request_id,
+                    symbol="THYAO",
+                    provider="deepseek",
+                    raw_request={"symbol": "THYAO"},
+                    raw_response={"action": "BUY"},
+                    action="BUY",
+                    confidence=91.5,
+                    qty=100.0,
+                    reason="bullish",
+                    model="deepseek-chat",
+                )
+            )
             await session.commit()
 
     async def _seed_audit_log(self) -> None:
         async with async_session_factory() as session:
-            session.add(ConfigAuditLog(
-                key="killSwitchEnabled", old_value="false", new_value="true",
-                changed_by="admin", reason="test audit key rendering",
-            ))
+            session.add(
+                ConfigAuditLog(
+                    key="killSwitchEnabled",
+                    old_value="false",
+                    new_value="true",
+                    changed_by="admin",
+                    reason="test audit key rendering",
+                )
+            )
             await session.commit()
 
     def test_ai_decisions_table_shows_confidence_and_model(
@@ -445,9 +503,15 @@ class TestLogDeletion:
     def _ai_decisions(self, n: int) -> list[AiDecision]:
         return [
             AiDecision(
-                request_id=f"del-ai-{i}", symbol="THYAO", provider="deepseek",
-                raw_request={"i": i}, raw_response={"action": "BUY"},
-                action="BUY", confidence=50.0, qty=10.0, reason="test",
+                request_id=f"del-ai-{i}",
+                symbol="THYAO",
+                provider="deepseek",
+                raw_request={"i": i},
+                raw_response={"action": "BUY"},
+                action="BUY",
+                confidence=50.0,
+                qty=10.0,
+                reason="test",
                 model="test-model",
             )
             for i in range(n)
@@ -456,9 +520,16 @@ class TestLogDeletion:
     def _risk_decisions(self, n: int) -> list[RiskDecision]:
         return [
             RiskDecision(
-                request_id=f"del-risk-{i}", symbol="THYAO", action="BUY",
-                confidence=50.0, risk_score=10.0, allow_order=True,
-                reason="test", qty=10.0, order_type="LIMIT", mode="PAPER",
+                request_id=f"del-risk-{i}",
+                symbol="THYAO",
+                action="BUY",
+                confidence=50.0,
+                risk_score=10.0,
+                allow_order=True,
+                reason="test",
+                qty=10.0,
+                order_type="LIMIT",
+                mode="PAPER",
             )
             for i in range(n)
         ]
@@ -466,8 +537,13 @@ class TestLogDeletion:
     def _order_logs(self, n: int) -> list[OrderLog]:
         return [
             OrderLog(
-                request_id=f"del-order-{i}", symbol="THYAO", action="BUY",
-                qty=10.0, price=100.0, status="FILLED", mode="PAPER",
+                request_id=f"del-order-{i}",
+                symbol="THYAO",
+                action="BUY",
+                qty=10.0,
+                price=100.0,
+                status="FILLED",
+                mode="PAPER",
             )
             for i in range(n)
         ]
@@ -475,8 +551,11 @@ class TestLogDeletion:
     def _audit_logs(self, n: int) -> list[ConfigAuditLog]:
         return [
             ConfigAuditLog(
-                key="killSwitchEnabled", old_value="false", new_value="true",
-                changed_by="admin", reason=f"test-{i}",
+                key="killSwitchEnabled",
+                old_value="false",
+                new_value="true",
+                changed_by="admin",
+                reason=f"test-{i}",
             )
             for i in range(n)
         ]
@@ -489,9 +568,7 @@ class TestLogDeletion:
         resp = client.post("/admin/logs/ai-decisions/delete-selected")
         assert resp.status_code == 401
 
-    def test_unknown_table_404s(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ):
+    def test_unknown_table_404s(self, client: TestClient, auth_headers: dict[str, str]):
         resp = client.post(
             "/admin/logs/not-a-real-table/delete-all",
             headers=auth_headers,
@@ -550,7 +627,9 @@ class TestLogDeletion:
 
         async def _count() -> int:
             async with async_session_factory() as session:
-                return len((await session.execute(select(RiskDecision))).scalars().all())
+                return len(
+                    (await session.execute(select(RiskDecision))).scalars().all()
+                )
 
         assert asyncio.run(_count()) == 2
 
@@ -614,7 +693,9 @@ class TestLogDeletion:
 
         async def _count() -> int:
             async with async_session_factory() as session:
-                return len((await session.execute(select(ConfigAuditLog))).scalars().all())
+                return len(
+                    (await session.execute(select(ConfigAuditLog))).scalars().all()
+                )
 
         assert asyncio.run(_count()) == 0
 
@@ -647,23 +728,39 @@ class TestResearchRanking:
 
         def _dec(symbol, action, confidence, entry_max=None, stop=None, target=None):
             return SimpleNamespace(
-                symbol=symbol, action=action, confidence=confidence,
-                risk_score=10.0, entry_min=entry_max, entry_max=entry_max,
-                stop_loss=stop, target_price=target, reason="r",
-                request_id=f"req-{symbol}", created_at=None,
+                symbol=symbol,
+                action=action,
+                confidence=confidence,
+                risk_score=10.0,
+                entry_min=entry_max,
+                entry_max=entry_max,
+                stop_loss=stop,
+                target_price=target,
+                reason="r",
+                request_id=f"req-{symbol}",
+                created_at=None,
             )
 
-        ranked = _research_rank_rows([
-            _dec("WAITHIGH", "WAIT", 90.0),
-            _dec("BUYLOW", "BUY", 95.0, entry_max=100, stop=95, target=105),   # 1.0x
-            _dec("SELLONE", "SELL", 99.0),
-            _dec("BUYHIGH", "BUY", 60.0, entry_max=100, stop=95, target=120),  # 4.0x
-            _dec("BUYNORR", "BUY", 99.0),  # BUY without price legs
-            _dec("WAITLOW", "WAIT", 10.0),
-        ])
+        ranked = _research_rank_rows(
+            [
+                _dec("WAITHIGH", "WAIT", 90.0),
+                _dec("BUYLOW", "BUY", 95.0, entry_max=100, stop=95, target=105),  # 1.0x
+                _dec("SELLONE", "SELL", 99.0),
+                _dec(
+                    "BUYHIGH", "BUY", 60.0, entry_max=100, stop=95, target=120
+                ),  # 4.0x
+                _dec("BUYNORR", "BUY", 99.0),  # BUY without price legs
+                _dec("WAITLOW", "WAIT", 10.0),
+            ]
+        )
 
         assert [r["symbol"] for r in ranked] == [
-            "BUYHIGH", "BUYLOW", "BUYNORR", "WAITHIGH", "WAITLOW", "SELLONE",
+            "BUYHIGH",
+            "BUYLOW",
+            "BUYNORR",
+            "WAITHIGH",
+            "WAITLOW",
+            "SELLONE",
         ]
         assert ranked[0]["rank"] == 1
         assert ranked[0]["rr"] == 4.0
@@ -671,15 +768,28 @@ class TestResearchRanking:
 
 
 class TestResearchPage:
-    async def _seed_decision(self, symbol, action, confidence, *, entry=None, stop=None, target=None):
+    async def _seed_decision(
+        self, symbol, action, confidence, *, entry=None, stop=None, target=None
+    ):
         async with async_session_factory() as session:
-            session.add(RiskDecision(
-                request_id=f"research-{symbol}", symbol=symbol, action=action,
-                confidence=confidence, risk_score=10.0, allow_order=action == "BUY",
-                reason=f"{symbol} research seed", entry_min=entry, entry_max=entry,
-                stop_loss=stop, target_price=target, qty=10.0,
-                order_type="LIMIT", mode="PAPER",
-            ))
+            session.add(
+                RiskDecision(
+                    request_id=f"research-{symbol}",
+                    symbol=symbol,
+                    action=action,
+                    confidence=confidence,
+                    risk_score=10.0,
+                    allow_order=action == "BUY",
+                    reason=f"{symbol} research seed",
+                    entry_min=entry,
+                    entry_max=entry,
+                    stop_loss=stop,
+                    target_price=target,
+                    qty=10.0,
+                    order_type="LIMIT",
+                    mode="PAPER",
+                )
+            )
             await session.commit()
 
     def test_requires_auth(self, client: TestClient):
@@ -696,9 +806,11 @@ class TestResearchPage:
     def test_ranked_page_orders_buy_above_wait(
         self, client: TestClient, auth_headers: dict[str, str]
     ):
-        asyncio.run(self._seed_decision(
-            "THYAO", "BUY", 80.0, entry=100.0, stop=95.0, target=120.0
-        ))
+        asyncio.run(
+            self._seed_decision(
+                "THYAO", "BUY", 80.0, entry=100.0, stop=95.0, target=120.0
+            )
+        )
         asyncio.run(self._seed_decision("AKBNK", "WAIT", 95.0))
 
         resp = client.get("/admin/research", headers=auth_headers)

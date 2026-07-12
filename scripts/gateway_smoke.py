@@ -91,7 +91,9 @@ async def run(url: str | None, token: str | None, symbols: list[str]) -> int:
                 "ohlcReliable": bool(payload.get("ohlcReliable")),
                 "depthReliable": bool(payload.get("depthReliable")),
                 "rsi mevcut": payload.get("rsi") is not None,
-                "technicalFeatures mevcut": isinstance(payload.get("technicalFeatures"), dict),
+                "technicalFeatures mevcut": isinstance(
+                    payload.get("technicalFeatures"), dict
+                ),
             }
             for name, passed in checks.items():
                 # Veri güvenilirlik bayrakları piyasa kapalıyken false olabilir;
@@ -99,7 +101,9 @@ async def run(url: str | None, token: str | None, symbols: list[str]) -> int:
                 mark = "✓" if passed else "⚠"
                 print(f"  {mark} {name}")
             if (payload.get("lastPrice") or 0) <= 0:
-                print("  ✗ lastPrice=0 — veri akışı yok (piyasa kapalı veya abonelik sorunu)")
+                print(
+                    "  ✗ lastPrice=0 — veri akışı yok (piyasa kapalı veya abonelik sorunu)"
+                )
                 failures += 1
 
         # 3. Positions

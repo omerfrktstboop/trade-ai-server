@@ -378,9 +378,7 @@ class TestDataSurface:
 class TestOrderStateEndpoints:
     async def test_active_orders_are_returned(self):
         fake = FakeGateway()
-        fake.order_states = [
-            {"orderId": "O-1", "requestId": "R-1", "status": "FILLED"}
-        ]
+        fake.order_states = [{"orderId": "O-1", "requestId": "R-1", "status": "FILLED"}]
         client = make_client(fake)
         result = await client.get_active_orders()
         assert result["orders"][0]["status"] == "FILLED"

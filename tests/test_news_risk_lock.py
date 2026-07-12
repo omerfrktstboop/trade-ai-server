@@ -8,16 +8,21 @@ from app.models.signal import OrderType, SignalAction, SignalResponse
 
 def _response(action=SignalAction.BUY, *, allowed=False, confirmation=False):
     return SignalResponse(
-        requestId="news-risk", symbol="THYAO", action=action, qty=10,
-        orderType=OrderType.LIMIT, price=100, confidenceScore=80,
-        riskScore=10, allowOrder=allowed,
-        requiresConfirmation=confirmation, reason="proposal",
+        requestId="news-risk",
+        symbol="THYAO",
+        action=action,
+        qty=10,
+        orderType=OrderType.LIMIT,
+        price=100,
+        confidenceScore=80,
+        riskScore=10,
+        allowOrder=allowed,
+        requiresConfirmation=confirmation,
+        reason="proposal",
     )
 
 
-@pytest.mark.parametrize(
-    ("allowed", "confirmation"), [(True, False), (False, True)]
-)
+@pytest.mark.parametrize(("allowed", "confirmation"), [(True, False), (False, True)])
 async def test_negative_news_blocks_live_and_manual_buy(
     monkeypatch, allowed, confirmation
 ):
@@ -54,8 +59,6 @@ async def test_news_lookup_error_fails_open(monkeypatch):
         raise RuntimeError("news unavailable")
 
     monkeypatch.setattr(news_lock, "active_news_risk", broken)
-    response = await news_lock.apply_news_risk_lock(
-        _response(allowed=True), "THYAO"
-    )
+    response = await news_lock.apply_news_risk_lock(_response(allowed=True), "THYAO")
     assert response.action == SignalAction.BUY
     assert response.allow_order is True

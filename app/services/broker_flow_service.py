@@ -47,10 +47,10 @@ logger = logging.getLogger(__name__)
 # Bir kurumu "akıllı para" sayan isim parçaları (normalize edilmiş, küçük harf,
 # Türkçe aksan/İ sadeleştirmesi sonrası substring eşleşmesi).
 _SMART_MONEY_KEYWORDS: tuple[str, ...] = (
-    "yatirim fonlari",   # Yatırım Fonları
-    "emeklilik",         # Emeklilik Fonları
-    "citibank",          # Citibank Yabancı (yabancı takas)
-    "portfoy",           # Portföy yönetim şirketleri
+    "yatirim fonlari",  # Yatırım Fonları
+    "emeklilik",  # Emeklilik Fonları
+    "citibank",  # Citibank Yabancı (yabancı takas)
+    "portfoy",  # Portföy yönetim şirketleri
 )
 
 # Akıllı paranın net-alış tarafında baskın sayılması için gereken pay.
@@ -66,7 +66,9 @@ _akd_inflight: dict[tuple[int, str, str, bool, str], asyncio.Task[dict[str, Any]
 async def get_broker_flow_context(
     symbols: list[str],
     gateway: MatriksGatewayClient | None = None,
-    *, period: str = "Daily", include_reported_orders: bool = True,
+    *,
+    period: str = "Daily",
+    include_reported_orders: bool = True,
     config_version: str = "",
 ) -> dict[str, Any]:
     """Return broker / institutional (AKD) flow context for a list of symbols.
@@ -88,7 +90,13 @@ async def get_broker_flow_context(
     for symbol in symbols:
         normalized = symbol.strip().upper()
         normalized_period = period.strip().upper()
-        cache_key = (id(gw), normalized, normalized_period, include_reported_orders, config_version)
+        cache_key = (
+            id(gw),
+            normalized,
+            normalized_period,
+            include_reported_orders,
+            config_version,
+        )
         cached = _akd_cache.get(cache_key)
         if cached and time.monotonic() - cached[0] < AKD_CACHE_TTL_SECONDS:
             entry = dict(cached[1])
@@ -99,7 +107,14 @@ async def get_broker_flow_context(
             try:
                 task = _akd_inflight.get(cache_key)
                 if task is None:
-                    task = asyncio.create_task(gw.get_institutions(normalized, limit=10, period=period, include_reported_orders=include_reported_orders))
+                    task = asyncio.create_task(
+                        gw.get_institutions(
+                            normalized,
+                            limit=10,
+                            period=period,
+                            include_reported_orders=include_reported_orders,
+                        )
+                    )
                     _akd_inflight[cache_key] = task
                 try:
                     raw = await task
@@ -109,7 +124,9 @@ async def get_broker_flow_context(
             except TypeError:  # backwards-compatible injected/test gateways
                 raw = await gw.get_institutions(normalized, limit=10)
         except (GatewayUnavailable, GatewayError) as exc:
-            logger.debug("Institutions fetch failed symbol=%s error=%s", normalized, exc)
+            logger.debug(
+                "Institutions fetch failed symbol=%s error=%s", normalized, exc
+            )
             context[normalized] = _unknown_entry(normalized, "Broker flow unavailable.")
             continue
         except Exception:
@@ -119,13 +136,17 @@ async def get_broker_flow_context(
 
         entry = _analyze(normalized, raw)
         entry["period"] = str(raw.get("period") or "DAILY")
-        entry["available"] = bool(raw.get("available")) and entry.get("smartMoneyFlow") != "UNKNOWN"
+        entry["available"] = (
+            bool(raw.get("available")) and entry.get("smartMoneyFlow") != "UNKNOWN"
+        )
         entry["asOf"] = raw.get("asOf") or raw.get("marketDate") or raw.get("date")
         entry["marketDate"] = raw.get("marketDate") or raw.get("date")
         entry["retrievedAt"] = datetime.now(UTC).isoformat()
         entry["dataAgeSeconds"] = _data_age_seconds(entry["asOf"])
         previous = _akd_cache.get(cache_key)
-        if previous and decision_context_fingerprint(previous[1]) != decision_context_fingerprint(entry):
+        if previous and decision_context_fingerprint(
+            previous[1]
+        ) != decision_context_fingerprint(entry):
             decision_cache.clear(normalized)
         _akd_cache[cache_key] = (time.monotonic(), entry)
         context[normalized] = entry
@@ -253,12 +274,19 @@ def _is_smart_money(name: str) -> bool:
 
 _TURKISH_MAP = str.maketrans(
     {
-        "İ": "i", "I": "i", "ı": "i",
-        "Ş": "s", "ş": "s",
-        "Ğ": "g", "ğ": "g",
-        "Ü": "u", "ü": "u",
-        "Ö": "o", "ö": "o",
-        "Ç": "c", "ç": "c",
+        "İ": "i",
+        "I": "i",
+        "ı": "i",
+        "Ş": "s",
+        "ş": "s",
+        "Ğ": "g",
+        "ğ": "g",
+        "Ü": "u",
+        "ü": "u",
+        "Ö": "o",
+        "ö": "o",
+        "Ç": "c",
+        "ç": "c",
     }
 )
 
@@ -300,9 +328,15 @@ def _data_age_seconds(raw: Any) -> float | None:
     if not raw:
         return None
     try:
-        parsed = raw if isinstance(raw, datetime) else datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        parsed = (
+            raw
+            if isinstance(raw, datetime)
+            else datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        )
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=UTC)
-        return round(max(0.0, (datetime.now(UTC) - parsed.astimezone(UTC)).total_seconds()), 1)
+        return round(
+            max(0.0, (datetime.now(UTC) - parsed.astimezone(UTC)).total_seconds()), 1
+        )
     except (TypeError, ValueError):
         return None

@@ -64,11 +64,17 @@ class TestFundamentalsService:
         async def _run():
             async with async_session_factory() as session:
                 await upsert_fundamental(
-                    session, "thyao", period="2026/Q1", changed_by="t",
+                    session,
+                    "thyao",
+                    period="2026/Q1",
+                    changed_by="t",
                     fcf_growth_pct=5.0,
                 )
                 await upsert_fundamental(
-                    session, "THYAO", period="2026/Q2", changed_by="t2",
+                    session,
+                    "THYAO",
+                    period="2026/Q2",
+                    changed_by="t2",
                     debt_to_equity=1.1,
                 )
                 rows = await list_fundamentals(session)
@@ -96,7 +102,10 @@ class TestFundamentalsService:
         async def _run():
             async with async_session_factory() as session:
                 await upsert_fundamental(
-                    session, "THYAO", period="2026/Q2", changed_by="t",
+                    session,
+                    "THYAO",
+                    period="2026/Q2",
+                    changed_by="t",
                     pe_ratio=10.0,
                 )
 
@@ -140,8 +149,14 @@ class TestFundamentalsInPayload:
         from app.models.signal import SignalMode, SignalRequest
 
         return SignalRequest(
-            requestId="f-1", symbol="THYAO", timeframe="1h",
-            lastPrice=100.0, open=99.0, high=102.0, low=98.0, volume=1000.0,
+            requestId="f-1",
+            symbol="THYAO",
+            timeframe="1h",
+            lastPrice=100.0,
+            open=99.0,
+            high=102.0,
+            low=98.0,
+            volume=1000.0,
             mode=SignalMode.PAPER,
         )
 
@@ -169,9 +184,15 @@ class TestFundamentalsInPayload:
             "/api/signal/evaluate",
             headers=auth_headers,
             json={
-                "requestId": "fund-e2e-1", "symbol": "THYAO", "timeframe": "1h",
-                "mode": "PAPER", "lastPrice": 100.0, "open": 99.0,
-                "high": 101.0, "low": 98.0, "volume": 1000.0,
+                "requestId": "fund-e2e-1",
+                "symbol": "THYAO",
+                "timeframe": "1h",
+                "mode": "PAPER",
+                "lastPrice": 100.0,
+                "open": 99.0,
+                "high": 101.0,
+                "low": 98.0,
+                "volume": 1000.0,
             },
         )
         assert resp.status_code == 200
@@ -256,9 +277,7 @@ class TestAdminFundamentalsRoutes:
         asyncio.run(_seed_thyao())
         self._login(client)
 
-        resp = client.post(
-            "/admin/fundamentals/THYAO/delete", follow_redirects=False
-        )
+        resp = client.post("/admin/fundamentals/THYAO/delete", follow_redirects=False)
         assert resp.status_code == 303
 
         assert asyncio.run(get_fundamentals_context(["THYAO"])) == {}
@@ -283,12 +302,8 @@ class TestAdminFundamentalsRoutes:
     def test_api_delete(self, client: TestClient, auth_headers: dict[str, str]):
         asyncio.run(_seed_thyao())
 
-        resp = client.delete(
-            "/api/admin/fundamentals/THYAO", headers=auth_headers
-        )
+        resp = client.delete("/api/admin/fundamentals/THYAO", headers=auth_headers)
         assert resp.status_code == 200
 
-        missing = client.delete(
-            "/api/admin/fundamentals/THYAO", headers=auth_headers
-        )
+        missing = client.delete("/api/admin/fundamentals/THYAO", headers=auth_headers)
         assert missing.status_code == 404

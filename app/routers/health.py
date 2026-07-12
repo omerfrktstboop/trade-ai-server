@@ -1,4 +1,5 @@
 """Separate liveness and operational readiness endpoints."""
+
 from __future__ import annotations
 
 import shutil
@@ -41,7 +42,9 @@ async def health_ready() -> JSONResponse:
             migration = "development-create-all"
             if settings.is_production:
                 migration = (
-                    await session.execute(text("SELECT version_num FROM alembic_version"))
+                    await session.execute(
+                        text("SELECT version_num FROM alembic_version")
+                    )
                 ).scalar_one_or_none()
                 if migration != EXPECTED_MIGRATION:
                     ready = False
@@ -86,7 +89,13 @@ async def health_ready() -> JSONResponse:
         )
         position_ok = position_age is not None and float(position_age) <= 90
         backlog = int(gateway.get("callbackOutboxBacklog") or 0)
-        gateway_ready = gateway_ok and freshness_ok and position_ok and account_ok and backlog < 1000
+        gateway_ready = (
+            gateway_ok
+            and freshness_ok
+            and position_ok
+            and account_ok
+            and backlog < 1000
+        )
         ready = ready and gateway_ready
         checks["gateway"] = {
             "ok": gateway_ok,

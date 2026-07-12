@@ -45,10 +45,17 @@ def table_names() -> list[str]:
 
 def _validate_target(database_url: str, app_env: AppEnv | str) -> None:
     if not database_url.strip():
-        raise DatabaseInitError("DATABASE_URL is required; refusing to use a fallback database.")
+        raise DatabaseInitError(
+            "DATABASE_URL is required; refusing to use a fallback database."
+        )
     environment = app_env.value if isinstance(app_env, AppEnv) else str(app_env).lower()
-    if environment == AppEnv.PRODUCTION.value and database_kind(database_url) != "postgresql":
-        raise DatabaseInitError("Production database initialisation requires a PostgreSQL DATABASE_URL.")
+    if (
+        environment == AppEnv.PRODUCTION.value
+        and database_kind(database_url) != "postgresql"
+    ):
+        raise DatabaseInitError(
+            "Production database initialisation requires a PostgreSQL DATABASE_URL."
+        )
 
 
 async def initialize_database(
@@ -75,7 +82,9 @@ async def initialize_database(
     _validate_target(database_url, app_env)
     tables = table_names()
     logger.info(
-        "Database init target: type=%s url=%s", database_kind(database_url), mask_database_url(database_url)
+        "Database init target: type=%s url=%s",
+        database_kind(database_url),
+        mask_database_url(database_url),
     )
     logger.info("Tables to ensure: %s", ", ".join(tables))
 
@@ -100,10 +109,18 @@ async def initialize_database(
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Explicitly initialise trade-ai-server database tables.")
+    parser = argparse.ArgumentParser(
+        description="Explicitly initialise trade-ai-server database tables."
+    )
     choices = parser.add_mutually_exclusive_group()
-    choices.add_argument("--yes", action="store_true", help="Confirm create_all and profile seeding.")
-    choices.add_argument("--dry-run", action="store_true", help="Show target and tables without touching the database.")
+    choices.add_argument(
+        "--yes", action="store_true", help="Confirm create_all and profile seeding."
+    )
+    choices.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show target and tables without touching the database.",
+    )
     return parser.parse_args(argv)
 
 

@@ -11,9 +11,45 @@ def test_replay_uses_recorded_data_without_gateway():
         await drop_all()
         await init_db()
         async with async_session_factory() as session:
-            session.add(MarketSnapshot(request_id="replay-1", symbol="THYAO", timeframe="1h", open=99, high=101, low=98, close=100, volume=1000, mode="PAPER"))
-            session.add(AiDecision(request_id="replay-1", symbol="THYAO", raw_response={"action": "BUY", "confidence": 1, "qty": 10, "reason": "test"}))
-            session.add(RiskDecision(request_id="replay-1", symbol="THYAO", action="BUY", confidence=1, risk_score=0, allow_order=False, reason="old", qty=10, order_type="LIMIT", mode="PAPER"))
+            session.add(
+                MarketSnapshot(
+                    request_id="replay-1",
+                    symbol="THYAO",
+                    timeframe="1h",
+                    open=99,
+                    high=101,
+                    low=98,
+                    close=100,
+                    volume=1000,
+                    mode="PAPER",
+                )
+            )
+            session.add(
+                AiDecision(
+                    request_id="replay-1",
+                    symbol="THYAO",
+                    raw_response={
+                        "action": "BUY",
+                        "confidence": 1,
+                        "qty": 10,
+                        "reason": "test",
+                    },
+                )
+            )
+            session.add(
+                RiskDecision(
+                    request_id="replay-1",
+                    symbol="THYAO",
+                    action="BUY",
+                    confidence=1,
+                    risk_score=0,
+                    allow_order=False,
+                    reason="old",
+                    qty=10,
+                    order_type="LIMIT",
+                    mode="PAPER",
+                )
+            )
             await session.commit()
         one = await replay_request("replay-1", mode="PAPER")
         batch = await replay_batch(mode="PAPER")
@@ -21,4 +57,5 @@ def test_replay_uses_recorded_data_without_gateway():
         assert batch["totalEvaluated"] == 1
         await drop_all()
         await init_db()
+
     asyncio.run(run())

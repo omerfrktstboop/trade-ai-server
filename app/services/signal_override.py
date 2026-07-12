@@ -106,7 +106,9 @@ async def list_pending_override_symbols(session: AsyncSession) -> list[str]:
 
     symbols: list[str] = []
     for symbol, expires_at in rows:
-        exp = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
+        exp = (
+            expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
+        )
         if exp > now:
             symbols.append(symbol)
     return symbols

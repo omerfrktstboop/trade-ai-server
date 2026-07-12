@@ -9,8 +9,6 @@ from pydantic import BaseModel, Field
 
 from app.core.auth import verify_gateway_token
 from app.db.session import async_session_factory
-from app.models.db import OrderLog
-from sqlalchemy import select
 from app.services.notifications import notify_order_event
 from app.services.order_state_machine import FINAL, RANK, transition
 from app.services.order_lifecycle import apply_callback
@@ -71,8 +69,8 @@ def should_apply_status(current: str | None, incoming: str) -> bool:
 async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
     """Record a completed order result from the trading platform.
 
-    Persists to ``order_logs`` table and returns ``{"status": "ok"}``.
-    DB errors are swallowed so that the endpoint never blocks Matriks IQ.
+    Persists to ``order_logs`` and acknowledges only after commit. Database
+    failures return HTTP 503 so the gateway keeps the callback in its outbox.
     """
     event_applied = False
     persisted = False
@@ -82,7 +80,20 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
             incoming_status = body.status.upper()
             order_qty = body.order_qty if body.order_qty is not None else body.qty
             filled_qty = body.filled_qty if body.filled_qty is not None else body.qty
-            entry, event_applied = await apply_callback(session, request_id=body.request_id, symbol=body.symbol, action=body.action, status=incoming_status, order_qty=order_qty or 0.0, filled_qty=filled_qty or 0.0, last_fill_qty=body.last_fill_qty or 0.0, avg_price=body.avg_price or body.price, limit_price=body.limit_price, order_id=body.order_id, message=body.matriks_message)
+            entry, event_applied = await apply_callback(
+                session,
+                request_id=body.request_id,
+                symbol=body.symbol,
+                action=body.action,
+                status=incoming_status,
+                order_qty=order_qty or 0.0,
+                filled_qty=filled_qty or 0.0,
+                last_fill_qty=body.last_fill_qty or 0.0,
+                avg_price=body.avg_price or body.price,
+                limit_price=body.limit_price,
+                order_id=body.order_id,
+                message=body.matriks_message,
+            )
             persisted = True
             applied_status = entry.status
     except Exception as exc:
@@ -91,7 +102,9 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
             body.request_id,
             body.symbol,
         )
-        raise HTTPException(status_code=503, detail="order result persistence unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="order result persistence unavailable"
+        ) from exc
 
     if event_applied and body.status.upper() in FINAL_STATUSES:
         await notify_order_event(

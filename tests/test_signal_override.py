@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -37,7 +36,10 @@ def _reset_db():
             # Avoid flakiness from the real 17:30 cutoff default — tests
             # should pass regardless of what time they happen to run.
             await set_admin_config_value(
-                session, "disableTradingAfter", "23:59", changed_by="test-setup",
+                session,
+                "disableTradingAfter",
+                "23:59",
+                changed_by="test-setup",
             )
 
     asyncio.run(drop_all())
@@ -66,8 +68,12 @@ class TestCreateAndConsumeOverride:
         async def _run():
             async with async_session_factory() as session:
                 await create_override(
-                    session, "thyao", "SELL", SELL_ALL_SENTINEL_QTY,
-                    reason="test", created_by="tester",
+                    session,
+                    "thyao",
+                    "SELL",
+                    SELL_ALL_SENTINEL_QTY,
+                    reason="test",
+                    created_by="tester",
                 )
             async with async_session_factory() as session:
                 return await consume_override(session, "THYAO")
@@ -82,8 +88,12 @@ class TestCreateAndConsumeOverride:
         async def _run():
             async with async_session_factory() as session:
                 await create_override(
-                    session, "THYAO", "SELL", SELL_ALL_SENTINEL_QTY,
-                    reason="test", created_by="tester",
+                    session,
+                    "THYAO",
+                    "SELL",
+                    SELL_ALL_SENTINEL_QTY,
+                    reason="test",
+                    created_by="tester",
                 )
             async with async_session_factory() as session:
                 first = await consume_override(session, "THYAO")
@@ -133,12 +143,20 @@ class TestCreateAndConsumeOverride:
         async def _run():
             async with async_session_factory() as session:
                 await create_override(
-                    session, "THYAO", "BUY", 10.0,
-                    reason="first", created_by="tester",
+                    session,
+                    "THYAO",
+                    "BUY",
+                    10.0,
+                    reason="first",
+                    created_by="tester",
                 )
                 await create_override(
-                    session, "THYAO", "SELL", SELL_ALL_SENTINEL_QTY,
-                    reason="second", created_by="tester",
+                    session,
+                    "THYAO",
+                    "SELL",
+                    SELL_ALL_SENTINEL_QTY,
+                    reason="second",
+                    created_by="tester",
                 )
             async with async_session_factory() as session:
                 return await consume_override(session, "THYAO")
@@ -153,8 +171,12 @@ class TestOverrideToRawDecision:
         async def _run():
             async with async_session_factory() as session:
                 await create_override(
-                    session, "THYAO", "SELL", SELL_ALL_SENTINEL_QTY,
-                    reason="liquidate", created_by="admin",
+                    session,
+                    "THYAO",
+                    "SELL",
+                    SELL_ALL_SENTINEL_QTY,
+                    reason="liquidate",
+                    created_by="admin",
                 )
             async with async_session_factory() as session:
                 return await consume_override(session, "THYAO")
@@ -171,10 +193,16 @@ class TestOverrideToRawDecision:
         async def _run():
             async with async_session_factory() as session:
                 await create_override(
-                    session, "THYAO", "BUY", 10.0,
-                    reason="test buy", created_by="admin",
-                    entry_min=100.0, entry_max=101.0,
-                    stop_loss=98.0, target_price=106.0,
+                    session,
+                    "THYAO",
+                    "BUY",
+                    10.0,
+                    reason="test buy",
+                    created_by="admin",
+                    entry_min=100.0,
+                    entry_max=101.0,
+                    stop_loss=98.0,
+                    target_price=106.0,
                 )
             async with async_session_factory() as session:
                 return await consume_override(session, "THYAO")
@@ -212,9 +240,7 @@ def _override_gateway() -> MatriksGatewayClient:
 
 
 def _evaluate(symbol: str, mode: SignalMode):
-    return asyncio.run(
-        evaluate_symbol(symbol, gateway=_override_gateway(), mode=mode)
-    )
+    return asyncio.run(evaluate_symbol(symbol, gateway=_override_gateway(), mode=mode))
 
 
 class TestOverrideAppliedThroughEvaluator:
@@ -222,8 +248,12 @@ class TestOverrideAppliedThroughEvaluator:
         async def _seed():
             async with async_session_factory() as session:
                 await create_override(
-                    session, "THYAO", "SELL", SELL_ALL_SENTINEL_QTY,
-                    reason="portfolio liquidation test", created_by="admin",
+                    session,
+                    "THYAO",
+                    "SELL",
+                    SELL_ALL_SENTINEL_QTY,
+                    reason="portfolio liquidation test",
+                    created_by="admin",
                 )
 
         asyncio.run(_seed())
@@ -242,8 +272,12 @@ class TestOverrideAppliedThroughEvaluator:
         async def _seed():
             async with async_session_factory() as session:
                 await create_override(
-                    session, "THYAO", "SELL", SELL_ALL_SENTINEL_QTY,
-                    reason="should not apply in REAL_LIVE", created_by="admin",
+                    session,
+                    "THYAO",
+                    "SELL",
+                    SELL_ALL_SENTINEL_QTY,
+                    reason="should not apply in REAL_LIVE",
+                    created_by="admin",
                 )
 
         asyncio.run(_seed())
@@ -321,7 +355,9 @@ class TestAdminForceOverrideRoutes:
             async with async_session_factory() as session:
                 session.add(BotPosition(symbol="THYAO", qty=100.0))
                 session.add(BotPosition(symbol="AKBNK", qty=50.0))
-                session.add(BotPosition(symbol="SISE", qty=0.0))  # no position — skipped
+                session.add(
+                    BotPosition(symbol="SISE", qty=0.0)
+                )  # no position — skipped
                 await session.commit()
 
         asyncio.run(_seed_positions())
@@ -367,8 +403,12 @@ class TestPendingOverrides:
         async def _seed():
             async with async_session_factory() as session:
                 await create_override(
-                    session, "THYAO", "SELL", SELL_ALL_SENTINEL_QTY,
-                    reason="fast scan test", created_by="tester",
+                    session,
+                    "THYAO",
+                    "SELL",
+                    SELL_ALL_SENTINEL_QTY,
+                    reason="fast scan test",
+                    created_by="tester",
                 )
 
         asyncio.run(_seed())
@@ -378,15 +418,17 @@ class TestPendingOverrides:
     def test_excludes_expired_override(self):
         async def _seed_expired():
             async with async_session_factory() as session:
-                session.add(SignalOverride(
-                    symbol="THYAO",
-                    action="SELL",
-                    confidence=100.0,
-                    qty=SELL_ALL_SENTINEL_QTY,
-                    reason="expired",
-                    created_by="tester",
-                    expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
-                ))
+                session.add(
+                    SignalOverride(
+                        symbol="THYAO",
+                        action="SELL",
+                        confidence=100.0,
+                        qty=SELL_ALL_SENTINEL_QTY,
+                        reason="expired",
+                        created_by="tester",
+                        expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+                    )
+                )
                 await session.commit()
 
         asyncio.run(_seed_expired())
@@ -397,8 +439,12 @@ class TestPendingOverrides:
         async def _seed_and_consume():
             async with async_session_factory() as session:
                 await create_override(
-                    session, "THYAO", "SELL", SELL_ALL_SENTINEL_QTY,
-                    reason="test", created_by="tester",
+                    session,
+                    "THYAO",
+                    "SELL",
+                    SELL_ALL_SENTINEL_QTY,
+                    reason="test",
+                    created_by="tester",
                 )
             async with async_session_factory() as session:
                 await consume_override(session, "THYAO")

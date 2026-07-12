@@ -94,26 +94,44 @@ async def notify_error(message: str, context: dict[str, Any] | None = None) -> b
 
 
 async def notify_order_event(
-    status: str, *, symbol: str, side: str, qty: float, price: float | None,
-    order_id: str | None = None, reason: str | None = None, request_id: str | None = None,
+    status: str,
+    *,
+    symbol: str,
+    side: str,
+    qty: float,
+    price: float | None,
+    order_id: str | None = None,
+    reason: str | None = None,
+    request_id: str | None = None,
 ) -> bool:
     level = "info" if status.upper() in {"FILLED", "SENT_PENDING"} else "warning"
     return await notification_service.send(
         level,
         f"Emir durumu: {status.upper()}",
-        {"Sembol": symbol, "Yön": side, "Miktar": qty, "Fiyat": price,
-         "Emir": order_id, "Neden": reason, "İstek": request_id},
+        {
+            "Sembol": symbol,
+            "Yön": side,
+            "Miktar": qty,
+            "Fiyat": price,
+            "Emir": order_id,
+            "Neden": reason,
+            "İstek": request_id,
+        },
         event_key=f"order:{status.upper()}:{request_id or symbol}:{order_id or ''}",
     )
 
 
-async def notify_gateway_event(event: str, context: dict[str, Any] | None = None) -> bool:
+async def notify_gateway_event(
+    event: str, context: dict[str, Any] | None = None
+) -> bool:
     return await notification_service.send(
         "warning", f"Gateway: {event}", context, event_key=f"gateway:{event}"
     )
 
 
-async def notify_risk_block(message: str, context: dict[str, Any] | None = None) -> bool:
+async def notify_risk_block(
+    message: str, context: dict[str, Any] | None = None
+) -> bool:
     return await notification_service.send(
         "warning", message, context, event_key=f"risk:{message}"
     )

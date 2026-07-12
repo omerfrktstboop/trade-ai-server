@@ -101,7 +101,9 @@ async def run_discovery_scan(
             continue  # elendi
         quality = calculate_quality(item, verdict.wall_ratio)
         if quality["quality"] < settings.watchlist_min_quality_score:
-            logger.debug("Discovery reject %s: quality %.1f", symbol, quality["quality"])
+            logger.debug(
+                "Discovery reject %s: quality %.1f", symbol, quality["quality"]
+            )
             continue
         accepted.append((symbol, source, item, verdict.reason, quality))
 
@@ -130,7 +132,9 @@ async def _screen(
     if volume < settings.discovery_min_volume_tl:
         logger.debug(
             "Discovery reject %s: thin volume %.0f < %.0f",
-            symbol, volume, settings.discovery_min_volume_tl,
+            symbol,
+            volume,
+            settings.discovery_min_volume_tl,
         )
         return None
 
@@ -181,7 +185,7 @@ def _ask_bid_ratio(depth: dict[str, Any]) -> float | None:
 
 
 async def _upsert_watchlist(
-    accepted: list[tuple[str, str, dict[str, Any], str, dict[str, Any]]]
+    accepted: list[tuple[str, str, dict[str, Any], str, dict[str, Any]]],
 ) -> None:
     try:
         async with async_session_factory() as session:
@@ -212,8 +216,22 @@ async def _upsert_watchlist(
                     row.volume = _to_float(item.get("volume"))
                     row.is_active = True
                     row.last_seen_at = datetime.now(UTC)
-                score = (await session.execute(select(WatchlistQualityScore).where(WatchlistQualityScore.symbol == symbol))).scalar_one_or_none()
-                values = {"quality_score": quality["quality"], "momentum_score": quality["momentum"], "volume_score": quality["volume"], "depth_score": quality["depth"], "news_score": quality["news"], "risk_score": quality["risk"], "reason_json": quality}
+                score = (
+                    await session.execute(
+                        select(WatchlistQualityScore).where(
+                            WatchlistQualityScore.symbol == symbol
+                        )
+                    )
+                ).scalar_one_or_none()
+                values = {
+                    "quality_score": quality["quality"],
+                    "momentum_score": quality["momentum"],
+                    "volume_score": quality["volume"],
+                    "depth_score": quality["depth"],
+                    "news_score": quality["news"],
+                    "risk_score": quality["risk"],
+                    "reason_json": quality,
+                }
                 if score is None:
                     session.add(WatchlistQualityScore(symbol=symbol, **values))
                 else:
@@ -247,12 +265,16 @@ async def list_active_watchlist_symbols() -> list[str]:
     try:
         async with async_session_factory() as session:
             rows = (
-                await session.execute(
-                    select(WatchlistSymbol.symbol).where(
-                        WatchlistSymbol.is_active.is_(True)
+                (
+                    await session.execute(
+                        select(WatchlistSymbol.symbol).where(
+                            WatchlistSymbol.is_active.is_(True)
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         return [str(s).upper() for s in rows]
     except Exception:
         logger.exception("Watchlist read failed")

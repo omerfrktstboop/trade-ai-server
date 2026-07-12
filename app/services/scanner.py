@@ -46,7 +46,11 @@ from app.services.matriks_gateway import (
     MatriksGatewayClient,
     gateway_client,
 )
-from app.services.notifications import notify_gateway_event, notify_order_event, notify_risk_block
+from app.services.notifications import (
+    notify_gateway_event,
+    notify_order_event,
+    notify_risk_block,
+)
 from app.services.manual_approvals import queue_response
 from app.services.order_sync import cancel_timed_out_orders
 from app.services.order_ledger import mark_send_result, mark_send_started, reserve_order
@@ -60,6 +64,7 @@ logger = logging.getLogger(__name__)
 def _configured_default_mode() -> SignalMode:
     """Translate the configured default mode for scanner-originated requests."""
     return SignalMode(settings.default_mode.value.upper())
+
 
 # Aynı uyarıyı her tick'te loglamamak için susturma süresi.
 _WARN_SUPPRESS = timedelta(minutes=5)
@@ -121,13 +126,19 @@ class SymbolScanner:
             "allowOrders": settings.scanner_allow_orders,
             "running": self.running,
             "tickSeconds": self._tick_seconds,
-            "lastTickAt": self._last_tick_at.isoformat() if self._last_tick_at else None,
+            "lastTickAt": self._last_tick_at.isoformat()
+            if self._last_tick_at
+            else None,
             "lastEvaluatedSymbols": list(self._last_evaluated_symbols),
             "lastDiscoveryRunAt": (
-                self._last_discovery_run.isoformat() if self._last_discovery_run else None
+                self._last_discovery_run.isoformat()
+                if self._last_discovery_run
+                else None
             ),
             "lastPortfolioScanAt": (
-                self._last_portfolio_scan.isoformat() if self._last_portfolio_scan else None
+                self._last_portfolio_scan.isoformat()
+                if self._last_portfolio_scan
+                else None
             ),
         }
 
@@ -173,7 +184,9 @@ class SymbolScanner:
             )
 
         if kill_switch:
-            self._warn_throttled("killswitch", "Kill switch enabled; skipping scan cycle")
+            self._warn_throttled(
+                "killswitch", "Kill switch enabled; skipping scan cycle"
+            )
             await notify_risk_block("Kill switch açık; scanner turu atlandı")
             return []
 
@@ -244,13 +257,16 @@ class SymbolScanner:
                 )
             except GatewayUnavailable:
                 self._warn_throttled(
-                    "gateway", "Gateway became unavailable mid-cycle; stopping this tick"
+                    "gateway",
+                    "Gateway became unavailable mid-cycle; stopping this tick",
                 )
                 await notify_gateway_event("tur sırasında ulaşılamıyor")
                 gateway_down_mid_cycle = True
                 break
             except GatewayError as exc:
-                logger.warning("Snapshot rejected by gateway symbol=%s error=%s", symbol, exc)
+                logger.warning(
+                    "Snapshot rejected by gateway symbol=%s error=%s", symbol, exc
+                )
                 self._last_scan_by_symbol[symbol] = now
                 continue
             except Exception:
@@ -333,10 +349,14 @@ class SymbolScanner:
         try:
             async with async_session_factory() as session:
                 rows = (
-                    await session.execute(
-                        select(BotPosition).where(BotPosition.qty > 0)
+                    (
+                        await session.execute(
+                            select(BotPosition).where(BotPosition.qty > 0)
+                        )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
         except Exception:
             logger.exception("Portfolio scan: bot_positions read failed")
             return
@@ -435,22 +455,33 @@ class SymbolScanner:
         try:
             async with async_session_factory() as session:
                 if await is_kill_switch_enabled(session):
-                    logger.warning("Order dispatch blocked by kill switch requestId=%s", response.request_id)
+                    logger.warning(
+                        "Order dispatch blocked by kill switch requestId=%s",
+                        response.request_id,
+                    )
                     return
                 preflight_config = await build_runtime_risk_config(session)
             fresh_snapshot = await self._gateway.get_snapshot(response.symbol)
             fresh_positions = await self._gateway.get_positions()
             fresh_health = await self._gateway.health()
             preflight_reason = validate_order_preflight(
-                payload=fresh_snapshot.get("payload") or {}, positions=fresh_positions,
-                health=fresh_health, side=response.action.value, qty=response.qty,
-                limit_price=response.price, decision_created_utc=result.decision_created_utc,
+                payload=fresh_snapshot.get("payload") or {},
+                positions=fresh_positions,
+                health=fresh_health,
+                side=response.action.value,
+                qty=response.qty,
+                limit_price=response.price,
+                decision_created_utc=result.decision_created_utc,
                 max_spread_pct=preflight_config.max_spread_pct_for_buy,
             )
         except Exception as exc:
             preflight_reason = "order-time snapshot unavailable: " + str(exc)
         if preflight_reason:
-            logger.warning("Order preflight blocked requestId=%s reason=%s", response.request_id, preflight_reason)
+            logger.warning(
+                "Order preflight blocked requestId=%s reason=%s",
+                response.request_id,
+                preflight_reason,
+            )
             return
 
         cooldown_key = (response.symbol.strip().upper(), response.action)
@@ -465,7 +496,13 @@ class SymbolScanner:
                             OrderLog.symbol == cooldown_key[0],
                             OrderLog.action == response.action.value,
                             OrderLog.status.in_(
-                                ("SENT_PENDING", "NEW", "A", "PARTIALLY_FILLED", "FILLED")
+                                (
+                                    "SENT_PENDING",
+                                    "NEW",
+                                    "A",
+                                    "PARTIALLY_FILLED",
+                                    "FILLED",
+                                )
                             ),
                             OrderLog.created_at >= now - _ORDER_COOLDOWN,
                         )
@@ -493,20 +530,32 @@ class SymbolScanner:
                 response.request_id,
             )
             await notify_order_event(
-                "COOLDOWN", symbol=response.symbol, side=response.action.value,
-                qty=response.qty, price=response.price, request_id=response.request_id,
+                "COOLDOWN",
+                symbol=response.symbol,
+                side=response.action.value,
+                qty=response.qty,
+                price=response.price,
+                request_id=response.request_id,
                 reason="Emir cooldown süresinde",
             )
             return
 
         async with async_session_factory() as session:
             ledger_row, may_send, ledger_rejection = await reserve_order(
-                session, request_id=response.request_id, symbol=response.symbol,
-                side=response.action.value, qty=response.qty, limit_price=response.price,
+                session,
+                request_id=response.request_id,
+                symbol=response.symbol,
+                side=response.action.value,
+                qty=response.qty,
+                limit_price=response.price,
                 mode=result.mode.value,
             )
             if not may_send:
-                logger.warning("Order replay blocked requestId=%s reason=%s", response.request_id, ledger_rejection or ledger_row.status)
+                logger.warning(
+                    "Order replay blocked requestId=%s reason=%s",
+                    response.request_id,
+                    ledger_rejection or ledger_row.status,
+                )
                 return
             await mark_send_started(session, ledger_row)
 
@@ -534,8 +583,12 @@ class SymbolScanner:
                 reason,
             )
             await notify_order_event(
-                status, symbol=response.symbol, side=response.action.value,
-                qty=response.qty, price=response.price, request_id=response.request_id,
+                status,
+                symbol=response.symbol,
+                side=response.action.value,
+                qty=response.qty,
+                price=response.price,
+                request_id=response.request_id,
                 reason=reason,
             )
         except (GatewayUnavailable, GatewayError) as exc:
@@ -548,13 +601,21 @@ class SymbolScanner:
                 exc,
             )
             await notify_order_event(
-                status, symbol=response.symbol, side=response.action.value,
-                qty=response.qty, price=response.price, request_id=response.request_id,
+                status,
+                symbol=response.symbol,
+                side=response.action.value,
+                qty=response.qty,
+                price=response.price,
+                request_id=response.request_id,
                 reason=reason,
             )
 
         async with async_session_factory() as session:
-            row = (await session.execute(select(OrderLog).where(OrderLog.request_id == response.request_id))).scalar_one()
+            row = (
+                await session.execute(
+                    select(OrderLog).where(OrderLog.request_id == response.request_id)
+                )
+            ).scalar_one()
             await mark_send_result(
                 session,
                 row,
@@ -575,9 +636,13 @@ class SymbolScanner:
         """
         try:
             async with async_session_factory() as session:
-                entry = (await session.execute(
-                    select(OrderLog).where(OrderLog.request_id == response.request_id)
-                )).scalar_one_or_none()
+                entry = (
+                    await session.execute(
+                        select(OrderLog).where(
+                            OrderLog.request_id == response.request_id
+                        )
+                    )
+                ).scalar_one_or_none()
                 if entry is None:
                     entry = OrderLog(
                         request_id=response.request_id,

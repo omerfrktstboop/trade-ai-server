@@ -449,7 +449,9 @@ class TestConfidenceThreshold:
         reason text as if a real 100%-confidence threshold were configured."""
         engine = RiskEngine(_cfg(min_confidence_for_buy=75, min_confidence_for_sell=70))
         req = _make_request(mode=SignalMode.LIVE)
-        dec = RiskDecision(action=SignalAction.WAIT, confidence=20.0, reason="No clear signal")
+        dec = RiskDecision(
+            action=SignalAction.WAIT, confidence=20.0, reason="No clear signal"
+        )
         resp = engine.evaluate(req, dec)
         assert resp.action == SignalAction.WAIT
         assert resp.allow_order is False

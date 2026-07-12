@@ -30,7 +30,9 @@ class CountingGateway:
     def __init__(self):
         self.calls = 0
 
-    async def get_institutions(self, symbol, limit=10, period="Daily", include_reported_orders=True):
+    async def get_institutions(
+        self, symbol, limit=10, period="Daily", include_reported_orders=True
+    ):
         self.calls += 1
         return _resp(symbol, [{"name": "Yatırım Fonları", "value": 100}], [])
 
@@ -244,7 +246,11 @@ class TestBrokerFlowInPayload:
                 "netInstitutionalFlow": 1_250_000.0,
                 "netSmartLot": 600_000.0,
                 "topBrokers": [
-                    {"brokerName": "Yatırım Fonları", "netFlow": 600_000.0, "side": "BUY"},
+                    {
+                        "brokerName": "Yatırım Fonları",
+                        "netFlow": 600_000.0,
+                        "side": "BUY",
+                    },
                 ],
                 "comment": "",
             }

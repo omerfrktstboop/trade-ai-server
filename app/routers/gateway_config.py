@@ -31,7 +31,9 @@ _LIVE_REAL_MODES = {"REAL_LIVE"}
 _LIVE_DEMO_MODES = {"DEMO_LIVE"}
 
 
-def _effective_mode(bot_mode: str, profile, *, real_live_mode_allowed: bool, real_live_armed: bool) -> str:
+def _effective_mode(
+    bot_mode: str, profile, *, real_live_mode_allowed: bool, real_live_armed: bool
+) -> str:
     """Downgrade the configured mode to PAPER when the profile disallows it."""
     mode = (bot_mode or "PAPER").strip().upper()
     # LIVE is deliberately never an alias for REAL_LIVE.  Keeping an
@@ -56,20 +58,30 @@ async def gateway_runtime_config() -> dict:
         portfolio = (await session.execute(select(BotPosition))).scalars().all()
         locked = (await session.execute(select(LockedPosition))).scalars().all()
         watchlist = (
-            await session.execute(
-                select(WatchlistSymbol.symbol).where(
-                    WatchlistSymbol.is_active.is_(True)
+            (
+                await session.execute(
+                    select(WatchlistSymbol.symbol).where(
+                        WatchlistSymbol.is_active.is_(True)
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     symbols = {
         value.strip().upper()
         for value in values["allowedSymbols"].split(",")
         if value.strip()
     }
-    buy_symbols = [s.strip().upper() for s in values["buyAllowedSymbols"].split(",") if s.strip()]
-    sell_symbols = [s.strip().upper() for s in values["sellExitAllowedSymbols"].split(",") if s.strip()]
+    buy_symbols = [
+        s.strip().upper() for s in values["buyAllowedSymbols"].split(",") if s.strip()
+    ]
+    sell_symbols = [
+        s.strip().upper()
+        for s in values["sellExitAllowedSymbols"].split(",")
+        if s.strip()
+    ]
     symbols.update(row.symbol.strip().upper() for row in portfolio if row.qty > 0)
     # Data-only abonelikler: emir yolu RiskEngine'in allowedSymbols
     # kontrolünden geçtiği için bunlara emir gidemez; gateway yalnızca
@@ -90,7 +102,9 @@ async def gateway_runtime_config() -> dict:
         if not math.isfinite(qty) or qty < 0:
             raise ValueError(f"Invalid locked quantity for {symbol}")
         locked_qty[symbol] = locked_qty.get(symbol, 0.0) + qty
-    bot_owned_qty = {row.symbol.strip().upper(): float(row.qty) for row in portfolio if row.qty > 0}
+    bot_owned_qty = {
+        row.symbol.strip().upper(): float(row.qty) for row in portfolio if row.qty > 0
+    }
 
     config = {
         "ok": True,
@@ -98,7 +112,8 @@ async def gateway_runtime_config() -> dict:
         "subscriptionSymbols": sorted(symbols),
         "buyAllowedSymbols": sorted(set(buy_symbols)),
         "sellExitAllowedSymbols": sorted(set(sell_symbols)),
-        "tradingKillSwitchActive": values["tradingKillSwitchActive"] == "true" or values["killSwitchEnabled"] == "true",
+        "tradingKillSwitchActive": values["tradingKillSwitchActive"] == "true"
+        or values["killSwitchEnabled"] == "true",
         "forceSafeMode": values["forceSafeMode"] == "true",
         "lockedLongTermQty": locked_qty,
         "botOwnedQty": bot_owned_qty,

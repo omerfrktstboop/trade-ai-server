@@ -44,7 +44,11 @@ def test_valid_deepseek_postgresql_production_settings_pass():
 def test_production_rejects_shared_scoped_tokens():
     shared = "shared-7F!k2P@q9Z#m4N$x8C&v1B*w6D+s3L"
     with pytest.raises(ValidationError, match="must be distinct"):
-        production_settings(evaluation_api_token=shared, gateway_api_token=shared, admin_api_token=shared)
+        production_settings(
+            evaluation_api_token=shared,
+            gateway_api_token=shared,
+            admin_api_token=shared,
+        )
 
 
 def test_production_gateway_must_be_loopback():

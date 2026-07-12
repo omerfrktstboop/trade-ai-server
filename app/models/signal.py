@@ -24,7 +24,7 @@ class AgentAction(str, Enum):
     """.. deprecated:: 1.0
        Use :class:`AgenticAction` instead — canonical for v2 agentic protocol.
        Retained for backward compatibility with :class:`AgentSignalResponse`.
-    
+
     Extended action for agentic multi-turn evaluation."""
 
     BUY = "BUY"
@@ -36,7 +36,7 @@ class AgentAction(str, Enum):
 class DataRequestType(str, Enum):
     """.. deprecated:: 1.0
        Use :class:`AgenticDataType` instead - canonical for v2 agentic protocol.
-    
+
     Types of additional data the agent can request from the client."""
 
     INTRADAY_OHLC = "INTRADAY_OHLC"
@@ -159,23 +159,47 @@ class SignalRequest(BaseModel):
     depth_reliable: Optional[bool] = Field(None, alias="depthReliable")
     depth_levels_used: Optional[int] = Field(None, alias="depthLevelsUsed")
     spread_pct: Optional[float] = Field(None, alias="spreadPct")
-    depth_bid_ask_ratio_top5: Optional[float] = Field(None, alias="depthBidAskRatioTop5")
-    depth_bid_ask_ratio_top10: Optional[float] = Field(None, alias="depthBidAskRatioTop10")
-    depth_bid_ask_ratio_top25: Optional[float] = Field(None, alias="depthBidAskRatioTop25")
+    depth_bid_ask_ratio_top5: Optional[float] = Field(
+        None, alias="depthBidAskRatioTop5"
+    )
+    depth_bid_ask_ratio_top10: Optional[float] = Field(
+        None, alias="depthBidAskRatioTop10"
+    )
+    depth_bid_ask_ratio_top25: Optional[float] = Field(
+        None, alias="depthBidAskRatioTop25"
+    )
     depth_imbalance_top5: Optional[float] = Field(None, alias="depthImbalanceTop5")
     depth_imbalance_top10: Optional[float] = Field(None, alias="depthImbalanceTop10")
     depth_imbalance_top25: Optional[float] = Field(None, alias="depthImbalanceTop25")
-    depth_bid_concentration_top3_pct: Optional[float] = Field(None, alias="depthBidConcentrationTop3Pct")
-    depth_ask_concentration_top3_pct: Optional[float] = Field(None, alias="depthAskConcentrationTop3Pct")
-    depth_largest_bid_wall_distance_pct: Optional[float] = Field(None, alias="depthLargestBidWallDistancePct")
-    depth_largest_ask_wall_distance_pct: Optional[float] = Field(None, alias="depthLargestAskWallDistancePct")
-    depth_nearest_bid_wall_distance_pct: Optional[float] = Field(None, alias="depthNearestBidWallDistancePct")
-    depth_nearest_ask_wall_distance_pct: Optional[float] = Field(None, alias="depthNearestAskWallDistancePct")
-    depth_buy_pressure_score: Optional[float] = Field(None, alias="depthBuyPressureScore")
-    depth_sell_pressure_score: Optional[float] = Field(None, alias="depthSellPressureScore")
+    depth_bid_concentration_top3_pct: Optional[float] = Field(
+        None, alias="depthBidConcentrationTop3Pct"
+    )
+    depth_ask_concentration_top3_pct: Optional[float] = Field(
+        None, alias="depthAskConcentrationTop3Pct"
+    )
+    depth_largest_bid_wall_distance_pct: Optional[float] = Field(
+        None, alias="depthLargestBidWallDistancePct"
+    )
+    depth_largest_ask_wall_distance_pct: Optional[float] = Field(
+        None, alias="depthLargestAskWallDistancePct"
+    )
+    depth_nearest_bid_wall_distance_pct: Optional[float] = Field(
+        None, alias="depthNearestBidWallDistancePct"
+    )
+    depth_nearest_ask_wall_distance_pct: Optional[float] = Field(
+        None, alias="depthNearestAskWallDistancePct"
+    )
+    depth_buy_pressure_score: Optional[float] = Field(
+        None, alias="depthBuyPressureScore"
+    )
+    depth_sell_pressure_score: Optional[float] = Field(
+        None, alias="depthSellPressureScore"
+    )
     depth_order_book_signal: Optional[str] = Field(None, alias="depthOrderBookSignal")
     depth_summary: Optional[str] = Field(None, alias="depthSummary")
-    depth_wall_concentration_risk: Optional[bool] = Field(None, alias="depthWallConcentrationRisk")
+    depth_wall_concentration_risk: Optional[bool] = Field(
+        None, alias="depthWallConcentrationRisk"
+    )
     quote_age_seconds: Optional[float] = Field(None, alias="quoteAgeSeconds")
     ohlcv_age_seconds: Optional[float] = Field(None, alias="ohlcvAgeSeconds")
     depth_age_seconds: Optional[float] = Field(None, alias="depthAgeSeconds")
@@ -296,7 +320,9 @@ class AgenticSignalRequest(BaseModel):
     session_id: Optional[str] = Field(None, alias="sessionId")
     symbol: str
     market_data: MarketDataPayload = Field(..., alias="marketData")
-    context_history: list[ContextStep] = Field(default_factory=list, alias="contextHistory")
+    context_history: list[ContextStep] = Field(
+        default_factory=list, alias="contextHistory"
+    )
     mode: SignalMode = SignalMode.PAPER
 
     model_config = ConfigDict(populate_by_name=True)
@@ -313,7 +339,9 @@ class AgenticSignalResponse(BaseModel):
     requires_confirmation: bool = Field(..., alias="requiresConfirmation")
     reason: str
     target_symbol: Optional[str] = Field(None, alias="targetSymbol")
-    required_data_type: Optional[AgenticDataType] = Field(None, alias="requiredDataType")
+    required_data_type: Optional[AgenticDataType] = Field(
+        None, alias="requiredDataType"
+    )
     confidence_score: float = Field(..., alias="confidenceScore")
     risk_score: float = Field(..., alias="riskScore")
     qty: FiniteFloat

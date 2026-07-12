@@ -7,7 +7,13 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.db.base import Base
-from app.models.db import AiDecision, BotPosition, ConfigAuditLog, LockedPosition, MarketSnapshot
+from app.models.db import (
+    AiDecision,
+    BotPosition,
+    ConfigAuditLog,
+    LockedPosition,
+    MarketSnapshot,
+)
 from app.models.db import NewsCache, OrderLog, RiskDecision
 from app.models.db import SystemConfig
 

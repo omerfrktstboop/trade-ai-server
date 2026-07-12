@@ -37,20 +37,34 @@ async def reconcile_orders(gateway: MatriksGatewayClient | Any = gateway_client)
 
     states = [row for row in payload.get("orders") or [] if isinstance(row, dict)]
     by_order_id = {str(row.get("orderId")): row for row in states if row.get("orderId")}
-    by_request_id = {str(row.get("requestId")): row for row in states if row.get("requestId")}
+    by_request_id = {
+        str(row.get("requestId")): row for row in states if row.get("requestId")
+    }
     updated = 0
     try:
         async with async_session_factory() as session:
-            rows = list((await session.execute(select(OrderLog).where(OrderLog.status.in_(PENDING_STATUSES)))).scalars().all())
+            rows = list(
+                (
+                    await session.execute(
+                        select(OrderLog).where(OrderLog.status.in_(PENDING_STATUSES))
+                    )
+                )
+                .scalars()
+                .all()
+            )
             for local in rows:
-                state = by_order_id.get(local.order_id or "") or by_request_id.get(local.request_id)
+                state = by_order_id.get(local.order_id or "") or by_request_id.get(
+                    local.request_id
+                )
                 if state is None:
                     candidates = [
-                        item for item in states
+                        item
+                        for item in states
                         if str(item.get("symbol") or "").upper() == local.symbol.upper()
                         and str(item.get("side") or "").upper() == local.action.upper()
                         and abs(float(item.get("qty") or 0) - float(local.qty)) < 1e-9
-                        and abs(float(item.get("price") or 0) - float(local.price or 0)) < 1e-9
+                        and abs(float(item.get("price") or 0) - float(local.price or 0))
+                        < 1e-9
                     ]
                     if len(candidates) == 1:
                         state = candidates[0]
@@ -84,17 +98,29 @@ async def cancel_timed_out_orders(
     )
     try:
         async with async_session_factory() as session:
-            rows = list((await session.execute(select(OrderLog).where(
-                OrderLog.status.in_(("SENT_PENDING", "NEW", "PARTIALLY_FILLED")),
-                OrderLog.created_at <= cutoff,
-                OrderLog.order_id.is_not(None),
-            ))).scalars().all())
+            rows = list(
+                (
+                    await session.execute(
+                        select(OrderLog).where(
+                            OrderLog.status.in_(
+                                ("SENT_PENDING", "NEW", "PARTIALLY_FILLED")
+                            ),
+                            OrderLog.created_at <= cutoff,
+                            OrderLog.order_id.is_not(None),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
             canceled = 0
             for row in rows:
                 try:
                     outcome = await gateway.cancel_order(row.order_id)
                 except (GatewayUnavailable, GatewayError) as exc:
-                    logger.warning("Order cancel failed orderId=%s: %s", row.order_id, exc)
+                    logger.warning(
+                        "Order cancel failed orderId=%s: %s", row.order_id, exc
+                    )
                     continue
                 except Exception:
                     logger.exception("Order cancel failed orderId=%s", row.order_id)

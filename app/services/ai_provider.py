@@ -132,7 +132,14 @@ def _normalize_decision(raw: dict[str, Any]) -> dict[str, Any]:
     # entry_range — pass through untouched (nested {min,max}/{entryMin,entryMax}
     # or flat entryMin/entryMax, either casing); _parse_entry_range() downstream
     # already understands every shape/casing combination.
-    for field in ("entry_range", "entryRange", "entry_min", "entryMin", "entry_max", "entryMax"):
+    for field in (
+        "entry_range",
+        "entryRange",
+        "entry_min",
+        "entryMin",
+        "entry_max",
+        "entryMax",
+    ):
         if field in raw:
             result[field] = raw[field]
 
@@ -345,7 +352,6 @@ class DeepSeekProvider(AiProvider):
         )
         return decision
 
-
     async def chat(
         self, system_prompt: str, user_content: str, *, max_tokens: int = 800
     ) -> str:
@@ -391,7 +397,9 @@ class DeepSeekProvider(AiProvider):
                         return ""
                     data = await resp.json()
         except Exception as exc:  # noqa: BLE001 — any failure degrades to "" here
-            logger.error("DeepSeek chat failed after %.2fs: %s", time.monotonic() - t0, exc)
+            logger.error(
+                "DeepSeek chat failed after %.2fs: %s", time.monotonic() - t0, exc
+            )
             return ""
 
         choices = data.get("choices", [])

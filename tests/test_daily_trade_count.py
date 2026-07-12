@@ -201,8 +201,6 @@ class TestSignalDailyTradeCountResolution:
             session.add(_risk_decision("risk-1", "THYAO", now))
             await session.commit()
 
-        resolved = await _with_resolved_daily_trade_count(
-            _request(dailyTradeCount=0)
-        )
+        resolved = await _with_resolved_daily_trade_count(_request(dailyTradeCount=0))
 
         assert resolved.daily_trade_count == 0

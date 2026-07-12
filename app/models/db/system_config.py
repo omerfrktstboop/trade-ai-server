@@ -14,7 +14,9 @@ class SystemConfig(Base):
     __tablename__ = "system_configs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    key: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    key: Mapped[str] = mapped_column(
+        String(64), unique=True, index=True, nullable=False
+    )
     value: Mapped[str] = mapped_column(Text, nullable=False)
     value_type: Mapped[str] = mapped_column(String(32), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

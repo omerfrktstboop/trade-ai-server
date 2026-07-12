@@ -43,7 +43,9 @@ def isolated_self_check(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_missing_gateway_token_warns_and_manual_gate_is_visible(isolated_self_check, monkeypatch):
+async def test_missing_gateway_token_warns_and_manual_gate_is_visible(
+    isolated_self_check, monkeypatch
+):
     async def health():
         return {"positionsLoaded": True}
 
@@ -56,7 +58,9 @@ async def test_missing_gateway_token_warns_and_manual_gate_is_visible(isolated_s
 
 
 @pytest.mark.asyncio
-async def test_gateway_unavailable_does_not_prevent_response(isolated_self_check, monkeypatch):
+async def test_gateway_unavailable_does_not_prevent_response(
+    isolated_self_check, monkeypatch
+):
     async def unavailable():
         raise GatewayUnavailable("gateway offline")
 
@@ -69,7 +73,9 @@ async def test_gateway_unavailable_does_not_prevent_response(isolated_self_check
 
 
 @pytest.mark.asyncio
-async def test_production_missing_token_and_unsupported_provider_fail(isolated_self_check, monkeypatch):
+async def test_production_missing_token_and_unsupported_provider_fail(
+    isolated_self_check, monkeypatch
+):
     async def health():
         return {"positionsLoaded": True}
 

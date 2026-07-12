@@ -1,4 +1,5 @@
 """Matriks KAP cache normalization and AI context (never sends orders)."""
+
 from __future__ import annotations
 
 import logging
@@ -11,7 +12,11 @@ from sqlalchemy import select
 
 from app.db.session import async_session_factory
 from app.models.db import KapEvent
-from app.services.matriks_gateway import GatewayError, GatewayUnavailable, gateway_client
+from app.services.matriks_gateway import (
+    GatewayError,
+    GatewayUnavailable,
+    gateway_client,
+)
 from app.services.decision_gate import decision_cache
 
 logger = logging.getLogger(__name__)
@@ -30,10 +35,29 @@ def invalidate_kap_cache(symbol: str | None = None) -> None:
         _kap_gateway_cache.clear()
         decision_cache.clear()
 
+
 _RISK_KEYWORDS = {
-    "BLOCKING": ("tedbir", "brüt takas", "brut takas", "kredili işlem yasağı", "açığa satış yasağı", "aciga satis yasagi", "faaliyet durdurma", "konkordato", "iflas", "haciz"),
+    "BLOCKING": (
+        "tedbir",
+        "brüt takas",
+        "brut takas",
+        "kredili işlem yasağı",
+        "açığa satış yasağı",
+        "aciga satis yasagi",
+        "faaliyet durdurma",
+        "konkordato",
+        "iflas",
+        "haciz",
+    ),
     "HIGH": ("spk inceleme", "dava", "ceza", "bilanço zararı", "bilanco zarari"),
-    "MEDIUM": ("bedelli sermaye artırımı", "bedelli sermaye artirimi", "pay satışı", "pay satisi", "ortak satışı", "ortak satisi"),
+    "MEDIUM": (
+        "bedelli sermaye artırımı",
+        "bedelli sermaye artirimi",
+        "pay satışı",
+        "pay satisi",
+        "ortak satışı",
+        "ortak satisi",
+    ),
 }
 
 
@@ -57,12 +81,18 @@ def _published(value: Any) -> datetime | None:
         return None
 
 
-def _is_active_risk(published_at: datetime | None, *, now: datetime, lookback_hours: int) -> bool:
+def _is_active_risk(
+    published_at: datetime | None, *, now: datetime, lookback_hours: int
+) -> bool:
     """Unknown dates remain auditable but cannot create an unbounded live lock."""
     if published_at is None:
         return False
-    normalized = published_at if published_at.tzinfo else published_at.replace(tzinfo=UTC)
-    return normalized.astimezone(UTC) >= now.astimezone(UTC) - timedelta(hours=lookback_hours)
+    normalized = (
+        published_at if published_at.tzinfo else published_at.replace(tzinfo=UTC)
+    )
+    return normalized.astimezone(UTC) >= now.astimezone(UTC) - timedelta(
+        hours=lookback_hours
+    )
 
 
 def _utc(value: datetime | None) -> datetime | None:
@@ -86,9 +116,12 @@ def classify_kap(title: str, content: str | None) -> tuple[str, str]:
             if "dava" in text or "ceza" in text:
                 return "LEGAL_CASE", level
             return "MATERIAL_DISCLOSURE", level
-    if "temettü" in text or "temettu" in text or "dividend" in text: return "DIVIDEND", "LOW"
-    if "finansal" in text or "bilanço" in text or "bilanco" in text: return "FINANCIAL_STATEMENT", "LOW"
-    if "ilişkili taraf" in text or "iliskili taraf" in text: return "RELATED_PARTY", "LOW"
+    if "temettü" in text or "temettu" in text or "dividend" in text:
+        return "DIVIDEND", "LOW"
+    if "finansal" in text or "bilanço" in text or "bilanco" in text:
+        return "FINANCIAL_STATEMENT", "LOW"
+    if "ilişkili taraf" in text or "iliskili taraf" in text:
+        return "RELATED_PARTY", "LOW"
     return "UNKNOWN", "LOW"
 
 
@@ -118,18 +151,47 @@ async def sync_kap_events(symbol: str, limit: int = 50) -> list[KapEvent]:
     try:
         async with async_session_factory() as session:
             for raw in entries:
-                if not isinstance(raw, dict): continue
+                if not isinstance(raw, dict):
+                    continue
                 title = str(_value(raw, "title", "header", "headline") or "").strip()
-                if not title: continue
+                if not title:
+                    continue
                 content = _value(raw, "content", "body", "description", "text")
                 content = str(content) if content is not None else None
-                published_at = _published(_value(raw, "publishedAt", "published_at", "timestamp", "date", "datetime", "DateTime"))
-                existing = select(KapEvent).where(KapEvent.symbol == symbol, KapEvent.title == title)
-                existing = existing.where(KapEvent.published_at.is_(None) if published_at is None else KapEvent.published_at == published_at)
-                if (await session.execute(existing)).scalar_one_or_none() is not None: continue
+                published_at = _published(
+                    _value(
+                        raw,
+                        "publishedAt",
+                        "published_at",
+                        "timestamp",
+                        "date",
+                        "datetime",
+                        "DateTime",
+                    )
+                )
+                existing = select(KapEvent).where(
+                    KapEvent.symbol == symbol, KapEvent.title == title
+                )
+                existing = existing.where(
+                    KapEvent.published_at.is_(None)
+                    if published_at is None
+                    else KapEvent.published_at == published_at
+                )
+                if (await session.execute(existing)).scalar_one_or_none() is not None:
+                    continue
                 event_type, risk_level = classify_kap(title, content)
-                row = KapEvent(symbol=symbol, title=title, content=content, event_type=event_type, risk_level=risk_level, published_at=published_at, source=str(payload.get("source") or "MATRIKS_NEWS_FALLBACK"), raw_json=raw)
-                session.add(row); created.append(row)
+                row = KapEvent(
+                    symbol=symbol,
+                    title=title,
+                    content=content,
+                    event_type=event_type,
+                    risk_level=risk_level,
+                    published_at=published_at,
+                    source=str(payload.get("source") or "MATRIKS_NEWS_FALLBACK"),
+                    raw_json=raw,
+                )
+                session.add(row)
+                created.append(row)
             await session.commit()
             if created:
                 decision_cache.clear(symbol)
@@ -143,29 +205,99 @@ async def get_kap_context(symbols: list[str]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for symbol_raw in symbols:
         symbol = symbol_raw.strip().upper()
-        if not symbol: continue
+        if not symbol:
+            continue
         await sync_kap_events(symbol)
         try:
             async with async_session_factory() as session:
                 now = datetime.now(UTC)
                 cutoff = now - timedelta(hours=24)
-                rows = list((await session.execute(select(KapEvent).where(KapEvent.symbol == symbol).order_by(KapEvent.published_at.desc().nullslast()).limit(10))).scalars().all())
-                risk_rows = list((await session.execute(select(KapEvent).where(
-                    KapEvent.symbol == symbol,
-                    KapEvent.risk_level.in_(("HIGH", "BLOCKING")),
-                    KapEvent.published_at.is_not(None),
-                    KapEvent.published_at >= cutoff,
-                ).order_by(KapEvent.published_at.desc()))).scalars().all())
-                unknown_risk_rows = list((await session.execute(select(KapEvent).where(
-                    KapEvent.symbol == symbol,
-                    KapEvent.risk_level.in_(("HIGH", "BLOCKING")),
-                    KapEvent.published_at.is_(None),
-                ).order_by(KapEvent.cached_at.desc()).limit(5))).scalars().all())
+                rows = list(
+                    (
+                        await session.execute(
+                            select(KapEvent)
+                            .where(KapEvent.symbol == symbol)
+                            .order_by(KapEvent.published_at.desc().nullslast())
+                            .limit(10)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                risk_rows = list(
+                    (
+                        await session.execute(
+                            select(KapEvent)
+                            .where(
+                                KapEvent.symbol == symbol,
+                                KapEvent.risk_level.in_(("HIGH", "BLOCKING")),
+                                KapEvent.published_at.is_not(None),
+                                KapEvent.published_at >= cutoff,
+                            )
+                            .order_by(KapEvent.published_at.desc())
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                unknown_risk_rows = list(
+                    (
+                        await session.execute(
+                            select(KapEvent)
+                            .where(
+                                KapEvent.symbol == symbol,
+                                KapEvent.risk_level.in_(("HIGH", "BLOCKING")),
+                                KapEvent.published_at.is_(None),
+                            )
+                            .order_by(KapEvent.cached_at.desc())
+                            .limit(5)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
         except Exception:
-            result[symbol] = {"latestEvents": [], "riskEvents24h": [], "hasBlockingRisk": False, "summary": "KAP unavailable"}; continue
-        serialize = lambda row: {"title": row.title, "eventType": row.event_type, "riskLevel": row.risk_level, "publishedAt": row.published_at.isoformat() if row.published_at else None, "dateUnknown": row.published_at is None, "source": row.source}
-        important_rows = sorted(rows, key=lambda row: (row.risk_level in {"BLOCKING", "HIGH"}, _utc(row.published_at) or datetime.min.replace(tzinfo=UTC)), reverse=True)[:5]
-        newest = max((_utc(row.published_at) for row in rows if row.published_at), default=None)
-        kap_age = max(0.0, (datetime.now(UTC) - newest).total_seconds()) if newest else None
-        result[symbol] = {"latestEvents": [serialize(row) for row in important_rows], "riskEvents24h": [serialize(row) for row in risk_rows], "unknownDateRiskWarnings": [serialize(row) for row in unknown_risk_rows], "hasBlockingRisk": any(row.risk_level == "BLOCKING" for row in risk_rows), "hasUnknownDateRisk": bool(unknown_risk_rows), "kapAgeSeconds": kap_age, "summary": f"{len(rows)} recent KAP events, {len(risk_rows)} active risks, {len(unknown_risk_rows)} unknown-date warnings"}
+            result[symbol] = {
+                "latestEvents": [],
+                "riskEvents24h": [],
+                "hasBlockingRisk": False,
+                "summary": "KAP unavailable",
+            }
+            continue
+
+        def serialize(row):
+            return {
+                "title": row.title,
+                "eventType": row.event_type,
+                "riskLevel": row.risk_level,
+                "publishedAt": (
+                    row.published_at.isoformat() if row.published_at else None
+                ),
+                "dateUnknown": row.published_at is None,
+                "source": row.source,
+            }
+
+        important_rows = sorted(
+            rows,
+            key=lambda row: (
+                row.risk_level in {"BLOCKING", "HIGH"},
+                _utc(row.published_at) or datetime.min.replace(tzinfo=UTC),
+            ),
+            reverse=True,
+        )[:5]
+        newest = max(
+            (_utc(row.published_at) for row in rows if row.published_at), default=None
+        )
+        kap_age = (
+            max(0.0, (datetime.now(UTC) - newest).total_seconds()) if newest else None
+        )
+        result[symbol] = {
+            "latestEvents": [serialize(row) for row in important_rows],
+            "riskEvents24h": [serialize(row) for row in risk_rows],
+            "unknownDateRiskWarnings": [serialize(row) for row in unknown_risk_rows],
+            "hasBlockingRisk": any(row.risk_level == "BLOCKING" for row in risk_rows),
+            "hasUnknownDateRisk": bool(unknown_risk_rows),
+            "kapAgeSeconds": kap_age,
+            "summary": f"{len(rows)} recent KAP events, {len(risk_rows)} active risks, {len(unknown_risk_rows)} unknown-date warnings",
+        }
     return result

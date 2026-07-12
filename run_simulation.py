@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.config import settings
@@ -48,25 +47,56 @@ async def seed_dummy_scenario(symbol: str = "THYAO") -> tuple[str, dict]:
         "mode": "PAPER",
     }
     async with async_session_factory() as session:
-        session.add(MarketSnapshot(
-            request_id=request_id, symbol=symbol.upper(), timeframe="1h",
-            open=106.0, high=107.0, low=98.0, close=100.0,
-            volume=25_000_000, rsi=15.0, ema20=104.0, ema50=108.0,
-            macd=-2.2, macd_signal=-1.4, mode="PAPER",
-        ))
-        session.add(AiDecision(
-            request_id=request_id, symbol=symbol.upper(), provider="offline-dummy",
-            model="deterministic-simulation", raw_request=raw_request,
-            raw_response=ai_response, action="BUY", confidence=88,
-            qty=10, reason=ai_response["reason"],
-        ))
-        session.add(RiskDecision(
-            request_id=request_id, symbol=symbol.upper(), action="BUY",
-            confidence=88, risk_score=22, allow_order=False,
-            reason="Offline seed before replay", entry_min=99,
-            entry_max=100, stop_loss=95, target_price=112, qty=10,
-            order_type="LIMIT", mode="PAPER",
-        ))
+        session.add(
+            MarketSnapshot(
+                request_id=request_id,
+                symbol=symbol.upper(),
+                timeframe="1h",
+                open=106.0,
+                high=107.0,
+                low=98.0,
+                close=100.0,
+                volume=25_000_000,
+                rsi=15.0,
+                ema20=104.0,
+                ema50=108.0,
+                macd=-2.2,
+                macd_signal=-1.4,
+                mode="PAPER",
+            )
+        )
+        session.add(
+            AiDecision(
+                request_id=request_id,
+                symbol=symbol.upper(),
+                provider="offline-dummy",
+                model="deterministic-simulation",
+                raw_request=raw_request,
+                raw_response=ai_response,
+                action="BUY",
+                confidence=88,
+                qty=10,
+                reason=ai_response["reason"],
+            )
+        )
+        session.add(
+            RiskDecision(
+                request_id=request_id,
+                symbol=symbol.upper(),
+                action="BUY",
+                confidence=88,
+                risk_score=22,
+                allow_order=False,
+                reason="Offline seed before replay",
+                entry_min=99,
+                entry_max=100,
+                stop_loss=95,
+                target_price=112,
+                qty=10,
+                order_type="LIMIT",
+                mode="PAPER",
+            )
+        )
         await session.commit()
     return request_id, ai_response
 

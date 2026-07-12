@@ -46,5 +46,7 @@ async def test_notification_throttles_same_event() -> None:
         token="token", chat_id="chat", transport=httpx.MockTransport(handler)
     )
     assert await service.send("warning", "Gateway kapalı", event_key="gateway:offline")
-    assert not await service.send("warning", "Gateway kapalı", event_key="gateway:offline")
+    assert not await service.send(
+        "warning", "Gateway kapalı", event_key="gateway:offline"
+    )
     assert calls == 1

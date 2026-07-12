@@ -14,9 +14,7 @@ def _news(symbol: str = "THYAO", *, titles=(), hours_ago: float = 1.0, kap=()):
     published = (datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat()
     return {
         symbol: {
-            "latestNews": [
-                {"title": t, "publishedAt": published} for t in titles
-            ],
+            "latestNews": [{"title": t, "publishedAt": published} for t in titles],
             "kapNews": list(kap),
             "sentiment": "UNKNOWN",
         }

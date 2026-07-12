@@ -223,7 +223,11 @@ async def ensure_builtin_profiles_seeded(session: AsyncSession) -> None:
     if not missing:
         return
     for code in missing:
-        session.add(TradeProfile(code=code, is_builtin=True, is_enabled=True, **BUILTIN_PROFILES[code]))
+        session.add(
+            TradeProfile(
+                code=code, is_builtin=True, is_enabled=True, **BUILTIN_PROFILES[code]
+            )
+        )
     try:
         await session.commit()
     except IntegrityError:
@@ -233,7 +237,9 @@ async def ensure_builtin_profiles_seeded(session: AsyncSession) -> None:
 
 async def list_profiles(session: AsyncSession) -> list[TradeProfile]:
     await ensure_builtin_profiles_seeded(session)
-    stmt = select(TradeProfile).order_by(TradeProfile.is_builtin.desc(), TradeProfile.code.asc())
+    stmt = select(TradeProfile).order_by(
+        TradeProfile.is_builtin.desc(), TradeProfile.code.asc()
+    )
     return list((await session.execute(stmt)).scalars().all())
 
 
@@ -313,15 +319,18 @@ async def create_profile(
         **fields,
     )
     session.add(profile)
-    session.add(ConfigAuditLog(
-        key=f"trade_profile:{code}",
-        old_value=None,
-        new_value="created",
-        changed_by=changed_by,
-        reason=f"Created trade profile {code}",
-    ))
+    session.add(
+        ConfigAuditLog(
+            key=f"trade_profile:{code}",
+            old_value=None,
+            new_value="created",
+            changed_by=changed_by,
+            reason=f"Created trade profile {code}",
+        )
+    )
     await session.commit()
     from app.services.decision_gate import decision_cache
+
     decision_cache.clear()
     await session.refresh(profile)
     return profile
@@ -336,15 +345,26 @@ def profile_requires_confirmation(old: TradeProfile, changes: dict[str, Any]) ->
     def _decreased(field: str) -> bool:
         return field in changes and float(changes[field]) < float(getattr(old, field))
 
-    if any(_increased(f) for f in ("max_order_value_tl", "max_qty_per_order", "max_orders_per_day")):
+    if any(
+        _increased(f)
+        for f in ("max_order_value_tl", "max_qty_per_order", "max_orders_per_day")
+    ):
         return True
-    if any(_decreased(f) for f in ("min_confidence_for_buy", "min_confidence_for_sell")):
+    if any(
+        _decreased(f) for f in ("min_confidence_for_buy", "min_confidence_for_sell")
+    ):
         return True
     if changes.get("allow_real_live") is True and not old.allow_real_live:
         return True
-    if changes.get("require_alpha_trend_alignment") is False and old.require_alpha_trend_alignment:
+    if (
+        changes.get("require_alpha_trend_alignment") is False
+        and old.require_alpha_trend_alignment
+    ):
         return True
-    if changes.get("require_indicator_consensus_alignment") is False and old.require_indicator_consensus_alignment:
+    if (
+        changes.get("require_indicator_consensus_alignment") is False
+        and old.require_indicator_consensus_alignment
+    ):
         return True
     return False
 
@@ -366,21 +386,27 @@ async def update_profile(
     if unknown:
         raise ValueError(f"Unknown trade profile fields: {sorted(unknown)}")
 
-    if profile_requires_confirmation(profile, changes) and confirmation != RISKY_CONFIRMATION:
+    if (
+        profile_requires_confirmation(profile, changes)
+        and confirmation != RISKY_CONFIRMATION
+    ):
         raise ValueError(f"This change requires confirmation={RISKY_CONFIRMATION}")
 
     for field, value in changes.items():
         setattr(profile, field, value)
 
-    session.add(ConfigAuditLog(
-        key=f"trade_profile:{code}",
-        old_value="updated",
-        new_value=str(changes),
-        changed_by=changed_by,
-        reason=reason or "Trade profile update",
-    ))
+    session.add(
+        ConfigAuditLog(
+            key=f"trade_profile:{code}",
+            old_value="updated",
+            new_value=str(changes),
+            changed_by=changed_by,
+            reason=reason or "Trade profile update",
+        )
+    )
     await session.commit()
     from app.services.decision_gate import decision_cache
+
     decision_cache.clear()
     await session.refresh(profile)
     return profile
@@ -412,22 +438,30 @@ async def clone_profile(
         is_builtin=False,
         is_enabled=True,
         is_default=False,
-        **{field: getattr(source, field) for field in EDITABLE_FIELDS if field not in ("name", "description", "risk_level")},
+        **{
+            field: getattr(source, field)
+            for field in EDITABLE_FIELDS
+            if field not in ("name", "description", "risk_level")
+        },
     )
     session.add(clone)
-    session.add(ConfigAuditLog(
-        key=f"trade_profile:{new_code}",
-        old_value=None,
-        new_value=f"cloned from {source_code}",
-        changed_by=changed_by,
-        reason=f"Cloned trade profile {source_code} -> {new_code}",
-    ))
+    session.add(
+        ConfigAuditLog(
+            key=f"trade_profile:{new_code}",
+            old_value=None,
+            new_value=f"cloned from {source_code}",
+            changed_by=changed_by,
+            reason=f"Cloned trade profile {source_code} -> {new_code}",
+        )
+    )
     await session.commit()
     await session.refresh(clone)
     return clone
 
 
-async def disable_profile(session: AsyncSession, code: str, *, changed_by: str) -> TradeProfile:
+async def disable_profile(
+    session: AsyncSession, code: str, *, changed_by: str
+) -> TradeProfile:
     profile = await get_profile(session, code)
     if profile is None:
         raise ValueError(f"Unknown trade profile: {code}")
@@ -438,13 +472,15 @@ async def disable_profile(session: AsyncSession, code: str, *, changed_by: str) 
         raise ValueError(f"Cannot disable the currently active profile: {code}")
 
     profile.is_enabled = False
-    session.add(ConfigAuditLog(
-        key=f"trade_profile:{code}",
-        old_value="enabled",
-        new_value="disabled",
-        changed_by=changed_by,
-        reason="Disabled trade profile",
-    ))
+    session.add(
+        ConfigAuditLog(
+            key=f"trade_profile:{code}",
+            old_value="enabled",
+            new_value="disabled",
+            changed_by=changed_by,
+            reason="Disabled trade profile",
+        )
+    )
     await session.commit()
     await session.refresh(profile)
     return profile
@@ -460,13 +496,15 @@ async def delete_profile(session: AsyncSession, code: str, *, changed_by: str) -
     if active_code == code:
         raise ValueError(f"Cannot delete the currently active profile: {code}")
 
-    session.add(ConfigAuditLog(
-        key=f"trade_profile:{code}",
-        old_value="exists",
-        new_value="deleted",
-        changed_by=changed_by,
-        reason="Deleted trade profile",
-    ))
+    session.add(
+        ConfigAuditLog(
+            key=f"trade_profile:{code}",
+            old_value="exists",
+            new_value="deleted",
+            changed_by=changed_by,
+            reason="Deleted trade profile",
+        )
+    )
     await session.delete(profile)
     await session.commit()
 
@@ -503,16 +541,19 @@ async def activate_profile(
         row.value = code
 
     if old_code != code:
-        session.add(ConfigAuditLog(
-            key=ACTIVE_PROFILE_CONFIG_KEY,
-            old_value=old_code,
-            new_value=code,
-            changed_by=changed_by,
-            reason=reason or f"Activated trade profile {code}",
-        ))
+        session.add(
+            ConfigAuditLog(
+                key=ACTIVE_PROFILE_CONFIG_KEY,
+                old_value=old_code,
+                new_value=code,
+                changed_by=changed_by,
+                reason=reason or f"Activated trade profile {code}",
+            )
+        )
 
     await session.commit()
     if old_code != code:
         from app.services.decision_gate import decision_cache
+
         decision_cache.clear()
     return profile

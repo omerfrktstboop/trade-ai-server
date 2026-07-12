@@ -50,7 +50,9 @@ class TestClassify:
         assert _classify(payload) == "HIGH_VOLATILITY"
 
     def test_missing_emas_falls_back_to_gateway_regime(self):
-        assert _classify({"lastPrice": 9500.0, "marketRegime": "TRENDING"}) == "TRENDING"
+        assert (
+            _classify({"lastPrice": 9500.0, "marketRegime": "TRENDING"}) == "TRENDING"
+        )
 
     def test_empty_payload_is_unknown(self):
         assert _classify({}) == "UNKNOWN"
@@ -168,11 +170,15 @@ class TestMacroFilterInRiskEngine:
         engine = RiskEngine(_cfg(min_confidence_for_buy=70.0))
 
         # 80 güven: normalde geçer (70), HIGH_VOLATILITY'de eşik 85'e çıkar → düşer.
-        resp = engine.evaluate(_req(), _buy(confidence=80.0), market_regime="HIGH_VOLATILITY")
+        resp = engine.evaluate(
+            _req(), _buy(confidence=80.0), market_regime="HIGH_VOLATILITY"
+        )
         assert resp.allow_order is False
 
         # 90 güven: sertleşen eşiği de geçer.
-        resp2 = engine.evaluate(_req(), _buy(confidence=90.0), market_regime="HIGH_VOLATILITY")
+        resp2 = engine.evaluate(
+            _req(), _buy(confidence=90.0), market_regime="HIGH_VOLATILITY"
+        )
         assert resp2.allow_order is True
 
     def test_unknown_or_none_regime_applies_no_filter(self):

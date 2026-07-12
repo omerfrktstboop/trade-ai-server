@@ -61,7 +61,9 @@ class MatriksGatewayClient:
     ) -> None:
         self._base_url = (base_url or settings.matriks_gateway_url).rstrip("/")
         self._token = token if token is not None else settings.matriks_gateway_token
-        self._timeout = timeout if timeout is not None else settings.matriks_gateway_timeout
+        self._timeout = (
+            timeout if timeout is not None else settings.matriks_gateway_timeout
+        )
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
 
@@ -104,11 +106,11 @@ class MatriksGatewayClient:
 
     async def get_indicators(self, symbol: str) -> dict[str, Any]:
         """Return native/fallback technical indicators for one symbol."""
-        return await self._get(
-            "/indicators", params={"symbol": symbol.strip().upper()}
-        )
+        return await self._get("/indicators", params={"symbol": symbol.strip().upper()})
 
-    async def get_news(self, symbol: str | None = None, limit: int = 50) -> dict[str, Any]:
+    async def get_news(
+        self, symbol: str | None = None, limit: int = 50
+    ) -> dict[str, Any]:
         """Return live Matriks news cached since gateway startup."""
         params = {"limit": str(max(1, min(200, limit)))}
         if symbol:
@@ -133,12 +135,32 @@ class MatriksGatewayClient:
         return await self._get("/news/details", params=params)
 
     async def get_kap(self, symbol: str, limit: int = 50) -> dict[str, Any]:
-        return await self._get("/kap", params={"symbol": symbol.strip().upper(), "limit": str(max(1, min(200, limit)) )})
+        return await self._get(
+            "/kap",
+            params={
+                "symbol": symbol.strip().upper(),
+                "limit": str(max(1, min(200, limit))),
+            },
+        )
 
-    async def get_kap_risk(self, symbol: str, lookback_hours: int = 48) -> dict[str, Any]:
-        return await self._get("/kap/risk", params={"symbol": symbol.strip().upper(), "lookbackHours": str(max(1, min(720, lookback_hours)))})
+    async def get_kap_risk(
+        self, symbol: str, lookback_hours: int = 48
+    ) -> dict[str, Any]:
+        return await self._get(
+            "/kap/risk",
+            params={
+                "symbol": symbol.strip().upper(),
+                "lookbackHours": str(max(1, min(720, lookback_hours))),
+            },
+        )
 
-    async def get_institutions(self, symbol: str, limit: int = 10, period: str = "Daily", include_reported_orders: bool = True) -> dict[str, Any]:
+    async def get_institutions(
+        self,
+        symbol: str,
+        limit: int = 10,
+        period: str = "Daily",
+        include_reported_orders: bool = True,
+    ) -> dict[str, Any]:
         """Return daily ranked AKD buyers/sellers when licensed."""
         return await self._get(
             "/institutions",
@@ -160,9 +182,7 @@ class MatriksGatewayClient:
         Dönen dict: ``items`` (sembol başına lastPrice/changePct/volume) +
         ``gainers``/``losers``/``volumeLeaders`` sıralı sembol listeleri.
         """
-        return await self._get(
-            "/movers", params={"limit": str(max(1, min(50, limit)))}
-        )
+        return await self._get("/movers", params={"limit": str(max(1, min(50, limit)))})
 
     # ── Genişletilmiş read-only veri yüzeyi (gateway data surface) ──────────
     # Aşağıdaki metodlar Matriks'in belgelenmiş veri-döndüren API'sini birebir
@@ -275,7 +295,11 @@ class MatriksGatewayClient:
 
         data = response.json()
         if not isinstance(data, dict) or not data.get("ok"):
-            error = data.get("error", "unknown") if isinstance(data, dict) else "invalid response"
+            error = (
+                data.get("error", "unknown")
+                if isinstance(data, dict)
+                else "invalid response"
+            )
             raise GatewayError(response.status_code, str(error))
 
         return data
@@ -336,7 +360,9 @@ class MatriksGatewayClient:
             )
         return self._client
 
-    async def _get(self, path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
+    async def _get(
+        self, path: str, params: dict[str, str] | None = None
+    ) -> dict[str, Any]:
         client = self._ensure_client()
 
         last_error: Exception | None = None
@@ -358,7 +384,11 @@ class MatriksGatewayClient:
 
             data = response.json()
             if not isinstance(data, dict) or not data.get("ok"):
-                error = data.get("error", "unknown") if isinstance(data, dict) else "invalid response"
+                error = (
+                    data.get("error", "unknown")
+                    if isinstance(data, dict)
+                    else "invalid response"
+                )
                 raise GatewayError(response.status_code, str(error))
 
             return data

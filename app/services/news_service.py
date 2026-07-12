@@ -61,7 +61,9 @@ _FULLTEXT_TOP_N = 3
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 # <script>/<style> blokları içeriğiyle birlikte silinmeli.
-_SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+_SCRIPT_STYLE_RE = re.compile(
+    r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL
+)
 
 
 # ── Public interface ───────────────────────────────────────────────────────────
@@ -163,7 +165,9 @@ async def _store_cache(symbol: str, items: list[dict[str, Any]]) -> None:
                 )
             await session.commit()
     except Exception:
-        logger.exception("News cache write failed for %s — continuing without cache", symbol)
+        logger.exception(
+            "News cache write failed for %s — continuing without cache", symbol
+        )
 
 
 def _select_top_recent(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -174,6 +178,7 @@ def _select_top_recent(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     thinly-covered symbol) fall back to the most recent items available so the
     AI is not starved of context.
     """
+
     def _pub(item: dict[str, Any]) -> datetime:
         value = item.get("publishedAt")
         if not isinstance(value, datetime):
@@ -196,7 +201,9 @@ def _serialize_item(item: dict[str, Any]) -> dict[str, Any]:
         "content": item.get("content"),
         "source": item.get("source"),
         "url": item.get("url"),
-        "publishedAt": published.isoformat() if isinstance(published, datetime) else published,
+        "publishedAt": published.isoformat()
+        if isinstance(published, datetime)
+        else published,
     }
 
 
@@ -229,7 +236,9 @@ def _parse_rss(xml_text: str) -> list[dict[str, Any]]:
             continue
         link = (item.findtext("link") or "").strip() or None
         source_el = item.find("source")
-        source = source_el.text.strip() if source_el is not None and source_el.text else None
+        source = (
+            source_el.text.strip() if source_el is not None and source_el.text else None
+        )
         summary = _strip_html(item.findtext("description"))
         items.append(
             {
@@ -297,9 +306,7 @@ async def _enrich_with_fulltext(items: list[dict[str, Any]]) -> list[dict[str, A
     return items
 
 
-async def _fetch_article_text(
-    session: aiohttp.ClientSession, url: str | None
-) -> str:
+async def _fetch_article_text(session: aiohttp.ClientSession, url: str | None) -> str:
     """Fetch one article URL and return cleaned plain text (may be empty)."""
     if not url:
         return ""
@@ -329,10 +336,14 @@ async def _is_safe_public_http_url(url: str) -> bool:
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             return False
         hostname = parsed.hostname.rstrip(".").lower()
-        if hostname in {"localhost", "metadata.google.internal"} or hostname.endswith((".localhost", ".local")):
+        if hostname in {"localhost", "metadata.google.internal"} or hostname.endswith(
+            (".localhost", ".local")
+        ):
             return False
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        infos = await asyncio.get_running_loop().getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            hostname, port, type=socket.SOCK_STREAM
+        )
         addresses = {info[4][0] for info in infos}
         if not addresses:
             return False

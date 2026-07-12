@@ -20,7 +20,9 @@ class SymbolFundamental(Base):
     __tablename__ = "symbol_fundamentals"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    symbol: Mapped[str] = mapped_column(String(16), unique=True, index=True, nullable=False)
+    symbol: Mapped[str] = mapped_column(
+        String(16), unique=True, index=True, nullable=False
+    )
 
     # Reporting period the numbers refer to, e.g. "2026/Q2".
     period: Mapped[str] = mapped_column(String(16), nullable=False)

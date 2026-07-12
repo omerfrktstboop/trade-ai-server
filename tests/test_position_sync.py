@@ -44,7 +44,16 @@ async def _positions() -> dict[str, float]:
 
 async def _seed_fill(request_id: str, symbol: str, side: str, qty: float) -> None:
     async with async_session_factory() as session:
-        session.add(OrderLog(request_id=request_id, symbol=symbol, action=side, qty=qty, filled_qty=qty, status="FILLED"))
+        session.add(
+            OrderLog(
+                request_id=request_id,
+                symbol=symbol,
+                action=side,
+                qty=qty,
+                filled_qty=qty,
+                status="FILLED",
+            )
+        )
         await session.commit()
 
 
@@ -65,7 +74,12 @@ class TestSyncPositions:
         await sync_positions_from_gateway(client)
 
         fake.positions = [
-            {"symbol": "AKBNK", "botQty": 99.0, "lockedLongTermQty": 0.0, "totalQty": 99.0}
+            {
+                "symbol": "AKBNK",
+                "botQty": 99.0,
+                "lockedLongTermQty": 0.0,
+                "totalQty": 99.0,
+            }
         ]
         synced = await sync_positions_from_gateway(client)
 
@@ -114,10 +128,19 @@ class TestSyncPositions:
         await sync_positions_from_gateway(client)
 
         fake.positions = [
-            {"symbol": "AKBNK", "botQty": 0.0, "lockedLongTermQty": 0.0, "totalQty": 0.0}
+            {
+                "symbol": "AKBNK",
+                "botQty": 0.0,
+                "lockedLongTermQty": 0.0,
+                "totalQty": 0.0,
+            }
         ]
         async with async_session_factory() as session:
-            row = (await session.execute(select(OrderLog).where(OrderLog.request_id == "buy-akbnk"))).scalar_one()
+            row = (
+                await session.execute(
+                    select(OrderLog).where(OrderLog.request_id == "buy-akbnk")
+                )
+            ).scalar_one()
             row.action = "SELL"
             await session.commit()
         synced = await sync_positions_from_gateway(client)

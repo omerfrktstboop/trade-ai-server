@@ -69,7 +69,9 @@ async def test_yes_creates_schema_seeds_profiles_and_is_idempotent(tmp_path):
             "watchlist_symbols",
         ):
             result = await connection.execute(
-                text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name"),
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=:name"
+                ),
                 {"name": table},
             )
             assert result.scalar_one() == table

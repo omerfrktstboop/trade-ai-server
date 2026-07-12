@@ -56,7 +56,11 @@ from app.services.admin_config import (
 )
 from app.services.broker_flow_service import get_broker_flow_context
 from app.services.daily_trade_count import get_today_trade_counts
-from app.services.decision_gate import decision_cache, decision_context_fingerprint, preflight_wait_reason
+from app.services.decision_gate import (
+    decision_cache,
+    decision_context_fingerprint,
+    preflight_wait_reason,
+)
 from app.services.fundamentals_service import get_fundamentals_context
 from app.services.market_regime import get_index_regime
 from app.services.matriks_gateway import (
@@ -81,8 +85,11 @@ def _decision_persistence_metadata(payload: dict[str, Any]) -> tuple[str, str | 
     source = str(payload.get("decisionSource") or "system-gate")
     if source != "llm":
         return source, None
-    model = settings.deepseek_model if settings.ai_provider == AIProvider.DEEPSEEK else None
+    model = (
+        settings.deepseek_model if settings.ai_provider == AIProvider.DEEPSEEK else None
+    )
     return settings.ai_provider.value, model
+
 
 # Kök sembol değerlendirilirken derinliği de çekilen ilişkili hisseler.
 # (Eski agent_planner.RELATED_SYMBOLS — planner silindi, kural burada yaşıyor.)
@@ -104,7 +111,9 @@ class EvaluationResult:
 
     response: SignalResponse
     mode: SignalMode
-    decision_created_utc: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    decision_created_utc: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -184,7 +193,8 @@ def _build_depth_context(req: SignalRequest) -> dict[str, Any]:
     if req.depth_reliable is False:
         return {"depthReliable": False, "orderBookSignal": "UNAVAILABLE"}
     fields = {
-        "levelsUsed": req.depth_levels_used, "spreadPct": req.spread_pct,
+        "levelsUsed": req.depth_levels_used,
+        "spreadPct": req.spread_pct,
         "bidAskRatioTop5": req.depth_bid_ask_ratio_top5,
         "bidAskRatioTop10": req.depth_bid_ask_ratio_top10,
         "bidAskRatioTop25": req.depth_bid_ask_ratio_top25,
@@ -201,7 +211,8 @@ def _build_depth_context(req: SignalRequest) -> dict[str, Any]:
         "sellPressureScore": req.depth_sell_pressure_score,
         "orderBookSignal": req.depth_order_book_signal,
         "wallConcentrationRisk": req.depth_wall_concentration_risk,
-        "depthAgeSeconds": req.depth_age_seconds, "depthReliable": req.depth_reliable,
+        "depthAgeSeconds": req.depth_age_seconds,
+        "depthReliable": req.depth_reliable,
     }
     return {key: value for key, value in fields.items() if value is not None}
 
@@ -488,8 +499,12 @@ async def persist_evaluation(
                     risk_score=response.risk_score,
                     allow_order=response.allow_order,
                     reason=response.reason,
-                    entry_min=response.entry_range.min if response.entry_range else None,
-                    entry_max=response.entry_range.max if response.entry_range else None,
+                    entry_min=response.entry_range.min
+                    if response.entry_range
+                    else None,
+                    entry_max=response.entry_range.max
+                    if response.entry_range
+                    else None,
                     stop_loss=response.stop_loss,
                     target_price=response.target_price,
                     order_type=response.order_type.value,
@@ -539,7 +554,11 @@ def snapshot_to_signal_request(
     server's trade history, so its count would always read zero and silently
     disable the daily-limit gate.
     """
-    depth = payload.get("depthAnalysis") if isinstance(payload.get("depthAnalysis"), dict) else {}
+    depth = (
+        payload.get("depthAnalysis")
+        if isinstance(payload.get("depthAnalysis"), dict)
+        else {}
+    )
     largest_bid = depth.get("largestBidWall") or {}
     largest_ask = depth.get("largestAskWall") or {}
     nearest_bid = depth.get("nearestLargeBidWall") or {}
@@ -577,20 +596,42 @@ def snapshot_to_signal_request(
         depthBid1Size=_payload_get(payload, "depthBid1Size"),
         depthBid1MaxSize=_payload_get(payload, "depthBid1MaxSize"),
         depthQueueDropPct=_payload_get(payload, "depthQueueDropPct"),
-        depthReliable=depth.get("depthReliable", _payload_get(payload, "depthReliable")),
-        depthLevelsUsed=depth.get("levelsUsed"), spreadPct=depth.get("spreadPct"),
-        depthBidAskRatioTop5=depth.get("bidAskRatioTop5"), depthBidAskRatioTop10=depth.get("bidAskRatioTop10"),
-        depthBidAskRatioTop25=depth.get("bidAskRatioTop25"), depthImbalanceTop5=depth.get("imbalanceTop5"),
-        depthImbalanceTop10=depth.get("imbalanceTop10"), depthImbalanceTop25=depth.get("imbalanceTop25"),
-        depthBidConcentrationTop3Pct=depth.get("bidConcentrationTop3Pct"), depthAskConcentrationTop3Pct=depth.get("askConcentrationTop3Pct"),
-        depthLargestBidWallDistancePct=largest_bid.get("distancePct"), depthLargestAskWallDistancePct=largest_ask.get("distancePct"),
-        depthNearestBidWallDistancePct=nearest_bid.get("distancePct"), depthNearestAskWallDistancePct=nearest_ask.get("distancePct"),
-        depthBuyPressureScore=depth.get("buyPressureScore"), depthSellPressureScore=depth.get("sellPressureScore"),
+        depthReliable=depth.get(
+            "depthReliable", _payload_get(payload, "depthReliable")
+        ),
+        depthLevelsUsed=depth.get("levelsUsed"),
+        spreadPct=depth.get("spreadPct"),
+        depthBidAskRatioTop5=depth.get("bidAskRatioTop5"),
+        depthBidAskRatioTop10=depth.get("bidAskRatioTop10"),
+        depthBidAskRatioTop25=depth.get("bidAskRatioTop25"),
+        depthImbalanceTop5=depth.get("imbalanceTop5"),
+        depthImbalanceTop10=depth.get("imbalanceTop10"),
+        depthImbalanceTop25=depth.get("imbalanceTop25"),
+        depthBidConcentrationTop3Pct=depth.get("bidConcentrationTop3Pct"),
+        depthAskConcentrationTop3Pct=depth.get("askConcentrationTop3Pct"),
+        depthLargestBidWallDistancePct=largest_bid.get("distancePct"),
+        depthLargestAskWallDistancePct=largest_ask.get("distancePct"),
+        depthNearestBidWallDistancePct=nearest_bid.get("distancePct"),
+        depthNearestAskWallDistancePct=nearest_ask.get("distancePct"),
+        depthBuyPressureScore=depth.get("buyPressureScore"),
+        depthSellPressureScore=depth.get("sellPressureScore"),
         depthOrderBookSignal=depth.get("orderBookSignal"),
         depthSummary=payload.get("depthSummary"),
-        depthWallConcentrationRisk=(bool(depth.get("bidWallConcentrationRisk") or depth.get("askWallConcentrationRisk")) if depth else None),
-        quoteAgeSeconds=payload.get("quoteAgeSeconds"), ohlcvAgeSeconds=payload.get("ohlcvAgeSeconds"), depthAgeSeconds=payload.get("depthAgeSeconds"),
-        quoteEventUtc=payload.get("quoteEventUtc"), depthEventUtc=payload.get("depthEventUtc"), barEventUtc=payload.get("barEventUtc"), snapshotBuiltUtc=payload.get("snapshotBuiltUtc"),
+        depthWallConcentrationRisk=(
+            bool(
+                depth.get("bidWallConcentrationRisk")
+                or depth.get("askWallConcentrationRisk")
+            )
+            if depth
+            else None
+        ),
+        quoteAgeSeconds=payload.get("quoteAgeSeconds"),
+        ohlcvAgeSeconds=payload.get("ohlcvAgeSeconds"),
+        depthAgeSeconds=payload.get("depthAgeSeconds"),
+        quoteEventUtc=payload.get("quoteEventUtc"),
+        depthEventUtc=payload.get("depthEventUtc"),
+        barEventUtc=payload.get("barEventUtc"),
+        snapshotBuiltUtc=payload.get("snapshotBuiltUtc"),
         marketRegime=_payload_get(payload, "marketRegime"),
         botPositionQty=payload.get("botPositionQty", 0),
         totalAccountQty=payload.get("totalAccountQty", 0),
@@ -720,24 +761,48 @@ async def evaluate_symbol(
         }
         _log_evaluation(sig_req, response)
         await persist_evaluation(sig_req, payload, raw, response)
-        return EvaluationResult(response=response, mode=sig_req.mode, decision_created_utc=decision_created_utc)
+        return EvaluationResult(
+            response=response,
+            mode=sig_req.mode,
+            decision_created_utc=decision_created_utc,
+        )
 
     # ── 5. Dış bağlam (haber + akıllı para + admin fundamentals) ─────────
-    runtime_config_hash = decision_context_fingerprint(runtime_engine.config.model_dump(mode="json"))
+    runtime_config_hash = decision_context_fingerprint(
+        runtime_engine.config.model_dump(mode="json")
+    )
     async with async_session_factory() as profile_session:
         active_profile_code = (await get_active_profile(profile_session)).code
     try:
-        news_context, kap_context, broker_flow_context, fundamentals_context, market_regime = await asyncio.wait_for(
+        (
+            news_context,
+            kap_context,
+            broker_flow_context,
+            fundamentals_context,
+            market_regime,
+        ) = await asyncio.wait_for(
             asyncio.gather(
-                get_news_context([sig_req.symbol]), get_kap_context([sig_req.symbol]),
-                get_broker_flow_context([sig_req.symbol], config_version=runtime_config_hash), get_fundamentals_context([sig_req.symbol]),
+                get_news_context([sig_req.symbol]),
+                get_kap_context([sig_req.symbol]),
+                get_broker_flow_context(
+                    [sig_req.symbol], config_version=runtime_config_hash
+                ),
+                get_fundamentals_context([sig_req.symbol]),
                 get_index_regime(gateway),
-            ), timeout=12.0,
+            ),
+            timeout=12.0,
         )
     except asyncio.TimeoutError:
         logger.warning("Context budget exceeded symbol=%s", sig_req.symbol)
-        news_context, kap_context, fundamentals_context, market_regime = {}, {}, {}, None
-        broker_flow_context = {sig_req.symbol: {"available": False, "smartMoneyFlow": "UNKNOWN"}}
+        news_context, kap_context, fundamentals_context, market_regime = (
+            {},
+            {},
+            {},
+            None,
+        )
+        broker_flow_context = {
+            sig_req.symbol: {"available": False, "smartMoneyFlow": "UNKNOWN"}
+        }
 
     payload = build_payload(
         sig_req,
@@ -794,7 +859,9 @@ async def evaluate_symbol(
 
     if raw is None:
         context_fingerprint = decision_context_fingerprint(payload)
-        cached = decision_cache.get(sig_req.symbol, sig_req.last_price, news_context, context_fingerprint)
+        cached = decision_cache.get(
+            sig_req.symbol, sig_req.last_price, news_context, context_fingerprint
+        )
         if cached is not None:
             raw = cached
             payload["decisionSource"] = "cache"
@@ -804,13 +871,16 @@ async def evaluate_symbol(
         raw = await provider.decide(payload)
         payload["decisionSource"] = "llm"
         # Yalnızca gerçek LLM cevapları cache'lenir — kapı WAIT'leri değil.
-        decision_cache.put(sig_req.symbol, sig_req.last_price, news_context, raw, context_fingerprint)
+        decision_cache.put(
+            sig_req.symbol, sig_req.last_price, news_context, raw, context_fingerprint
+        )
 
     # ── 7. RiskEngine (makro rejim filtresiyle) ──────────────────────────
     decision = dict_to_risk_decision(raw, sig_req)
     sig_req = await with_resolved_daily_trade_count(sig_req)
     response = runtime_engine.evaluate(sig_req, decision, market_regime=market_regime)
     from app.services.news_risk_lock import apply_news_risk_lock
+
     response = await apply_news_risk_lock(response, sig_req.symbol)
 
     # ── 8. Log + persist ─────────────────────────────────────────────────
@@ -818,11 +888,16 @@ async def evaluate_symbol(
     await persist_evaluation(sig_req, payload, raw, response)
     try:
         from app.services.position_management import record_position_management
+
         await record_position_management(sig_req, raw, response)
     except Exception:
-        logger.exception("Position management persistence failed symbol=%s", sig_req.symbol)
+        logger.exception(
+            "Position management persistence failed symbol=%s", sig_req.symbol
+        )
 
-    return EvaluationResult(response=response, mode=sig_req.mode, decision_created_utc=decision_created_utc)
+    return EvaluationResult(
+        response=response, mode=sig_req.mode, decision_created_utc=decision_created_utc
+    )
 
 
 async def _build_position_context(req: SignalRequest) -> dict[str, Any] | None:

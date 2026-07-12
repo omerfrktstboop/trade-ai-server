@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
@@ -31,7 +30,15 @@ class AIProvider(str, Enum):
 
 
 SUPPORTED_AI_PROVIDERS = frozenset(provider.value for provider in AIProvider)
-_SECRET_PLACEHOLDERS = {"", "change-me", "changeme", "dev-token-change-me", "admin-change-me", "buraya_server_token", "buraya_gateway_token"}
+_SECRET_PLACEHOLDERS = {
+    "",
+    "change-me",
+    "changeme",
+    "dev-token-change-me",
+    "admin-change-me",
+    "buraya_server_token",
+    "buraya_gateway_token",
+}
 
 
 def _strong_secret(value: str, *, min_length: int = 32) -> bool:
@@ -237,7 +244,9 @@ class Settings(BaseSettings):
         }
         for name, secret in scoped_tokens.items():
             if not _strong_secret(secret):
-                errors.append(f"{name} must be non-placeholder, >=32 chars, and contain >=12 unique characters.")
+                errors.append(
+                    f"{name} must be non-placeholder, >=32 chars, and contain >=12 unique characters."
+                )
         if len(set(scoped_tokens.values())) != len(scoped_tokens):
             errors.append("Evaluation, gateway, and admin API tokens must be distinct.")
         if not _strong_secret(self.admin_password, min_length=16):
@@ -253,8 +262,14 @@ class Settings(BaseSettings):
             )
 
         gateway_url = urlparse(self.matriks_gateway_url)
-        if gateway_url.scheme not in {"http", "https"} or gateway_url.hostname not in {"127.0.0.1", "localhost", "::1"}:
-            errors.append("MATRIKS_GATEWAY_URL must target localhost/127.0.0.1 in production.")
+        if gateway_url.scheme not in {"http", "https"} or gateway_url.hostname not in {
+            "127.0.0.1",
+            "localhost",
+            "::1",
+        }:
+            errors.append(
+                "MATRIKS_GATEWAY_URL must target localhost/127.0.0.1 in production."
+            )
 
         # AI provider key required
         if self.ai_provider == AIProvider.DEEPSEEK and not self.deepseek_api_key:

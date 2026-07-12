@@ -37,10 +37,18 @@ class OrderLog(Base):
     filled_qty: Mapped[float] = mapped_column(Float, default=0.0)
     last_fill_qty: Mapped[float] = mapped_column(Float, default=0.0)
     avg_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    reservation_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    send_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reservation_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    send_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finalized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     config_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     profile_code: Mapped[str | None] = mapped_column(String(64), nullable=True)

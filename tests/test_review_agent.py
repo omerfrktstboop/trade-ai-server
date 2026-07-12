@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -38,7 +38,9 @@ class FakeChatProvider:
     async def decide(self, payload):  # pragma: no cover — unused here
         raise NotImplementedError
 
-    async def chat(self, system_prompt: str, user_content: str, *, max_tokens: int = 800) -> str:
+    async def chat(
+        self, system_prompt: str, user_content: str, *, max_tokens: int = 800
+    ) -> str:
         self.calls.append((system_prompt, user_content))
         return self.response_text
 
@@ -277,8 +279,14 @@ class TestBuildReviewPayload:
             )
         payload = build_review_payload(trades)
 
-        assert payload[0]["newsContextAtEntry"]["THYAO"]["latestNews"][0]["title"] == "haber"
-        assert payload[0]["brokerFlowContextAtEntry"]["THYAO"]["smartMoneyFlow"] == "STRONG_BUY"
+        assert (
+            payload[0]["newsContextAtEntry"]["THYAO"]["latestNews"][0]["title"]
+            == "haber"
+        )
+        assert (
+            payload[0]["brokerFlowContextAtEntry"]["THYAO"]["smartMoneyFlow"]
+            == "STRONG_BUY"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -368,20 +376,28 @@ class TestRunWeeklyReview:
 
     async def test_multiple_lessons_from_one_response_all_persisted(self):
         await _seed_round_trip(
-            "THYAO", buy_price=100.0, sell_price=94.0, stop_loss=95.0,
-            buy_at=datetime(2026, 7, 7, tzinfo=TZ), sell_at=datetime(2026, 7, 8, tzinfo=TZ),
+            "THYAO",
+            buy_price=100.0,
+            sell_price=94.0,
+            stop_loss=95.0,
+            buy_at=datetime(2026, 7, 7, tzinfo=TZ),
+            sell_at=datetime(2026, 7, 8, tzinfo=TZ),
             request_prefix="thyao-m",
         )
         await _seed_round_trip(
-            "AKBNK", buy_price=70.0, sell_price=66.0, stop_loss=67.0,
-            buy_at=datetime(2026, 7, 9, tzinfo=TZ), sell_at=datetime(2026, 7, 10, tzinfo=TZ),
+            "AKBNK",
+            buy_price=70.0,
+            sell_price=66.0,
+            stop_loss=67.0,
+            buy_at=datetime(2026, 7, 9, tzinfo=TZ),
+            sell_at=datetime(2026, 7, 10, tzinfo=TZ),
             request_prefix="akbnk-m",
         )
         provider = FakeChatProvider(
             response_text='{"lessons": ['
             '{"rootCause": "STOP_TOO_TIGHT", "lesson": "a", "affectedSymbols": ["THYAO"]},'
             '{"rootCause": "NEWS_MISREAD", "lesson": "b", "affectedSymbols": ["AKBNK"]}'
-            ']}'
+            "]}"
         )
 
         result = await run_weekly_review(date(2026, 7, 15), provider=provider)
@@ -394,8 +410,12 @@ class TestRunWeeklyReview:
         """provider=None -> get_default_provider() çağrılır (mock AI_PROVIDER=mock
         döngüsünde chat() '' döner, placeholder lesson persist edilir)."""
         await _seed_round_trip(
-            "THYAO", buy_price=100.0, sell_price=94.0, stop_loss=95.0,
-            buy_at=datetime(2026, 7, 7, tzinfo=TZ), sell_at=datetime(2026, 7, 8, tzinfo=TZ),
+            "THYAO",
+            buy_price=100.0,
+            sell_price=94.0,
+            stop_loss=95.0,
+            buy_at=datetime(2026, 7, 7, tzinfo=TZ),
+            sell_at=datetime(2026, 7, 8, tzinfo=TZ),
             request_prefix="thyao-def",
         )
 

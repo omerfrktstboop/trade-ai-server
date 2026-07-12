@@ -115,7 +115,9 @@ def runtime_stubs(monkeypatch):
         return state["overrides"]
 
     monkeypatch.setattr(scanner_module, "is_kill_switch_enabled", fake_kill_switch)
-    monkeypatch.setattr(scanner_module, "build_runtime_risk_config", fake_runtime_config)
+    monkeypatch.setattr(
+        scanner_module, "build_runtime_risk_config", fake_runtime_config
+    )
     monkeypatch.setattr(scanner_module, "get_active_profile", fake_profile)
     monkeypatch.setattr(scanner_module, "list_pending_override_symbols", fake_overrides)
     return state
@@ -127,7 +129,9 @@ def runtime_stubs(monkeypatch):
 
 
 class TestScannerTick:
-    async def test_due_symbols_evaluated_in_paper(self, evaluated_symbols, runtime_stubs):
+    async def test_due_symbols_evaluated_in_paper(
+        self, evaluated_symbols, runtime_stubs
+    ):
         fake = FakeGateway()
         scanner = SymbolScanner(gateway=make_gateway_client(fake))
 
@@ -305,18 +309,14 @@ class TestOrderPath:
         async def fake_persist(scanner_self, response, status, reason):
             self.persisted.append((status, reason))
 
-        monkeypatch.setattr(
-            SymbolScanner, "_persist_order_outcome", fake_persist
-        )
+        monkeypatch.setattr(SymbolScanner, "_persist_order_outcome", fake_persist)
         yield
 
     def make_scanner(self, fake: FakeGateway) -> SymbolScanner:
         return SymbolScanner(gateway=make_gateway_client(fake))
 
     async def test_orders_disabled_sends_nothing(self, monkeypatch):
-        monkeypatch.setattr(
-            scanner_module.settings, "scanner_allow_orders", False
-        )
+        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", False)
         fake = FakeGateway()
 
         await self.make_scanner(fake)._maybe_send_order(make_result())
@@ -367,9 +367,7 @@ class TestOrderPath:
         monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()
 
-        await self.make_scanner(fake)._maybe_send_order(
-            make_result(allow_order=False)
-        )
+        await self.make_scanner(fake)._maybe_send_order(make_result(allow_order=False))
 
         assert fake.orders == []
 
@@ -416,12 +414,16 @@ class TestOrderPath:
         fake = FakeGateway()
         fake.order_rejection = "EnableDemoOrders=false"
 
-        await self.make_scanner(fake)._maybe_send_order(make_result(action=SignalAction.SELL))
+        await self.make_scanner(fake)._maybe_send_order(
+            make_result(action=SignalAction.SELL)
+        )
 
         assert len(fake.orders) == 1
         assert self.persisted == [("REJECTED", "EnableDemoOrders=false")]
 
-    async def test_gateway_unreachable_during_preflight_creates_no_order(self, monkeypatch):
+    async def test_gateway_unreachable_during_preflight_creates_no_order(
+        self, monkeypatch
+    ):
         import httpx
 
         monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
@@ -449,9 +451,7 @@ class TestOrderPath:
 class TestScannerLifecycle:
     async def test_start_stop(self, evaluated_symbols, runtime_stubs):
         fake = FakeGateway()
-        scanner = SymbolScanner(
-            gateway=make_gateway_client(fake), tick_seconds=3600
-        )
+        scanner = SymbolScanner(gateway=make_gateway_client(fake), tick_seconds=3600)
 
         scanner.start()
         assert scanner.running is True
@@ -461,9 +461,7 @@ class TestScannerLifecycle:
 
     async def test_double_start_is_noop(self, evaluated_symbols, runtime_stubs):
         fake = FakeGateway()
-        scanner = SymbolScanner(
-            gateway=make_gateway_client(fake), tick_seconds=3600
-        )
+        scanner = SymbolScanner(gateway=make_gateway_client(fake), tick_seconds=3600)
 
         scanner.start()
         first_task = scanner._task

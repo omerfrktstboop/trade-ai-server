@@ -12,7 +12,9 @@ from app.db.base import Base
 
 class LockedPosition(Base):
     __tablename__ = "locked_positions"
-    __table_args__ = (CheckConstraint("qty >= 0", name="ck_locked_positions_qty_nonnegative"),)
+    __table_args__ = (
+        CheckConstraint("qty >= 0", name="ck_locked_positions_qty_nonnegative"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(String(16), index=True, nullable=False)

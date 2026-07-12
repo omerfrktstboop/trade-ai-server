@@ -46,7 +46,12 @@ def _cfg(**kwargs: Any) -> RiskConfig:
 
 @pytest.fixture
 def runtime_stubs(monkeypatch):
-    state = {"kill_switch": False, "config": _cfg(), "scan_interval": 30, "overrides": []}
+    state = {
+        "kill_switch": False,
+        "config": _cfg(),
+        "scan_interval": 30,
+        "overrides": [],
+    }
 
     async def fake_kill_switch(_s):
         return state["kill_switch"]
@@ -64,7 +69,9 @@ def runtime_stubs(monkeypatch):
         return state["overrides"]
 
     monkeypatch.setattr(scanner_module, "is_kill_switch_enabled", fake_kill_switch)
-    monkeypatch.setattr(scanner_module, "build_runtime_risk_config", fake_runtime_config)
+    monkeypatch.setattr(
+        scanner_module, "build_runtime_risk_config", fake_runtime_config
+    )
     monkeypatch.setattr(scanner_module, "get_active_profile", fake_profile)
     monkeypatch.setattr(scanner_module, "list_pending_override_symbols", fake_overrides)
     return state
@@ -95,12 +102,8 @@ class TestPortfolioScan:
             return None
 
         monkeypatch.setattr(scanner_module, "evaluate_symbol", fake_evaluate)
+
         # position_sync tick içinde gateway pozisyonlarıyla tabloyu ezmesin.
-        async def _noop_sync(_gw):
-            return None
-
-        monkeypatch.setattr(scanner_module, "sync_positions_from_gateway", _noop_sync)
-
         scanner = SymbolScanner(gateway=make_gateway_client(FakeGateway()))
         await scanner.tick()
 
@@ -116,11 +119,6 @@ class TestPortfolioScan:
             return None
 
         monkeypatch.setattr(scanner_module, "evaluate_symbol", fake_evaluate)
-
-        async def _noop_sync(_gw):
-            return None
-
-        monkeypatch.setattr(scanner_module, "sync_positions_from_gateway", _noop_sync)
 
         scanner = SymbolScanner(gateway=make_gateway_client(FakeGateway()))
         await scanner.tick()
@@ -139,11 +137,6 @@ class TestPortfolioScan:
             return None
 
         monkeypatch.setattr(scanner_module, "evaluate_symbol", fake_evaluate)
-
-        async def _noop_sync(_gw):
-            return None
-
-        monkeypatch.setattr(scanner_module, "sync_positions_from_gateway", _noop_sync)
 
         scanner = SymbolScanner(gateway=make_gateway_client(FakeGateway()))
         await scanner.tick()

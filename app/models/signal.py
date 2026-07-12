@@ -174,10 +174,15 @@ class SignalRequest(BaseModel):
     depth_buy_pressure_score: Optional[float] = Field(None, alias="depthBuyPressureScore")
     depth_sell_pressure_score: Optional[float] = Field(None, alias="depthSellPressureScore")
     depth_order_book_signal: Optional[str] = Field(None, alias="depthOrderBookSignal")
+    depth_summary: Optional[str] = Field(None, alias="depthSummary")
     depth_wall_concentration_risk: Optional[bool] = Field(None, alias="depthWallConcentrationRisk")
     quote_age_seconds: Optional[float] = Field(None, alias="quoteAgeSeconds")
     ohlcv_age_seconds: Optional[float] = Field(None, alias="ohlcvAgeSeconds")
     depth_age_seconds: Optional[float] = Field(None, alias="depthAgeSeconds")
+    quote_event_utc: Optional[datetime] = Field(None, alias="quoteEventUtc")
+    depth_event_utc: Optional[datetime] = Field(None, alias="depthEventUtc")
+    bar_event_utc: Optional[datetime] = Field(None, alias="barEventUtc")
+    snapshot_built_utc: Optional[datetime] = Field(None, alias="snapshotBuiltUtc")
     market_regime: Optional[str] = Field(None, alias="marketRegime")
 
     # Position context

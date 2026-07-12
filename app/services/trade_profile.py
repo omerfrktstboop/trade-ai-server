@@ -321,6 +321,8 @@ async def create_profile(
         reason=f"Created trade profile {code}",
     ))
     await session.commit()
+    from app.services.decision_gate import decision_cache
+    decision_cache.clear()
     await session.refresh(profile)
     return profile
 
@@ -378,6 +380,8 @@ async def update_profile(
         reason=reason or "Trade profile update",
     ))
     await session.commit()
+    from app.services.decision_gate import decision_cache
+    decision_cache.clear()
     await session.refresh(profile)
     return profile
 
@@ -508,4 +512,7 @@ async def activate_profile(
         ))
 
     await session.commit()
+    if old_code != code:
+        from app.services.decision_gate import decision_cache
+        decision_cache.clear()
     return profile

@@ -29,7 +29,9 @@ from __future__ import annotations
 
 import logging
 import time
+import asyncio
 import unicodedata
+from datetime import UTC, datetime
 from typing import Any
 
 from app.services.matriks_gateway import (
@@ -38,6 +40,7 @@ from app.services.matriks_gateway import (
     MatriksGatewayClient,
     gateway_client,
 )
+from app.services.decision_gate import decision_cache, decision_context_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +56,8 @@ _SMART_MONEY_KEYWORDS: tuple[str, ...] = (
 # Akıllı paranın net-alış tarafında baskın sayılması için gereken pay.
 _DOMINANCE_THRESHOLD = 0.40
 AKD_CACHE_TTL_SECONDS = 300
-_akd_cache: dict[tuple[int, str, str, bool], tuple[float, dict[str, Any]]] = {}
+_akd_cache: dict[tuple[int, str, str, bool, str], tuple[float, dict[str, Any]]] = {}
+_akd_inflight: dict[tuple[int, str, str, bool, str], asyncio.Task[dict[str, Any]]] = {}
 
 
 # ── Public interface ───────────────────────────────────────────────────────────
@@ -62,6 +66,8 @@ _akd_cache: dict[tuple[int, str, str, bool], tuple[float, dict[str, Any]]] = {}
 async def get_broker_flow_context(
     symbols: list[str],
     gateway: MatriksGatewayClient | None = None,
+    *, period: str = "Daily", include_reported_orders: bool = True,
+    config_version: str = "",
 ) -> dict[str, Any]:
     """Return broker / institutional (AKD) flow context for a list of symbols.
 
@@ -81,16 +87,25 @@ async def get_broker_flow_context(
     context: dict[str, Any] = {}
     for symbol in symbols:
         normalized = symbol.strip().upper()
-        cache_key = (id(gw), normalized, "DAILY", True)
+        normalized_period = period.strip().upper()
+        cache_key = (id(gw), normalized, normalized_period, include_reported_orders, config_version)
         cached = _akd_cache.get(cache_key)
         if cached and time.monotonic() - cached[0] < AKD_CACHE_TTL_SECONDS:
             entry = dict(cached[1])
-            entry["dataAgeSeconds"] = round(time.monotonic() - cached[0], 1)
+            entry["dataAgeSeconds"] = _data_age_seconds(entry.get("asOf"))
             context[normalized] = entry
             continue
         try:
             try:
-                raw = await gw.get_institutions(normalized, limit=10, period="Daily", include_reported_orders=True)
+                task = _akd_inflight.get(cache_key)
+                if task is None:
+                    task = asyncio.create_task(gw.get_institutions(normalized, limit=10, period=period, include_reported_orders=include_reported_orders))
+                    _akd_inflight[cache_key] = task
+                try:
+                    raw = await task
+                finally:
+                    if _akd_inflight.get(cache_key) is task:
+                        _akd_inflight.pop(cache_key, None)
             except TypeError:  # backwards-compatible injected/test gateways
                 raw = await gw.get_institutions(normalized, limit=10)
         except (GatewayUnavailable, GatewayError) as exc:
@@ -104,8 +119,14 @@ async def get_broker_flow_context(
 
         entry = _analyze(normalized, raw)
         entry["period"] = str(raw.get("period") or "DAILY")
-        entry["available"] = bool(raw.get("available"))
-        entry["dataAgeSeconds"] = 0.0
+        entry["available"] = bool(raw.get("available")) and entry.get("smartMoneyFlow") != "UNKNOWN"
+        entry["asOf"] = raw.get("asOf") or raw.get("marketDate") or raw.get("date")
+        entry["marketDate"] = raw.get("marketDate") or raw.get("date")
+        entry["retrievedAt"] = datetime.now(UTC).isoformat()
+        entry["dataAgeSeconds"] = _data_age_seconds(entry["asOf"])
+        previous = _akd_cache.get(cache_key)
+        if previous and decision_context_fingerprint(previous[1]) != decision_context_fingerprint(entry):
+            decision_cache.clear(normalized)
         _akd_cache[cache_key] = (time.monotonic(), entry)
         context[normalized] = entry
     return context
@@ -269,4 +290,19 @@ def _unknown_entry(symbol: str, comment: str) -> dict[str, Any]:
         "available": False,
         "period": "DAILY",
         "dataAgeSeconds": None,
+        "asOf": None,
+        "marketDate": None,
+        "retrievedAt": datetime.now(UTC).isoformat(),
     }
+
+
+def _data_age_seconds(raw: Any) -> float | None:
+    if not raw:
+        return None
+    try:
+        parsed = raw if isinstance(raw, datetime) else datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return round(max(0.0, (datetime.now(UTC) - parsed.astimezone(UTC)).total_seconds()), 1)
+    except (TypeError, ValueError):
+        return None

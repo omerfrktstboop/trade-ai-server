@@ -41,7 +41,8 @@ async def test_akd_cache_avoids_second_gateway_call():
     second = await get_broker_flow_context(["THYAO"], gateway=gateway)
     assert gateway.calls == 1
     assert first["THYAO"]["smartMoneyFlow"] == "STRONG_BUY"
-    assert second["THYAO"]["dataAgeSeconds"] >= 0
+    assert second["THYAO"]["dataAgeSeconds"] is None  # gateway supplied no asOf
+    assert second["THYAO"]["retrievedAt"]
 
 
 def _resp(symbol: str, buyers: list[dict], sellers: list[dict]) -> dict:

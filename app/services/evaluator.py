@@ -24,6 +24,7 @@ router'ı bunları buradan alır — beyin serviste, HTTP katmanı ince.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -55,7 +56,7 @@ from app.services.admin_config import (
 )
 from app.services.broker_flow_service import get_broker_flow_context
 from app.services.daily_trade_count import get_today_trade_counts
-from app.services.decision_gate import decision_cache, preflight_wait_reason
+from app.services.decision_gate import decision_cache, decision_context_fingerprint, preflight_wait_reason
 from app.services.fundamentals_service import get_fundamentals_context
 from app.services.market_regime import get_index_regime
 from app.services.matriks_gateway import (
@@ -67,6 +68,7 @@ from app.services.news_service import get_news_context
 from app.services.kap_service import get_kap_context
 from app.services.risk_engine import RiskDecision, RiskEngine
 from app.services.signal_override import consume_override, override_to_raw_decision
+from app.services.trade_profile import get_active_profile
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +151,11 @@ def build_payload(
         "botPositionQty": req.bot_position_qty,
         "totalAccountQty": req.total_account_qty,
         "lockedLongTermQty": req.locked_long_term_qty,
+        "quoteEventUtc": req.quote_event_utc,
+        "depthEventUtc": req.depth_event_utc,
+        "barEventUtc": req.bar_event_utc,
+        "snapshotBuiltUtc": req.snapshot_built_utc,
+        "depthSummary": req.depth_summary,
         "dailyTradeCount": req.daily_trade_count,
         "allowedSymbols": sorted(config._allowed_set()),
         "lockedSymbols": sorted(config._locked_set()),
@@ -580,8 +587,10 @@ def snapshot_to_signal_request(
         depthNearestBidWallDistancePct=nearest_bid.get("distancePct"), depthNearestAskWallDistancePct=nearest_ask.get("distancePct"),
         depthBuyPressureScore=depth.get("buyPressureScore"), depthSellPressureScore=depth.get("sellPressureScore"),
         depthOrderBookSignal=depth.get("orderBookSignal"),
+        depthSummary=payload.get("depthSummary"),
         depthWallConcentrationRisk=(bool(depth.get("bidWallConcentrationRisk") or depth.get("askWallConcentrationRisk")) if depth else None),
         quoteAgeSeconds=payload.get("quoteAgeSeconds"), ohlcvAgeSeconds=payload.get("ohlcvAgeSeconds"), depthAgeSeconds=payload.get("depthAgeSeconds"),
+        quoteEventUtc=payload.get("quoteEventUtc"), depthEventUtc=payload.get("depthEventUtc"), barEventUtc=payload.get("barEventUtc"), snapshotBuiltUtc=payload.get("snapshotBuiltUtc"),
         marketRegime=_payload_get(payload, "marketRegime"),
         botPositionQty=payload.get("botPositionQty", 0),
         totalAccountQty=payload.get("totalAccountQty", 0),
@@ -714,10 +723,21 @@ async def evaluate_symbol(
         return EvaluationResult(response=response, mode=sig_req.mode, decision_created_utc=decision_created_utc)
 
     # ── 5. Dış bağlam (haber + akıllı para + admin fundamentals) ─────────
-    news_context = await get_news_context([sig_req.symbol])
-    kap_context = await get_kap_context([sig_req.symbol])
-    broker_flow_context = await get_broker_flow_context([sig_req.symbol])
-    fundamentals_context = await get_fundamentals_context([sig_req.symbol])
+    runtime_config_hash = decision_context_fingerprint(runtime_engine.config.model_dump(mode="json"))
+    async with async_session_factory() as profile_session:
+        active_profile_code = (await get_active_profile(profile_session)).code
+    try:
+        news_context, kap_context, broker_flow_context, fundamentals_context, market_regime = await asyncio.wait_for(
+            asyncio.gather(
+                get_news_context([sig_req.symbol]), get_kap_context([sig_req.symbol]),
+                get_broker_flow_context([sig_req.symbol], config_version=runtime_config_hash), get_fundamentals_context([sig_req.symbol]),
+                get_index_regime(gateway),
+            ), timeout=12.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Context budget exceeded symbol=%s", sig_req.symbol)
+        news_context, kap_context, fundamentals_context, market_regime = {}, {}, {}, None
+        broker_flow_context = {sig_req.symbol: {"available": False, "smartMoneyFlow": "UNKNOWN"}}
 
     payload = build_payload(
         sig_req,
@@ -728,6 +748,10 @@ async def evaluate_symbol(
         active_config=runtime_engine.config,
     )
     payload["agenticSteps"] = steps
+    payload["marketRegime"] = market_regime
+    payload["runtimeMode"] = sig_req.mode.value
+    payload["configHash"] = runtime_config_hash
+    payload["profileCode"] = active_profile_code
 
     # ── 5.5. Pozisyon bağlamı (portfolio yönetimi) ───────────────────────
     # Açık bot pozisyonu varken LLM'in görevi yeni alım aramak değil eldeki
@@ -769,7 +793,8 @@ async def evaluate_symbol(
             payload["decisionSource"] = "preflight-gate"
 
     if raw is None:
-        cached = decision_cache.get(sig_req.symbol, sig_req.last_price, news_context)
+        context_fingerprint = decision_context_fingerprint(payload)
+        cached = decision_cache.get(sig_req.symbol, sig_req.last_price, news_context, context_fingerprint)
         if cached is not None:
             raw = cached
             payload["decisionSource"] = "cache"
@@ -779,10 +804,9 @@ async def evaluate_symbol(
         raw = await provider.decide(payload)
         payload["decisionSource"] = "llm"
         # Yalnızca gerçek LLM cevapları cache'lenir — kapı WAIT'leri değil.
-        decision_cache.put(sig_req.symbol, sig_req.last_price, news_context, raw)
+        decision_cache.put(sig_req.symbol, sig_req.last_price, news_context, raw, context_fingerprint)
 
     # ── 7. RiskEngine (makro rejim filtresiyle) ──────────────────────────
-    market_regime = await get_index_regime(gateway)
     decision = dict_to_risk_decision(raw, sig_req)
     sig_req = await with_resolved_daily_trade_count(sig_req)
     response = runtime_engine.evaluate(sig_req, decision, market_regime=market_regime)

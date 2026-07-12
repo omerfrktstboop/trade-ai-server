@@ -27,6 +27,7 @@ from app.services.matriks_gateway import (
     MatriksGatewayClient,
     gateway_client,
 )
+from app.services.decision_gate import decision_cache
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,7 @@ async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
             else:
                 await session.execute(delete(BotPosition))
             await session.commit()
+            decision_cache.clear()
     except Exception:
         logger.exception("Failed to persist positions from gateway")
         return 0

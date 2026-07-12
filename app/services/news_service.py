@@ -24,19 +24,22 @@ from __future__ import annotations
 
 import asyncio
 import html
+import ipaddress
 import logging
 import re
+import socket
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import aiohttp
 from sqlalchemy import select
 
 from app.db.session import async_session_factory
 from app.models.db import NewsCache
+from app.services.decision_gate import decision_cache
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +93,7 @@ async def get_news_context(symbols: list[str]) -> dict[str, Any]:
             "latestNews": [_serialize_item(item) for item in top],
             "kapNews": [],
             "sentiment": "UNKNOWN",
+            "trustBoundary": "UNTRUSTED_EXTERNAL_CONTENT",
         }
     return news
 
@@ -106,6 +110,7 @@ async def _get_or_refresh(symbol: str) -> list[dict[str, Any]]:
     # Tam metin zenginleştirme yalnızca taze çekimde (cache-miss) yapılır.
     fetched = await _enrich_with_fulltext(fetched)
     await _store_cache(symbol, fetched)
+    decision_cache.clear(symbol)
     return fetched
 
 
@@ -298,8 +303,11 @@ async def _fetch_article_text(
     """Fetch one article URL and return cleaned plain text (may be empty)."""
     if not url:
         return ""
+    if not await _is_safe_public_http_url(url):
+        logger.warning("Blocked unsafe full-text URL")
+        return ""
     try:
-        async with session.get(url, allow_redirects=True) as resp:
+        async with session.get(url, allow_redirects=False) as resp:
             if resp.status != 200:
                 return ""
             ctype = resp.headers.get("Content-Type", "")
@@ -312,3 +320,22 @@ async def _fetch_article_text(
         logger.debug("Full-text fetch failed url=%s", url, exc_info=True)
         return ""
     return _strip_html(body)
+
+
+async def _is_safe_public_http_url(url: str) -> bool:
+    """Reject local/private/link-local/metadata/file targets before fetching."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return False
+        hostname = parsed.hostname.rstrip(".").lower()
+        if hostname in {"localhost", "metadata.google.internal"} or hostname.endswith((".localhost", ".local")):
+            return False
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        infos = await asyncio.get_running_loop().getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        addresses = {info[4][0] for info in infos}
+        if not addresses:
+            return False
+        return all(ipaddress.ip_address(address).is_global for address in addresses)
+    except (OSError, ValueError):
+        return False

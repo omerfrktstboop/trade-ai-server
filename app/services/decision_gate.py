@@ -22,6 +22,8 @@ LLM çağrısı normal yoluna devam eder. Kapılar asla BUY/SELL üretmez; yaln�
 from __future__ import annotations
 
 import logging
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -33,7 +35,7 @@ logger = logging.getLogger(__name__)
 _FRESH_NEWS_WINDOW = timedelta(hours=12)
 
 # Cache parametreleri.
-_CACHE_TTL = timedelta(hours=1)
+_CACHE_TTL = timedelta(seconds=15)
 _CACHE_MAX_PRICE_DRIFT = 0.01  # %1
 
 
@@ -117,6 +119,7 @@ class _CacheEntry:
     raw: dict[str, Any]
     last_price: float
     news_fingerprint: tuple[str, ...]
+    context_fingerprint: str
     cached_at: datetime
 
 
@@ -137,6 +140,7 @@ class DecisionCache:
         symbol: str,
         last_price: float,
         news_context: dict[str, Any] | None,
+        context_fingerprint: str = "",
     ) -> dict[str, Any] | None:
         """TTL + fiyat + haber şartları sağlanıyorsa önceki ham kararı döndür."""
         entry = self._entries.get(symbol.strip().upper())
@@ -150,6 +154,8 @@ class DecisionCache:
         if drift > self._max_price_drift:
             return None
         if _news_fingerprint(symbol, news_context) != entry.news_fingerprint:
+            return None
+        if context_fingerprint != entry.context_fingerprint:
             return None
         raw = dict(entry.raw)
         raw["reason"] = (
@@ -165,6 +171,7 @@ class DecisionCache:
         last_price: float,
         news_context: dict[str, Any] | None,
         raw: dict[str, Any],
+        context_fingerprint: str = "",
     ) -> None:
         if last_price <= 0 or not isinstance(raw, dict):
             return
@@ -172,11 +179,21 @@ class DecisionCache:
             raw=dict(raw),
             last_price=last_price,
             news_fingerprint=_news_fingerprint(symbol, news_context),
+            context_fingerprint=context_fingerprint,
             cached_at=datetime.now(UTC),
         )
 
-    def clear(self) -> None:
-        self._entries.clear()
+    def clear(self, symbol: str | None = None) -> None:
+        if symbol:
+            self._entries.pop(symbol.strip().upper(), None)
+        else:
+            self._entries.clear()
+
+
+def decision_context_fingerprint(context: dict[str, Any]) -> str:
+    """Stable identity for every structured input visible to the decision."""
+    encoded = json.dumps(context, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _news_fingerprint(

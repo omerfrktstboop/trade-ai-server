@@ -156,7 +156,7 @@ class TestGetNewsContext:
 
         result = await get_news_context(["THYAO"])
 
-        assert result["THYAO"] == {"latestNews": [], "kapNews": [], "sentiment": "UNKNOWN"}
+        assert result["THYAO"] == {"latestNews": [], "kapNews": [], "sentiment": "UNKNOWN", "trustBoundary": "UNTRUSTED_EXTERNAL_CONTENT"}
 
     @pytest.mark.asyncio
     async def test_symbol_normalized_to_uppercase(self, monkeypatch):

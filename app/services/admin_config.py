@@ -158,6 +158,10 @@ class AdminConfigItem:
             return "********"
         return self.value
 
+    @property
+    def requires_confirmation(self) -> bool:
+        return self.key in RISKY_CONFIG_KEYS
+
 
 def public_config_keys() -> list[str]:
     """Return non-secret config keys in stable display order."""
@@ -246,6 +250,9 @@ async def set_admin_config_value(
         )
 
     await session.commit()
+    if old_value != new_value:
+        from app.services.decision_gate import decision_cache
+        decision_cache.clear()
     await session.refresh(row)
     return AdminConfigItem(
         key=key,

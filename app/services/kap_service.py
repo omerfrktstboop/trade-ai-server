@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -11,18 +12,23 @@ from sqlalchemy import select
 from app.db.session import async_session_factory
 from app.models.db import KapEvent
 from app.services.matriks_gateway import GatewayError, GatewayUnavailable, gateway_client
+from app.services.decision_gate import decision_cache
 
 logger = logging.getLogger(__name__)
 KAP_GATEWAY_CACHE_TTL_SECONDS = 120
 _kap_gateway_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_kap_inflight: dict[str, asyncio.Task[dict[str, Any]]] = {}
 
 
 def invalidate_kap_cache(symbol: str | None = None) -> None:
     """Invalidate one symbol after a risk-news signal, or all symbols."""
     if symbol:
-        _kap_gateway_cache.pop(symbol.strip().upper(), None)
+        normalized = symbol.strip().upper()
+        _kap_gateway_cache.pop(normalized, None)
+        decision_cache.clear(normalized)
     else:
         _kap_gateway_cache.clear()
+        decision_cache.clear()
 
 _RISK_KEYWORDS = {
     "BLOCKING": ("tedbir", "brüt takas", "brut takas", "kredili işlem yasağı", "açığa satış yasağı", "aciga satis yasagi", "faaliyet durdurma", "konkordato", "iflas", "haciz"),
@@ -59,6 +65,12 @@ def _is_active_risk(published_at: datetime | None, *, now: datetime, lookback_ho
     return normalized.astimezone(UTC) >= now.astimezone(UTC) - timedelta(hours=lookback_hours)
 
 
+def _utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC)
+
+
 def classify_kap(title: str, content: str | None) -> tuple[str, str]:
     text = f"{title} {content or ''}".casefold()
     for level, keywords in _RISK_KEYWORDS.items():
@@ -87,7 +99,15 @@ async def sync_kap_events(symbol: str, limit: int = 50) -> list[KapEvent]:
         if cached and time.monotonic() - cached[0] < KAP_GATEWAY_CACHE_TTL_SECONDS:
             payload = cached[1]
         else:
-            payload = await gateway_client.get_kap(symbol, limit)
+            task = _kap_inflight.get(symbol)
+            if task is None:
+                task = asyncio.create_task(gateway_client.get_kap(symbol, limit))
+                _kap_inflight[symbol] = task
+            try:
+                payload = await task
+            finally:
+                if _kap_inflight.get(symbol) is task:
+                    _kap_inflight.pop(symbol, None)
             _kap_gateway_cache[symbol] = (time.monotonic(), payload)
     except (GatewayUnavailable, GatewayError):
         return []
@@ -111,6 +131,8 @@ async def sync_kap_events(symbol: str, limit: int = 50) -> list[KapEvent]:
                 row = KapEvent(symbol=symbol, title=title, content=content, event_type=event_type, risk_level=risk_level, published_at=published_at, source=str(payload.get("source") or "MATRIKS_NEWS_FALLBACK"), raw_json=raw)
                 session.add(row); created.append(row)
             await session.commit()
+            if created:
+                decision_cache.clear(symbol)
     except Exception:
         logger.exception("KAP persistence failed symbol=%s", symbol)
         return []
@@ -125,16 +147,25 @@ async def get_kap_context(symbols: list[str]) -> dict[str, Any]:
         await sync_kap_events(symbol)
         try:
             async with async_session_factory() as session:
-                rows = list((await session.execute(select(KapEvent).where(KapEvent.symbol == symbol).order_by(KapEvent.published_at.desc().nullslast()).limit(10))).scalars().all())
-                # Unknown dates stay visible for audit but never become an
-                # unbounded live BUY lock. Only dated events enter the window.
                 now = datetime.now(UTC)
-                risk_rows = [row for row in rows if row.risk_level in {"HIGH", "BLOCKING"} and _is_active_risk(row.published_at, now=now, lookback_hours=24)]
+                cutoff = now - timedelta(hours=24)
+                rows = list((await session.execute(select(KapEvent).where(KapEvent.symbol == symbol).order_by(KapEvent.published_at.desc().nullslast()).limit(10))).scalars().all())
+                risk_rows = list((await session.execute(select(KapEvent).where(
+                    KapEvent.symbol == symbol,
+                    KapEvent.risk_level.in_(("HIGH", "BLOCKING")),
+                    KapEvent.published_at.is_not(None),
+                    KapEvent.published_at >= cutoff,
+                ).order_by(KapEvent.published_at.desc()))).scalars().all())
+                unknown_risk_rows = list((await session.execute(select(KapEvent).where(
+                    KapEvent.symbol == symbol,
+                    KapEvent.risk_level.in_(("HIGH", "BLOCKING")),
+                    KapEvent.published_at.is_(None),
+                ).order_by(KapEvent.cached_at.desc()).limit(5))).scalars().all())
         except Exception:
             result[symbol] = {"latestEvents": [], "riskEvents24h": [], "hasBlockingRisk": False, "summary": "KAP unavailable"}; continue
         serialize = lambda row: {"title": row.title, "eventType": row.event_type, "riskLevel": row.risk_level, "publishedAt": row.published_at.isoformat() if row.published_at else None, "dateUnknown": row.published_at is None, "source": row.source}
-        important_rows = sorted(rows, key=lambda row: (row.risk_level in {"BLOCKING", "HIGH"}, row.published_at or datetime.min.replace(tzinfo=UTC)), reverse=True)[:5]
-        newest = max((row.published_at for row in rows if row.published_at), default=None)
+        important_rows = sorted(rows, key=lambda row: (row.risk_level in {"BLOCKING", "HIGH"}, _utc(row.published_at) or datetime.min.replace(tzinfo=UTC)), reverse=True)[:5]
+        newest = max((_utc(row.published_at) for row in rows if row.published_at), default=None)
         kap_age = max(0.0, (datetime.now(UTC) - newest).total_seconds()) if newest else None
-        result[symbol] = {"latestEvents": [serialize(row) for row in important_rows], "riskEvents24h": [serialize(row) for row in risk_rows], "hasBlockingRisk": any(row.risk_level == "BLOCKING" for row in risk_rows), "kapAgeSeconds": kap_age, "summary": f"{len(rows)} KAP events, {len(risk_rows)} elevated risk events"}
+        result[symbol] = {"latestEvents": [serialize(row) for row in important_rows], "riskEvents24h": [serialize(row) for row in risk_rows], "unknownDateRiskWarnings": [serialize(row) for row in unknown_risk_rows], "hasBlockingRisk": any(row.risk_level == "BLOCKING" for row in risk_rows), "hasUnknownDateRisk": bool(unknown_risk_rows), "kapAgeSeconds": kap_age, "summary": f"{len(rows)} recent KAP events, {len(risk_rows)} active risks, {len(unknown_risk_rows)} unknown-date warnings"}
     return result

@@ -14,6 +14,7 @@ from sqlalchemy import select
 from app.services.notifications import notify_order_event
 from app.services.order_state_machine import FINAL, RANK, transition
 from app.services.order_lifecycle import apply_callback
+from app.services.decision_gate import decision_cache
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,8 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
             reason=body.matriks_message,
             request_id=body.request_id,
         )
+    if event_applied and body.status.upper() in {"PARTIALLY_FILLED", "FILLED"}:
+        decision_cache.clear(body.symbol)
 
     return OrderResultResponse(
         status="ok" if persisted else "error",

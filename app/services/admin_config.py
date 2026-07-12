@@ -89,6 +89,10 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "false",
         "Matriks botun real hesaba emir gondermesine izin verir.",
     ),
+    "tradingKillSwitchActive": ConfigDefinition("tradingKillSwitchActive", "bool", "false", "true iken tum order dispatch yollarini kapatir."),
+    "forceSafeMode": ConfigDefinition("forceSafeMode", "bool", "false", "true iken analiz surer, order dispatch kapanir."),
+    "buyAllowedSymbols": ConfigDefinition("buyAllowedSymbols", "string", risk_config.allowed_symbols, "Yeni BUY emirlerine izinli semboller."),
+    "sellExitAllowedSymbols": ConfigDefinition("sellExitAllowedSymbols", "string", risk_config.allowed_symbols, "Mevcut pozisyonlardan SELL_EXIT izinli semboller."),
     "botRealLiveModeAllowed": ConfigDefinition(
         "botRealLiveModeAllowed",
         "bool",
@@ -255,8 +259,7 @@ async def set_admin_config_value(
 
 
 async def is_kill_switch_enabled(session: AsyncSession) -> bool:
-    value = await get_admin_config_value(session, "killSwitchEnabled")
-    return _parse_bool(value)
+    return _parse_bool(await get_admin_config_value(session, "killSwitchEnabled")) or _parse_bool(await get_admin_config_value(session, "tradingKillSwitchActive")) or _parse_bool(await get_admin_config_value(session, "forceSafeMode"))
 
 
 async def get_trading_mode_override(session: AsyncSession) -> SignalMode | None:

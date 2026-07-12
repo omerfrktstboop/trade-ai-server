@@ -67,6 +67,8 @@ async def gateway_runtime_config() -> dict:
         for value in values["allowedSymbols"].split(",")
         if value.strip()
     }
+    buy_symbols = [s.strip().upper() for s in values["buyAllowedSymbols"].split(",") if s.strip()]
+    sell_symbols = [s.strip().upper() for s in values["sellExitAllowedSymbols"].split(",") if s.strip()]
     symbols.update(row.symbol.strip().upper() for row in portfolio if row.qty > 0)
     # Data-only abonelikler: emir yolu RiskEngine'in allowedSymbols
     # kontrolünden geçtiği için bunlara emir gidemez; gateway yalnızca
@@ -88,6 +90,11 @@ async def gateway_runtime_config() -> dict:
     config = {
         "ok": True,
         "symbols": sorted(symbols),
+        "subscriptionSymbols": sorted(symbols),
+        "buyAllowedSymbols": sorted(set(buy_symbols)),
+        "sellExitAllowedSymbols": sorted(set(sell_symbols)),
+        "tradingKillSwitchActive": values["tradingKillSwitchActive"] == "true" or values["killSwitchEnabled"] == "true",
+        "forceSafeMode": values["forceSafeMode"] == "true",
         "lockedLongTermQty": locked_qty,
         "mode": _effective_mode(
             values["botMode"],

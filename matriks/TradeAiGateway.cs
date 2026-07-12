@@ -115,6 +115,7 @@ namespace Matriks.Lean.Algotrader
 
         private string[] AllowedSymbols = new string[0];
         private Dictionary<string, decimal> LockedLongTermQty = new Dictionary<string, decimal>();
+        private Dictionary<string, decimal> BotOwnedQty = new Dictionary<string, decimal>();
 
         // ── Constants ────────────────────────────────────────────────
 
@@ -124,6 +125,7 @@ namespace Matriks.Lean.Algotrader
         private const int ConfigStaleSeconds = 180;
         private const int AccountVerificationMaxAgeSeconds = 5;
         private const int PositionSyncIntervalSeconds = 45;
+        private const int MaxPositionSyncAgeSeconds = 90;
         private static readonly TimeSpan IdempotencyTtl = TimeSpan.FromHours(24);
 
         // ── HTTP server state ────────────────────────────────────────
@@ -187,6 +189,11 @@ namespace Matriks.Lean.Algotrader
         private readonly ConcurrentDictionary<string, string> _lastReportedStatusByKey = new ConcurrentDictionary<string, string>();
         private Task _orderResultWorker;
         private DateTime _lastPositionSyncUtc = DateTime.MinValue;
+        private int _positionSnapshotGeneration;
+        private bool _positionSnapshotCompleteFlag;
+        private bool _positionSnapshotNonEmpty;
+        private string _positionSnapshotConfidence = "NONE";
+        private readonly ConcurrentDictionary<string, DateTime> _lastPositionEventUtcBySymbol = new ConcurrentDictionary<string, DateTime>();
         private DateTime _lastNewsReceivedUtc = DateTime.MinValue;
         private readonly List<string> _newsTrackedSymbols = new List<string>();
         private readonly List<NewsKeywordSubscription> _newsKeywordSubscriptions = new List<NewsKeywordSubscription>();
@@ -761,6 +768,11 @@ namespace Matriks.Lean.Algotrader
                     Dictionary<string, decimal> lockedLongTermQty = cfg["lockedLongTermQty"] != null
                         ? cfg["lockedLongTermQty"].ToObject<Dictionary<string, decimal>>()
                         : new Dictionary<string, decimal>();
+                    Dictionary<string, decimal> botOwnedQty = cfg["botOwnedQty"] != null
+                        ? cfg["botOwnedQty"].ToObject<Dictionary<string, decimal>>()
+                        : new Dictionary<string, decimal>();
+                    if (lockedLongTermQty.Any(x => x.Value < 0m))
+                    { SafeDebug("Server config rejected: negative locked quantity"); return false; }
                     string runtimeMode = NormalizeMode(cfg.Value<string>("mode"));
                     bool enableDemoOrders = cfg.Value<bool?>("enableDemoOrders") ?? false;
                     bool enableRealOrders = cfg.Value<bool?>("enableRealOrders") ?? false;
@@ -799,6 +811,7 @@ namespace Matriks.Lean.Algotrader
                     IndicatorPeriod = indicatorPeriod;
                     AllowedSymbols = symbols;
                     LockedLongTermQty = lockedLongTermQty;
+                    BotOwnedQty = botOwnedQty;
                     RuntimeMode = runtimeMode;
                     EnableDemoOrders = enableDemoOrders;
                     EnableRealOrders = enableRealOrders;
@@ -999,15 +1012,27 @@ namespace Matriks.Lean.Algotrader
                 decimal netQty;
                 _accountNetQtyBySymbol.TryGetValue(kv.Key, out netQty);
                 decimal locked = GetLockedLongTermQty(kv.Key);
+                if (locked > netQty)
+                    SafeDebug("LOCKED_QTY_ALARM symbol=" + kv.Key + " locked=" + locked + " accountNet=" + netQty);
+                decimal botOwned = GetBotOwnedQty(kv.Key);
+                decimal botSellable = Math.Max(0m, Math.Min(botOwned, kv.Value - locked));
+                DateTime eventUtc;
+                bool hasRealtimeEvent = _lastPositionEventUtcBySymbol.TryGetValue(kv.Key, out eventUtc);
                 entries.Add(new
                 {
                     symbol = kv.Key,
                     accountNetQty = ToDouble(netQty),
                     accountAvailableQty = ToDouble(kv.Value),
                     lockedLongTermQty = ToDouble(locked),
-                    sellableQty = ToDouble(Math.Max(0m, kv.Value - locked)),
-                    botQty = ToDouble(kv.Value), // deprecated compatibility alias
-                    totalQty = ToDouble(netQty)
+                    botOwnedQty = ToDouble(botOwned),
+                    botSellableQty = ToDouble(botSellable),
+                    sellableQty = ToDouble(botSellable),
+                    botQty = ToDouble(botOwned), // deprecated compatibility alias
+                    totalQty = ToDouble(netQty),
+                    source = hasRealtimeEvent ? "REALTIME_EVENT" : "SNAPSHOT",
+                    eventTimestamp = hasRealtimeEvent ? eventUtc.ToString("o") : null,
+                    snapshotGeneration = _positionSnapshotGeneration,
+                    receivedAt = _lastPositionSyncUtc == DateTime.MinValue ? null : _lastPositionSyncUtc.ToString("o")
                 });
             }
 
@@ -1032,6 +1057,11 @@ namespace Matriks.Lean.Algotrader
             {
                 ok = true,
                 positionsLoaded = _realPositionsLoadedFromSnapshot,
+                snapshotCompleteFlag = _positionSnapshotCompleteFlag,
+                snapshotNonEmpty = _positionSnapshotNonEmpty,
+                snapshotAgeSeconds = _lastPositionSyncUtc == DateTime.MinValue ? (double?)null : Math.Round((DateTime.UtcNow - _lastPositionSyncUtc).TotalSeconds, 1),
+                snapshotGeneration = _positionSnapshotGeneration,
+                confidence = _positionSnapshotConfidence,
                 positions = entries
             });
         }
@@ -2269,8 +2299,12 @@ namespace Matriks.Lean.Algotrader
         /// </summary>
         private decimal GetSellableQty(string symbol)
         {
-            decimal sellable = GetAccountAvailableQty(symbol) - GetLockedLongTermQty(symbol);
-            return sellable > 0m ? sellable : 0m;
+            if (_lastPositionSyncUtc == DateTime.MinValue
+                || (DateTime.UtcNow - _lastPositionSyncUtc).TotalSeconds > MaxPositionSyncAgeSeconds
+                || (_positionSnapshotConfidence != "HIGH" && _positionSnapshotConfidence != "MEDIUM"))
+                return 0m;
+            decimal accountFree = GetAccountAvailableQty(symbol) - GetLockedLongTermQty(symbol);
+            return Math.Max(0m, Math.Min(GetBotOwnedQty(symbol), accountFree));
         }
 
         private OrderExecutionResult SendGatewayLimitOrder(string requestId, string symbol, string side, decimal qty, decimal limitPrice)
@@ -2973,10 +3007,17 @@ namespace Matriks.Lean.Algotrader
             return LockedLongTermQty.TryGetValue(symbol, out var qty) ? qty : 0m;
         }
 
+        private decimal GetBotOwnedQty(string symbol)
+        {
+            decimal qty;
+            return BotOwnedQty.TryGetValue(NormalizeSymbol(symbol), out qty) ? Math.Max(0m, qty) : 0m;
+        }
+
         private void LoadRealPositionsSnapshot()
         {
             try
             {
+                DateTime snapshotStartedUtc = DateTime.UtcNow;
                 var positions = GetRealPositions();
                 if (positions == null)
                 {
@@ -3003,6 +3044,9 @@ namespace Matriks.Lean.Algotrader
                     if (position == null) continue;
                     string symbol = NormalizeSymbol(position.Symbol);
                     if (symbol == "") continue;
+                    DateTime newerEventUtc;
+                    if (_lastPositionEventUtcBySymbol.TryGetValue(symbol, out newerEventUtc) && newerEventUtc > snapshotStartedUtc)
+                        continue;
                     netSnapshot[symbol] = position.QtyNet;
                     availableSnapshot[symbol] = position.QtyAvailable;
                     if (position.QtyNet != 0m || position.QtyAvailable != 0m)
@@ -3016,6 +3060,10 @@ namespace Matriks.Lean.Algotrader
 
                 _realPositionsLoadedFromSnapshot = true;
                 _lastPositionSyncUtc = DateTime.UtcNow;
+                _positionSnapshotCompleteFlag = PositionReceiveComplated;
+                _positionSnapshotNonEmpty = positions.Count > 0;
+                _positionSnapshotGeneration++;
+                _positionSnapshotConfidence = PositionReceiveComplated ? "HIGH" : (positions.Count > 0 ? "MEDIUM" : "LOW");
                 SafeDebug("Real positions snapshot loaded count=" + positions.Count);
             }
             catch (Exception ex)
@@ -3037,6 +3085,7 @@ namespace Matriks.Lean.Algotrader
                 EnsurePortfolioSymbolSubscribed(symbol);
             _accountNetQtyBySymbol[symbol] = position.QtyNet;
             _accountAvailableQtyBySymbol[symbol] = position.QtyAvailable;
+            _lastPositionEventUtcBySymbol[symbol] = DateTime.UtcNow;
             SafeDebug(source + " position symbol=" + symbol
                 + " qtyAvailable=" + position.QtyAvailable
                 + " qtyNet=" + position.QtyNet

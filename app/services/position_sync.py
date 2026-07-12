@@ -20,7 +20,7 @@ from sqlalchemy import delete, select
 
 from app.config import settings
 from app.db.session import async_session_factory
-from app.models.db import BotPosition
+from app.models.db import BotPosition, OrderLog
 from app.services.matriks_gateway import (
     GatewayError,
     GatewayUnavailable,
@@ -47,27 +47,26 @@ async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
         logger.warning("Position sync skipped: gateway error %s", exc)
         return 0
 
-    if not snapshot.get("positionsLoaded"):
-        logger.info("Position sync skipped: gateway has not loaded positions yet")
+    confidence = str(snapshot.get("confidence", "UNKNOWN")).upper()
+    if confidence not in {"HIGH", "MEDIUM"}:
+        logger.info("Position sync skipped: gateway snapshot confidence=%s", confidence)
         return 0
-
-    entries = snapshot.get("positions") or []
-    positions: dict[str, float] = {}
-    for entry in entries:
-        symbol = str(entry.get("symbol", "")).strip().upper()
-        if not symbol:
-            continue
-        try:
-            qty = float(entry.get("botQty", 0.0))
-        except (TypeError, ValueError):
-            logger.warning("Position sync ignored invalid qty symbol=%s", symbol)
-            continue
-        if qty > 0:
-            positions[symbol] = qty
 
     synced = 0
     try:
         async with async_session_factory() as session:
+            # Bot ownership comes exclusively from cumulative ledger fills.
+            # Replaying a partial/final callback cannot double count because
+            # each request_id has one row and filled_qty is monotonic.
+            orders = (await session.execute(
+                select(OrderLog).where(OrderLog.status.in_(("PARTIALLY_FILLED", "FILLED")))
+            )).scalars().all()
+            positions: dict[str, float] = {}
+            for order in orders:
+                symbol = order.symbol.strip().upper()
+                signed = float(order.filled_qty or 0.0) * (1 if order.action.upper() == "BUY" else -1)
+                positions[symbol] = max(0.0, positions.get(symbol, 0.0) + signed)
+            positions = {symbol: qty for symbol, qty in positions.items() if qty > 0}
             for symbol, qty in positions.items():
                 row = (
                     await session.execute(

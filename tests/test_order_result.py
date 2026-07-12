@@ -115,8 +115,7 @@ class TestOrderResultRequest:
         assert body_dict.get("order_id") is None
 
     @pytest.mark.asyncio
-    async def test_returns_ok_response_even_on_db_error(self):
-        """When DB commit fails, endpoint still returns {'status': 'ok'}."""
+    async def test_returns_503_on_db_error(self):
         from app.routers.order_result import record_order_result
 
         request = OrderResultRequest.model_validate(
@@ -135,8 +134,9 @@ class TestOrderResultRequest:
             "app.routers.order_result.async_session_factory",
             side_effect=RuntimeError("simulated DB outage"),
         ):
-            resp = await record_order_result(request)
-            assert resp.status == "ok"
+            with pytest.raises(Exception) as exc:
+                await record_order_result(request)
+            assert getattr(exc.value, "status_code", None) == 503
 
     def test_matrix_message_passed_to_order_log(self):
         """Verify matrix_message flows from request body into OrderLog."""

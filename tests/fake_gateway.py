@@ -168,6 +168,10 @@ class FakeGateway:
                 {
                     "ok": True,
                     "positionsLoaded": self.positions_loaded,
+                    "confidence": "HIGH" if self.positions_loaded else "LOW",
+                    "snapshotCompleteFlag": self.positions_loaded,
+                    "snapshotNonEmpty": bool(self.positions),
+                    "snapshotGeneration": 1,
                     "positions": self.positions,
                 },
             )

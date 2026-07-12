@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, func
+from sqlalchemy import CheckConstraint, DateTime, Float, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -12,6 +12,7 @@ from app.db.base import Base
 
 class LockedPosition(Base):
     __tablename__ = "locked_positions"
+    __table_args__ = (CheckConstraint("qty >= 0", name="ck_locked_positions_qty_nonnegative"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(String(16), index=True, nullable=False)

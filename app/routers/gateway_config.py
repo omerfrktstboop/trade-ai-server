@@ -13,6 +13,7 @@ limits on top):
 
 import hashlib
 import json
+import math
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -85,7 +86,11 @@ async def gateway_runtime_config() -> dict:
     locked_qty: dict[str, float] = {}
     for row in locked:
         symbol = row.symbol.strip().upper()
-        locked_qty[symbol] = locked_qty.get(symbol, 0.0) + float(row.qty)
+        qty = float(row.qty)
+        if not math.isfinite(qty) or qty < 0:
+            raise ValueError(f"Invalid locked quantity for {symbol}")
+        locked_qty[symbol] = locked_qty.get(symbol, 0.0) + qty
+    bot_owned_qty = {row.symbol.strip().upper(): float(row.qty) for row in portfolio if row.qty > 0}
 
     config = {
         "ok": True,
@@ -96,6 +101,7 @@ async def gateway_runtime_config() -> dict:
         "tradingKillSwitchActive": values["tradingKillSwitchActive"] == "true" or values["killSwitchEnabled"] == "true",
         "forceSafeMode": values["forceSafeMode"] == "true",
         "lockedLongTermQty": locked_qty,
+        "botOwnedQty": bot_owned_qty,
         "mode": _effective_mode(
             values["botMode"],
             profile,

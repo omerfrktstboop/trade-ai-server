@@ -65,8 +65,8 @@ async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
             for order in orders:
                 symbol = order.symbol.strip().upper()
                 signed = float(order.filled_qty or 0.0) * (1 if order.action.upper() == "BUY" else -1)
-                positions[symbol] = max(0.0, positions.get(symbol, 0.0) + signed)
-            positions = {symbol: qty for symbol, qty in positions.items() if qty > 0}
+                positions[symbol] = positions.get(symbol, 0.0) + signed
+            positions = {symbol: max(0.0, qty) for symbol, qty in positions.items() if qty > 0}
             for symbol, qty in positions.items():
                 row = (
                     await session.execute(

@@ -124,3 +124,11 @@ class TestSyncPositions:
 
         assert synced == 0
         assert await _positions() == {}
+
+    async def test_buy_minus_sell_is_independent_of_row_order(self):
+        fake = FakeGateway()
+        await _seed_fill("sell-first", "AKBNK", "SELL", 10)
+        await _seed_fill("buy-second", "AKBNK", "BUY", 25)
+        synced = await sync_positions_from_gateway(make_client(fake))
+        assert synced == 1
+        assert await _positions() == {"AKBNK": 15.0}

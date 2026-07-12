@@ -50,6 +50,7 @@ from app.services.notifications import notify_gateway_event, notify_order_event,
 from app.services.manual_approvals import queue_response
 from app.services.order_sync import cancel_timed_out_orders
 from app.services.order_ledger import mark_send_result, mark_send_started, reserve_order
+from app.services.order_preflight import validate_order_preflight
 from app.services.signal_override import list_pending_override_symbols
 from app.services.trade_profile import get_active_profile
 
@@ -429,6 +430,27 @@ class SymbolScanner:
                 result.mode.value,
                 response.request_id,
             )
+            return
+
+        try:
+            async with async_session_factory() as session:
+                if await is_kill_switch_enabled(session):
+                    logger.warning("Order dispatch blocked by kill switch requestId=%s", response.request_id)
+                    return
+                preflight_config = await build_runtime_risk_config(session)
+            fresh_snapshot = await self._gateway.get_snapshot(response.symbol)
+            fresh_positions = await self._gateway.get_positions()
+            fresh_health = await self._gateway.health()
+            preflight_reason = validate_order_preflight(
+                payload=fresh_snapshot.get("payload") or {}, positions=fresh_positions,
+                health=fresh_health, side=response.action.value, qty=response.qty,
+                limit_price=response.price, decision_created_utc=result.decision_created_utc,
+                max_spread_pct=preflight_config.max_spread_pct_for_buy,
+            )
+        except Exception as exc:
+            preflight_reason = "order-time snapshot unavailable: " + str(exc)
+        if preflight_reason:
+            logger.warning("Order preflight blocked requestId=%s reason=%s", response.request_id, preflight_reason)
             return
 
         cooldown_key = (response.symbol.strip().upper(), response.action)

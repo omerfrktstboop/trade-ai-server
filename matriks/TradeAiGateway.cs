@@ -126,6 +126,8 @@ namespace Matriks.Lean.Algotrader
         private const int AccountVerificationMaxAgeSeconds = 5;
         private const int PositionSyncIntervalSeconds = 45;
         private const int MaxPositionSyncAgeSeconds = 90;
+        private const int MaxQuoteAgeSecondsForOrder = 15;
+        private const int MaxDepthAgeSecondsForOrder = 10;
         private static readonly TimeSpan IdempotencyTtl = TimeSpan.FromHours(24);
 
         // ── HTTP server state ────────────────────────────────────────
@@ -142,6 +144,7 @@ namespace Matriks.Lean.Algotrader
         private ConcurrentDictionary<string, decimal> _accountAvailableQtyBySymbol = new ConcurrentDictionary<string, decimal>();
         private readonly ConcurrentDictionary<string, List<decimal>> _closeHistoryBySymbol = new ConcurrentDictionary<string, List<decimal>>();
         private readonly ConcurrentDictionary<string, DateTime> _lastCloseBarUtcBySymbol = new ConcurrentDictionary<string, DateTime>();
+        private readonly ConcurrentDictionary<string, DateTime> _lastMarketDataEventUtcBySymbol = new ConcurrentDictionary<string, DateTime>();
         private readonly ConcurrentDictionary<string, MarketQuoteSnapshot> _lastValidQuoteBySymbol = new ConcurrentDictionary<string, MarketQuoteSnapshot>();
         private readonly ConcurrentDictionary<string, OhlcvSnapshot> _lastOhlcvBySymbol = new ConcurrentDictionary<string, OhlcvSnapshot>();
         private readonly ConcurrentDictionary<string, DateTime> _marketDataWarningUtcByKey = new ConcurrentDictionary<string, DateTime>();
@@ -264,6 +267,9 @@ namespace Matriks.Lean.Algotrader
         public override void OnDataUpdate(BarDataEventArgs barData)
         {
             ResetDailyCachesIfNeeded();
+            string eventSymbol = ResolveBarEventSymbol(barData.SymbolId);
+            if (!string.IsNullOrWhiteSpace(eventSymbol))
+                _lastMarketDataEventUtcBySymbol[eventSymbol] = DateTime.UtcNow;
             UpdateOhlcvSnapshotFromBarData(barData);
         }
 
@@ -2097,8 +2103,12 @@ namespace Matriks.Lean.Algotrader
             }
             // RuntimeMode from validated server config is the sole authority.
             string requestMode = string.IsNullOrWhiteSpace(order.Mode) ? RuntimeMode : NormalizeMode(order.Mode);
-            decimal qty = ToDecimal(order.Qty);
-            decimal price = ToDecimal(order.LimitPrice);
+            bool finiteOrderValues = !double.IsNaN(order.Qty) && !double.IsInfinity(order.Qty)
+                && !double.IsNaN(order.LimitPrice) && !double.IsInfinity(order.LimitPrice)
+                && Math.Abs(order.Qty) <= (double)decimal.MaxValue
+                && Math.Abs(order.LimitPrice) <= (double)decimal.MaxValue;
+            decimal qty = finiteOrderValues ? ToDecimal(order.Qty) : 0m;
+            decimal price = finiteOrderValues ? ToDecimal(order.LimitPrice) : 0m;
             int finalQty;
             string quantityError;
             decimal roundedPrice = RoundPriceStepBistViop(symbol, price);
@@ -2119,6 +2129,8 @@ namespace Matriks.Lean.Algotrader
 
             if (side != "BUY" && side != "SELL")
                 rejection = "unknown side=" + order.Side;
+            else if (!finiteOrderValues)
+                rejection = "qty/limitPrice must be finite";
             else if (orderConfig.TradingKillSwitchActive || orderConfig.ForceSafeMode)
                 rejection = "trading kill switch / force safe mode is active";
             else if (side == "BUY" && !orderConfig.BuyAllowedSymbols.Contains(symbol))
@@ -2160,6 +2172,8 @@ namespace Matriks.Lean.Algotrader
                     + GetAccountAvailableQty(symbol)
                     + " locked=" + GetLockedLongTermQty(symbol) + ")";
             else
+                rejection = ValidateOrderMarketData(symbol, side, roundedPrice);
+            if (rejection == null)
                 rejection = CheckModeGates(RuntimeMode);
 
             if (rejection != null)
@@ -2258,6 +2272,45 @@ namespace Matriks.Lean.Algotrader
         /// Mode kapıları — server'ın bildirdiği mode'a göre son savunma hattı.
         /// null → geçti; aksi halde red gerekçesi.
         /// </summary>
+        private string ValidateOrderMarketData(string symbol, string side, decimal roundedLimitPrice)
+        {
+            if (!IsOrderSessionOpen())
+                return "trading session is closed";
+            DateTime eventUtc;
+            if (!_lastMarketDataEventUtcBySymbol.TryGetValue(symbol, out eventUtc))
+                return "market data event timestamp is unknown";
+            double quoteAge = (DateTime.UtcNow - eventUtc).TotalSeconds;
+            if (quoteAge < 0 || quoteAge > MaxQuoteAgeSecondsForOrder)
+                return "quote is stale ageSeconds=" + quoteAge;
+            MarketQuoteSnapshot quote = ReadMarketQuote(symbol);
+            DepthSnapshot depth = ReadDepthSnapshot(symbol, 25);
+            if (!quote.Reliable || quote.Bid <= 0m || quote.Ask <= 0m)
+                return "quote is unavailable or unreliable";
+            if (depth.Analysis == null || !depth.Analysis.DepthReliable
+                || depth.Analysis.DepthAgeSeconds > MaxDepthAgeSecondsForOrder)
+                return "depth is unavailable or stale";
+            if (depth.Analysis.BestBid >= depth.Analysis.BestAsk)
+                return "crossed order book";
+            if (depth.Analysis.BidSizeTop1 <= 0m || depth.Analysis.AskSizeTop1 <= 0m)
+                return "depth sizes are not positive";
+            if (side == "BUY" && depth.Analysis.SpreadPct > 0.50m)
+                return "BUY spread exceeds gateway hard limit";
+            decimal reference = side == "BUY" ? depth.Analysis.BestAsk : depth.Analysis.BestBid;
+            decimal driftPct = Math.Abs(roundedLimitPrice - reference) / reference * 100m;
+            if (driftPct > 0.75m)
+                return "limit price drift exceeds 0.75 percent";
+            return null;
+        }
+
+        private static bool IsOrderSessionOpen()
+        {
+            DateTime now = DateTime.Now;
+            if (now.DayOfWeek == DayOfWeek.Saturday || now.DayOfWeek == DayOfWeek.Sunday)
+                return false;
+            TimeSpan time = now.TimeOfDay;
+            return time >= new TimeSpan(9, 30, 0) && time <= new TimeSpan(18, 15, 0);
+        }
+
         private string CheckModeGates(string mode)
         {
             if (mode == "PAPER")
@@ -2669,6 +2722,20 @@ namespace Matriks.Lean.Algotrader
             if (depth != null && depth.AskRows != null)
                 result.Asks = depth.AskRows.Take(levels).Select((row, index) => new DepthLevelSnapshot { Level = index + 1, Price = row.Price, Size = row.Size, OrderCount = row.OrderCount }).ToList();
             result.Analysis = AnalyzeDepth(result.Bids, result.Asks);
+            DateTime eventUtc;
+            if (_lastMarketDataEventUtcBySymbol.TryGetValue(NormalizeSymbol(symbol), out eventUtc))
+            {
+                result.Analysis.DepthTimestamp = eventUtc.ToString("o");
+                result.Analysis.DepthAgeSeconds = Math.Max(0.0, (DateTime.UtcNow - eventUtc).TotalSeconds);
+                result.Analysis.DepthReliable = result.Analysis.DepthReliable
+                    && result.Analysis.DepthAgeSeconds <= MaxDepthAgeSecondsForOrder;
+            }
+            else
+            {
+                result.Analysis.DepthTimestamp = null;
+                result.Analysis.DepthAgeSeconds = double.MaxValue;
+                result.Analysis.DepthReliable = false;
+            }
             return result;
         }
 
@@ -2677,7 +2744,8 @@ namespace Matriks.Lean.Algotrader
             var a = new DepthAnalysisSnapshot { DepthTimestamp = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz"), OrderBookSignal = "UNAVAILABLE" };
             a.LevelsUsed = Math.Min(25, Math.Max(bids.Count, asks.Count));
             a.Available = bids.Count > 0 && asks.Count > 0;
-            a.DepthReliable = a.Available && bids[0].Price > 0m && asks[0].Price > 0m;
+            a.DepthReliable = a.Available && bids[0].Price > 0m && asks[0].Price > 0m
+                && bids[0].Size > 0m && asks[0].Size > 0m && bids[0].Price < asks[0].Price;
             if (!a.DepthReliable) return a;
             a.BestBid = bids[0].Price; a.BestAsk = asks[0].Price;
             a.BidSizeTop1 = bids[0].Size; a.AskSizeTop1 = asks[0].Size;
@@ -2849,6 +2917,14 @@ namespace Matriks.Lean.Algotrader
             payload["ohlcSource"] = ohlc.Source;
             payload["priceSource"] = quote.Source;
             payload["quoteReliable"] = quote.Reliable;
+            payload["quoteAvailable"] = quote.Last > 0m || (quote.Bid > 0m && quote.Ask > 0m);
+            payload["quoteFresh"] = quote.Reliable && quote.UpdatedAt != DateTime.MinValue
+                && (DateTime.Now - quote.UpdatedAt).TotalSeconds <= MaxQuoteAgeSecondsForOrder;
+            payload["quoteEventUtc"] = quote.UpdatedAt == DateTime.MinValue ? null : quote.UpdatedAt.ToUniversalTime().ToString("o");
+            payload["depthEventUtc"] = depthAnalysis.DepthTimestamp;
+            payload["barEventUtc"] = ohlc.UpdatedAt == DateTime.MinValue ? null : ohlc.UpdatedAt.ToUniversalTime().ToString("o");
+            payload["snapshotBuiltUtc"] = DateTime.UtcNow.ToString("o");
+            payload["sessionOpen"] = IsOrderSessionOpen();
             payload["depthReliable"] = depthReliable;
             payload["volume"] = ToDouble(volume);
             payload["rsi"] = rsi;
@@ -3218,6 +3294,9 @@ namespace Matriks.Lean.Algotrader
             bool liveReliable = rawLast > 0m || rawBid > 0m || rawAsk > 0m;
             if (liveReliable)
             {
+                DateTime quoteEventUtc;
+                bool hasEventTime = _lastMarketDataEventUtcBySymbol.TryGetValue(symbol, out quoteEventUtc);
+                bool quoteFresh = hasEventTime && (DateTime.UtcNow - quoteEventUtc).TotalSeconds <= MaxQuoteAgeSecondsForOrder;
                 if (_lastValidQuoteBySymbol.TryGetValue(symbol, out var previous))
                 {
                     if (rawLast <= 0m) rawLast = previous.Last;
@@ -3230,9 +3309,9 @@ namespace Matriks.Lean.Algotrader
                     Bid = rawBid,
                     Ask = rawAsk,
                     Volume = rawVolume,
-                    Reliable = true,
+                    Reliable = quoteFresh,
                     Source = "LIVE",
-                    UpdatedAt = DateTime.Now
+                    UpdatedAt = hasEventTime ? quoteEventUtc.ToLocalTime() : DateTime.MinValue
                 };
                 _lastValidQuoteBySymbol[symbol] = live;
                 if (rawLast > 0m)
@@ -3244,7 +3323,7 @@ namespace Matriks.Lean.Algotrader
                 && (DateTime.Now - cached.UpdatedAt).TotalHours <= 8)
             {
                 cached.Source = "LAST_VALID";
-                cached.Reliable = true;
+                cached.Reliable = false;
                 LogMarketDataWarning(symbol, "QUOTE", "Live quote is zero; using last valid quote");
                 return cached;
             }
@@ -3396,11 +3475,15 @@ namespace Matriks.Lean.Algotrader
             {
                 DateTime previous;
                 DateTime timestampUtc = barTimestamp.ToUniversalTime();
+                var list = _closeHistoryBySymbol.GetOrAdd(symbol, _ => new List<decimal>());
                 if (_lastCloseBarUtcBySymbol.TryGetValue(symbol, out previous)
                     && previous == timestampUtc)
+                {
+                    if (list.Count > 0)
+                        list[list.Count - 1] = lastPrice;
                     return;
+                }
                 _lastCloseBarUtcBySymbol[symbol] = timestampUtc;
-                var list = _closeHistoryBySymbol.GetOrAdd(symbol, _ => new List<decimal>());
                 list.Add(lastPrice);
                 if (list.Count > MaxCloseHistory)
                     list.RemoveAt(0);

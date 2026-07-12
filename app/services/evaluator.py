@@ -25,8 +25,8 @@ router'ı bunları buradan alır — beyin serviste, HTTP katmanı ince.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from app.config import AIProvider, settings
@@ -102,6 +102,7 @@ class EvaluationResult:
 
     response: SignalResponse
     mode: SignalMode
+    decision_created_utc: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -642,6 +643,7 @@ async def evaluate_symbol(
         yakalayıp turu atlar.
     """
     gateway = gateway or gateway_client
+    decision_created_utc = datetime.now(timezone.utc)
     symbol = symbol.strip().upper()
     request_id = request_id or _build_request_id(symbol)
 
@@ -709,7 +711,7 @@ async def evaluate_symbol(
         }
         _log_evaluation(sig_req, response)
         await persist_evaluation(sig_req, payload, raw, response)
-        return EvaluationResult(response=response, mode=sig_req.mode)
+        return EvaluationResult(response=response, mode=sig_req.mode, decision_created_utc=decision_created_utc)
 
     # ── 5. Dış bağlam (haber + akıllı para + admin fundamentals) ─────────
     news_context = await get_news_context([sig_req.symbol])
@@ -796,7 +798,7 @@ async def evaluate_symbol(
     except Exception:
         logger.exception("Position management persistence failed symbol=%s", sig_req.symbol)
 
-    return EvaluationResult(response=response, mode=sig_req.mode)
+    return EvaluationResult(response=response, mode=sig_req.mode, decision_created_utc=decision_created_utc)
 
 
 async def _build_position_context(req: SignalRequest) -> dict[str, Any] | None:

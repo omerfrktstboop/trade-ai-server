@@ -6,6 +6,7 @@ Fake gateway + monkeypatch'lenmiş evaluator/config yardımcılarıyla koşar.
 from __future__ import annotations
 
 from typing import Any
+import asyncio
 
 import pytest
 
@@ -22,6 +23,7 @@ from app.services import scanner as scanner_module
 from app.services.evaluator import EvaluationResult
 from app.services.matriks_gateway import GatewayUnavailable, MatriksGatewayClient
 from app.services.scanner import SymbolScanner
+from app.db.init_db import drop_all, init_db
 from tests.fake_gateway import FakeGateway
 
 
@@ -296,6 +298,8 @@ class TestOrderPath:
 
     @pytest.fixture(autouse=True)
     def no_db_persist(self, monkeypatch):
+        asyncio.run(drop_all())
+        asyncio.run(init_db())
         self.persisted: list[tuple[str, str]] = []
 
         async def fake_persist(scanner_self, response, status, reason):
@@ -304,6 +308,7 @@ class TestOrderPath:
         monkeypatch.setattr(
             SymbolScanner, "_persist_order_outcome", fake_persist
         )
+        yield
 
     def make_scanner(self, fake: FakeGateway) -> SymbolScanner:
         return SymbolScanner(gateway=make_gateway_client(fake))
@@ -411,12 +416,12 @@ class TestOrderPath:
         fake = FakeGateway()
         fake.order_rejection = "EnableDemoOrders=false"
 
-        await self.make_scanner(fake)._maybe_send_order(make_result())
+        await self.make_scanner(fake)._maybe_send_order(make_result(action=SignalAction.SELL))
 
         assert len(fake.orders) == 1
         assert self.persisted == [("REJECTED", "EnableDemoOrders=false")]
 
-    async def test_gateway_unreachable_persisted_as_error(self, monkeypatch):
+    async def test_gateway_unreachable_during_preflight_creates_no_order(self, monkeypatch):
         import httpx
 
         monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
@@ -433,8 +438,7 @@ class TestOrderPath:
 
         await scanner._maybe_send_order(make_result())
 
-        assert len(self.persisted) == 1
-        assert self.persisted[0][0] == "ERROR"
+        assert self.persisted == []
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat
 
 
 # ── Enums ──────────────────────────────────────────────────────────────────
@@ -215,9 +215,9 @@ class SignalResponse(BaseModel):
     request_id: str = Field(..., alias="requestId")
     symbol: str
     action: SignalAction
-    qty: float
+    qty: FiniteFloat
     order_type: OrderType = Field(..., alias="orderType")
-    price: Optional[float] = None
+    price: Optional[FiniteFloat] = None
     confidence_score: float = Field(..., alias="confidenceScore")
     risk_score: float = Field(..., alias="riskScore")
     allow_order: bool = Field(..., alias="allowOrder")
@@ -247,9 +247,9 @@ class AgentSignalResponse(BaseModel):
     fetch_data: Optional[FetchData] = Field(None, alias="fetchData")
 
     # Fields populated for BUY/SELL/WAIT (final decision)
-    qty: float = 0.0
+    qty: FiniteFloat = 0.0
     order_type: OrderType = Field(OrderType.NONE, alias="orderType")
-    price: Optional[float] = None
+    price: Optional[FiniteFloat] = None
     confidence_score: float = Field(0.0, alias="confidenceScore")
     risk_score: float = Field(0.0, alias="riskScore")
     allow_order: bool = Field(False, alias="allowOrder")
@@ -311,9 +311,9 @@ class AgenticSignalResponse(BaseModel):
     required_data_type: Optional[AgenticDataType] = Field(None, alias="requiredDataType")
     confidence_score: float = Field(..., alias="confidenceScore")
     risk_score: float = Field(..., alias="riskScore")
-    qty: float
+    qty: FiniteFloat
     order_type: OrderType = Field(..., alias="orderType")
-    price: Optional[float] = None
+    price: Optional[FiniteFloat] = None
     entry_range: Optional[EntryRange] = Field(None, alias="entryRange")
     stop_loss: Optional[float] = Field(None, alias="stopLoss")
     target_price: Optional[float] = Field(None, alias="targetPrice")

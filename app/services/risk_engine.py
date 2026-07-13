@@ -140,14 +140,20 @@ class RiskEngine:
         # threshold'a eklenir).
         confidence_penalty = 0.0
 
-        # ── 1. Unknown symbol ────────────────────────────────────────
+        # ── 1. Unknown symbol → research-only ────────────────────────
+        # allowedSymbols emir evrenini kısıtlar, analizi değil: izin dışı
+        # sembolde AI'ın güven/risk skoru ve fiyat seviyeleri korunur ki
+        # araştırma sayfası gerçek skorlarla sıralayabilsin; emir yolu
+        # (allowOrder) her koşulda kapalı kalır.
         liquidation_sell = (
             decision.action == SignalAction.SELL and request.bot_position_qty > 0
         )
         if not self.config.is_symbol_allowed(request.symbol) and not liquidation_sell:
-            return self._block(
+            return self._research_only(
                 request,
-                f"Symbol {request.symbol} is not in the allowed list",
+                decision,
+                f"Research-only: symbol {request.symbol} is not in the allowed "
+                f"order list — analysis kept, order dispatch blocked",
             )
 
         # ── 2. Normalise action ──────────────────────────────────────
@@ -586,6 +592,35 @@ class RiskEngine:
     def _opposes_action(signal: str | None, action: SignalAction) -> bool:
         return (signal == SignalAction.BUY.value and action == SignalAction.SELL) or (
             signal == SignalAction.SELL.value and action == SignalAction.BUY
+        )
+
+    def _research_only(
+        self, request: SignalRequest, decision: RiskDecision, reason: str
+    ) -> SignalResponse:
+        """Preserve the AI's analysis but permanently close the order path.
+
+        Used for symbols outside ``allowedSymbols``: the research page ranks
+        by these scores, so unlike ``_block`` the confidence/risk and price
+        levels survive; qty/orderType/allowOrder stay hard-disabled.
+        """
+        base_reason = reason
+        if decision.reason and decision.reason not in reason:
+            base_reason = f"{decision.reason}; {reason}"
+        return SignalResponse(
+            requestId=request.request_id,
+            symbol=request.symbol,
+            action=decision.action,
+            qty=0.0,
+            orderType=OrderType.NONE,
+            price=None,
+            confidenceScore=decision.confidence,
+            riskScore=decision.risk_score,
+            allowOrder=False,
+            requiresConfirmation=False,
+            reason=base_reason,
+            entryRange=decision.entry_range,
+            stopLoss=decision.stop_loss,
+            targetPrice=decision.target_price,
         )
 
     def _block(self, request: SignalRequest, reason: str) -> SignalResponse:

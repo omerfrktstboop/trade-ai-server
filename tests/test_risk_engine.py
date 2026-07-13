@@ -89,14 +89,18 @@ class TestAllowedSymbols:
         assert resp.allow_order is True
         assert resp.action == SignalAction.BUY
 
-    def test_disallowed_symbol_blocked(self):
+    def test_disallowed_symbol_research_only(self):
+        """İzin dışı sembol: analiz korunur, emir yolu kapalı kalır."""
         engine = RiskEngine(_cfg())
         req = _make_request(symbol="GARAN")
         dec = RiskDecision(action=SignalAction.BUY, confidence=85.0, qty=5)
         resp = engine.evaluate(req, dec)
-        assert resp.action == SignalAction.WAIT
+        assert resp.action == SignalAction.BUY
+        assert resp.confidence_score == 85.0
         assert resp.allow_order is False
-        assert "not in the allowed list" in resp.reason
+        assert resp.qty == 0
+        assert resp.requires_confirmation is False
+        assert "not in the allowed order list" in resp.reason
 
     def test_case_insensitive_symbol_lookup(self):
         engine = RiskEngine(_cfg())

@@ -121,8 +121,8 @@ class TestMockProviderFlow:
 class TestRiskEngineEdgeCases:
     """RiskEngine behaviour irrespective of which provider runs."""
 
-    def test_unknown_symbol_overrides_any_decision(self):
-        """GARAN not in allowed → WAIT, even if provider said BUY."""
+    def test_unknown_symbol_blocks_order_but_keeps_analysis(self):
+        """GARAN not in allowed → order path closed, AI analysis preserved."""
         engine = RiskEngine(_cfg())
         req = _req(symbol="GARAN", mode=SignalMode.LIVE)
         decision = RiskDecision(
@@ -132,9 +132,11 @@ class TestRiskEngineEdgeCases:
             qty=10,
         )
         resp = engine.evaluate(req, decision)
-        assert resp.action == SignalAction.WAIT
+        assert resp.action == SignalAction.BUY
+        assert resp.confidence_score == 95.0
         assert resp.allow_order is False
-        assert "not in the allowed list" in resp.reason
+        assert resp.qty == 0
+        assert "not in the allowed order list" in resp.reason
 
     def test_paper_mode_always_blocks(self):
         """PAPER mode → allow_order=False regardless of decision."""

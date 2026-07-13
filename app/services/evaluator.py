@@ -78,6 +78,7 @@ from app.services.effective_risk_config import (
     resolve_effective_risk_config,
 )
 from app.services.market_regime import get_index_regime
+from app.services.market_data_contract import normalize_snapshot_payload
 from app.services.matriks_gateway import (
     GatewayError,
     MatriksGatewayClient,
@@ -167,11 +168,33 @@ def build_payload(
     payload = {
         "symbol": req.symbol,
         "timeframe": req.timeframe,
+        "requestedTimeframe": req.requested_timeframe,
+        "actualBarPeriod": req.actual_bar_period,
+        "actualBarPeriodSeconds": req.actual_bar_period_seconds,
+        "barPeriodSource": req.bar_period_source,
+        "timeframeMismatch": req.timeframe_mismatch,
+        "indicatorPeriod": req.indicator_period,
+        "indicatorPeriodSeconds": req.indicator_period_seconds,
+        "instrumentType": req.instrument_type,
         "lastPrice": req.last_price,
         "open": req.open,
         "high": req.high,
         "low": req.low,
         "volume": req.volume,
+        "barVolume": req.bar_volume,
+        "barVolumeSource": req.bar_volume_source,
+        "barVolumeUnit": req.bar_volume_unit,
+        "barVolumeReliable": req.bar_volume_reliable,
+        "sessionTurnoverTl": req.session_turnover_tl,
+        "totalVol": req.total_vol,
+        "totalVolSource": req.total_vol_source,
+        "totalVolUnit": req.total_vol_unit,
+        "totalVolReliable": req.total_vol_reliable,
+        "volumeIndicatorValue": req.volume_indicator_value,
+        "volumeTlIndicatorValue": req.volume_tl_indicator_value,
+        "barClosed": req.bar_closed,
+        "barIsNew": req.bar_is_new,
+        "barDataIndex": req.bar_data_index,
         "ohlcReliable": req.ohlc_reliable,
         "ohlcSource": req.ohlc_source,
         "quoteReliable": req.quote_reliable,
@@ -688,6 +711,7 @@ def snapshot_to_signal_request(
     server's trade history, so its count would always read zero and silently
     disable the daily-limit gate.
     """
+    payload = normalize_snapshot_payload(payload)
     depth = (
         payload.get("depthAnalysis")
         if isinstance(payload.get("depthAnalysis"), dict)
@@ -700,12 +724,34 @@ def snapshot_to_signal_request(
     return SignalRequest(
         requestId=request_id,
         symbol=symbol,
-        timeframe=payload.get("timeframe", "1h"),
+        timeframe=payload.get("timeframe", "UNKNOWN"),
+        requestedTimeframe=payload.get("requestedTimeframe"),
+        actualBarPeriod=payload.get("actualBarPeriod"),
+        actualBarPeriodSeconds=payload.get("actualBarPeriodSeconds"),
+        barPeriodSource=payload.get("barPeriodSource"),
+        timeframeMismatch=payload.get("timeframeMismatch", False),
+        indicatorPeriod=payload.get("indicatorPeriod"),
+        indicatorPeriodSeconds=payload.get("indicatorPeriodSeconds"),
+        instrumentType=payload.get("instrumentType"),
         lastPrice=payload.get("lastPrice", payload.get("close", 0)),
         open=payload.get("open", 0),
         high=payload.get("high", 0),
         low=payload.get("low", 0),
         volume=payload.get("volume", 0),
+        barVolume=payload.get("barVolume"),
+        barVolumeSource=payload.get("barVolumeSource"),
+        barVolumeUnit=payload.get("barVolumeUnit"),
+        barVolumeReliable=payload.get("barVolumeReliable"),
+        sessionTurnoverTl=payload.get("sessionTurnoverTl"),
+        totalVol=payload.get("totalVol"),
+        totalVolSource=payload.get("totalVolSource"),
+        totalVolUnit=payload.get("totalVolUnit"),
+        totalVolReliable=payload.get("totalVolReliable"),
+        volumeIndicatorValue=payload.get("volumeIndicatorValue"),
+        volumeTlIndicatorValue=payload.get("volumeTlIndicatorValue"),
+        barClosed=payload.get("barClosed"),
+        barIsNew=payload.get("barIsNew"),
+        barDataIndex=payload.get("barDataIndex"),
         ohlcReliable=payload.get("ohlcReliable"),
         ohlcSource=payload.get("ohlcSource"),
         quoteReliable=payload.get("quoteReliable"),

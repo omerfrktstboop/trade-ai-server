@@ -110,6 +110,18 @@ class SignalRequest(BaseModel):
     request_id: str = Field(..., alias="requestId")
     symbol: str
     timeframe: str
+    requested_timeframe: Optional[str] = Field(None, alias="requestedTimeframe")
+    actual_bar_period: Optional[str] = Field(None, alias="actualBarPeriod")
+    actual_bar_period_seconds: Optional[int] = Field(
+        None, alias="actualBarPeriodSeconds", ge=1
+    )
+    bar_period_source: Optional[str] = Field(None, alias="barPeriodSource")
+    timeframe_mismatch: bool = Field(False, alias="timeframeMismatch")
+    indicator_period: Optional[str] = Field(None, alias="indicatorPeriod")
+    indicator_period_seconds: Optional[int] = Field(
+        None, alias="indicatorPeriodSeconds", ge=1
+    )
+    instrument_type: Optional[str] = Field(None, alias="instrumentType")
 
     # OHLCV
     last_price: float = Field(..., alias="lastPrice")
@@ -117,6 +129,22 @@ class SignalRequest(BaseModel):
     high: float
     low: float
     volume: float
+    bar_volume: Optional[float] = Field(None, alias="barVolume")
+    bar_volume_source: Optional[str] = Field(None, alias="barVolumeSource")
+    bar_volume_unit: Optional[str] = Field(None, alias="barVolumeUnit")
+    bar_volume_reliable: Optional[bool] = Field(None, alias="barVolumeReliable")
+    session_turnover_tl: Optional[float] = Field(None, alias="sessionTurnoverTl")
+    total_vol: Optional[float] = Field(None, alias="totalVol")
+    total_vol_source: Optional[str] = Field(None, alias="totalVolSource")
+    total_vol_unit: Optional[str] = Field(None, alias="totalVolUnit")
+    total_vol_reliable: Optional[bool] = Field(None, alias="totalVolReliable")
+    volume_indicator_value: Optional[float] = Field(None, alias="volumeIndicatorValue")
+    volume_tl_indicator_value: Optional[float] = Field(
+        None, alias="volumeTlIndicatorValue"
+    )
+    bar_closed: Optional[bool] = Field(None, alias="barClosed")
+    bar_is_new: Optional[bool] = Field(None, alias="barIsNew")
+    bar_data_index: Optional[int] = Field(None, alias="barDataIndex")
     # Data-quality flag: Matriks intraday snapshots often lack real bar data,
     # so open/high/low may just be lastPrice repeated (see BuildMarketData in
     # TradeAiAgenticBot.cs). When false, the AI must not treat the flat range

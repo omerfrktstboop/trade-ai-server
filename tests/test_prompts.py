@@ -97,7 +97,8 @@ class TestTradingSystemPrompt:
     def test_allowed_symbols_rule(self):
         prompt = get_trading_system_prompt()
         assert "allowedsymbols" in prompt.lower()
-        assert "symbol not in allowed" in prompt.lower()
+        assert "orders are gated server-side" in prompt.lower()
+        assert "must not change your analysis" in prompt.lower()
 
     def test_locked_symbols_rule(self):
         prompt = get_trading_system_prompt()

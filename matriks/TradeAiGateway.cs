@@ -96,6 +96,10 @@ namespace Matriks.Lean.Algotrader
         private string[] BuyAllowedSymbols = new string[0];
         private string[] SellExitAllowedSymbols = new string[0];
         private string MarketIndexSymbol = "XU100";
+        private Dictionary<string, string> InstrumentTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private bool MarketDataDiagnosticsEnabled;
+        private decimal MarketDataDiagnosticSampleRatePct = 10m;
+        private int MarketDataWarningRateLimitSeconds = 60;
         private bool RequireDemoAccount = true;
         private bool DemoAccountConfirmed;
         private decimal MaxOrderValueTl;
@@ -150,6 +154,10 @@ namespace Matriks.Lean.Algotrader
         private readonly ConcurrentDictionary<string, MarketQuoteSnapshot> _lastValidQuoteBySymbol = new ConcurrentDictionary<string, MarketQuoteSnapshot>();
         private readonly ConcurrentDictionary<string, OhlcvSnapshot> _lastOhlcvBySymbol = new ConcurrentDictionary<string, OhlcvSnapshot>();
         private readonly ConcurrentDictionary<string, DateTime> _marketDataWarningUtcByKey = new ConcurrentDictionary<string, DateTime>();
+        private readonly ConcurrentDictionary<string, DateTime> _marketDataDiagnosticUtcBySymbol = new ConcurrentDictionary<string, DateTime>();
+        private readonly ConcurrentDictionary<string, object> _volumeIndicatorBySymbol = new ConcurrentDictionary<string, object>();
+        private readonly ConcurrentDictionary<string, object> _volumeTlIndicatorBySymbol = new ConcurrentDictionary<string, object>();
+        private readonly ConcurrentDictionary<string, PositionMarketSnapshot> _positionMarketBySymbol = new ConcurrentDictionary<string, PositionMarketSnapshot>();
         private readonly ConcurrentDictionary<string, decimal> _maxBid1SizeBySymbol = new ConcurrentDictionary<string, decimal>();
         // Günlük referans fiyat (gün içinde görülen ilk geçerli last) — /movers
         // endpoint'inin değişim yüzdesi bu referansa göre hesaplanır.
@@ -228,7 +236,7 @@ namespace Matriks.Lean.Algotrader
                     AddSymbol(normalized, IndicatorPeriod);
                 }
                 AddSymbolMarketData(normalized);
-                if (!IsIndexSymbol(normalized))
+                if (IsEquitySymbol(normalized))
                     AddSymbolMarketDepth(normalized);
                 RegisterNewsSubscriptionsForSymbol(normalized);
                 InitializeIndicators(normalized);
@@ -272,7 +280,12 @@ namespace Matriks.Lean.Algotrader
             ResetDailyCachesIfNeeded();
             string eventSymbol = ResolveBarEventSymbol(barData.SymbolId);
             if (!string.IsNullOrWhiteSpace(eventSymbol))
-                _lastMarketDataEventUtcBySymbol[eventSymbol] = DateTime.UtcNow;
+            {
+                DateTime eventTime = barData.LastTickTime;
+                _lastMarketDataEventUtcBySymbol[eventSymbol] = eventTime == DateTime.MinValue
+                    ? DateTime.UtcNow
+                    : eventTime.ToUniversalTime();
+            }
             UpdateOhlcvSnapshotFromBarData(barData);
         }
 
@@ -801,6 +814,14 @@ namespace Matriks.Lean.Algotrader
                     string activeProfileCode = cfg.Value<string>("profileCode") ?? "UNKNOWN";
                     string configVersion = cfg.Value<string>("configHash") ?? "UNKNOWN";
                     string marketIndexSymbol = NormalizeSymbol(cfg.Value<string>("marketIndexSymbol"));
+                    Dictionary<string, string> instrumentTypes = cfg["instrumentTypes"] != null
+                        ? cfg["instrumentTypes"].ToObject<Dictionary<string, string>>()
+                        : new Dictionary<string, string>();
+                    bool marketDataDiagnosticsEnabled = cfg.Value<bool?>("marketDataDiagnosticsEnabled") ?? false;
+                    decimal marketDataDiagnosticSampleRatePct = Math.Max(0m, Math.Min(100m,
+                        cfg.Value<decimal?>("marketDataDiagnosticSampleRatePct") ?? 10m));
+                    int marketDataWarningRateLimitSeconds = Math.Max(1, Math.Min(3600,
+                        cfg.Value<int?>("marketDataWarningRateLimitSeconds") ?? 60));
 
                     bool liveMode = runtimeMode == "DEMO_LIVE" || runtimeMode == "REAL_LIVE";
                     if (liveMode && (symbols.Length == 0 || maxOrderValueTl <= 0m
@@ -814,6 +835,15 @@ namespace Matriks.Lean.Algotrader
                     // Parsing above is deliberately completed before any live
                     // field is changed. Invalid live limits remain fail-closed.
                     MarketIndexSymbol = marketIndexSymbol;
+                    InstrumentTypes = instrumentTypes
+                        .Where(x => !string.IsNullOrWhiteSpace(x.Key))
+                        .ToDictionary(
+                            x => NormalizeSymbol(x.Key),
+                            x => NormalizeInstrumentType(x.Value),
+                            StringComparer.OrdinalIgnoreCase);
+                    MarketDataDiagnosticsEnabled = marketDataDiagnosticsEnabled;
+                    MarketDataDiagnosticSampleRatePct = marketDataDiagnosticSampleRatePct;
+                    MarketDataWarningRateLimitSeconds = marketDataWarningRateLimitSeconds;
                     buyAllowedSymbols = buyAllowedSymbols.Where(x => !IsIndexSymbol(x)).ToArray();
                     sellExitAllowedSymbols = sellExitAllowedSymbols.Where(x => !IsIndexSymbol(x)).ToArray();
                     if (_subscriptionsInitialized)
@@ -821,7 +851,17 @@ namespace Matriks.Lean.Algotrader
                         foreach (string symbol in symbols)
                             EnsurePortfolioSymbolSubscribed(symbol);
                     }
+                    bool indicatorPeriodChanged = IndicatorPeriod != indicatorPeriod;
                     IndicatorPeriod = indicatorPeriod;
+                    if (_subscriptionsInitialized && indicatorPeriodChanged)
+                    {
+                        foreach (string subscribedSymbol in symbols)
+                        {
+                            AddSymbol(subscribedSymbol, IndicatorPeriod);
+                            InitializeIndicators(subscribedSymbol);
+                        }
+                        SafeDebug("Indicator/bar period changed; subscriptions refreshed period=" + IndicatorPeriod);
+                    }
                     // Config reload must not remove market-data subscriptions
                     // discovered from the real account portfolio. They remain
                     // data-only unless explicitly present in BUY/SELL allow-lists.
@@ -906,6 +946,9 @@ namespace Matriks.Lean.Algotrader
                         OrderTimeInForce,
                         IndicatorPeriod.ToString(),
                         MarketIndexSymbol,
+                        MarketDataDiagnosticsEnabled.ToString(),
+                        MarketDataDiagnosticSampleRatePct.ToString(),
+                        MarketDataWarningRateLimitSeconds.ToString(),
                     });
                     if (!string.Equals(_lastAppliedConfigSignature, configSignature, StringComparison.Ordinal))
                     {
@@ -1039,7 +1082,8 @@ namespace Matriks.Lean.Algotrader
                 return;
             }
 
-            MarketDataPayload data = BuildMarketData(symbol, "OHLCV");
+            string requestedTimeframe = request.GetQueryValue("timeframe");
+            MarketDataPayload data = BuildMarketData(symbol, "OHLCV", requestedTimeframe);
             await WriteJsonAsync(stream, 200, new
             {
                 ok = true,
@@ -1067,6 +1111,8 @@ namespace Matriks.Lean.Algotrader
                 decimal botSellable = Math.Max(0m, Math.Min(botOwned, kv.Value - locked));
                 DateTime eventUtc;
                 bool hasRealtimeEvent = _lastPositionEventUtcBySymbol.TryGetValue(kv.Key, out eventUtc);
+                PositionMarketSnapshot marketPosition;
+                bool hasMarketPosition = _positionMarketBySymbol.TryGetValue(kv.Key, out marketPosition);
                 entries.Add(new
                 {
                     symbol = kv.Key,
@@ -1078,6 +1124,12 @@ namespace Matriks.Lean.Algotrader
                     sellableQty = ToDouble(botSellable),
                     botQty = ToDouble(botOwned), // deprecated compatibility alias
                     totalQty = ToDouble(netQty),
+                    avgCost = hasMarketPosition ? (object)ToDouble(marketPosition.AvgCost) : null,
+                    openingAveragePrice = hasMarketPosition ? (object)ToDouble(marketPosition.OpeningAveragePrice) : null,
+                    amount = hasMarketPosition ? (object)ToDouble(marketPosition.Amount) : null,
+                    settlementPx = hasMarketPosition ? (object)ToDouble(marketPosition.SettlementPx) : null,
+                    positionValueSource = hasMarketPosition ? "AlgoTraderPosition.Amount" : "UNAVAILABLE",
+                    lastPriceSource = hasMarketPosition ? "AlgoTraderPosition.SettlementPx" : "UNAVAILABLE",
                     source = hasRealtimeEvent ? "REALTIME_EVENT" : "SNAPSHOT",
                     eventTimestamp = hasRealtimeEvent ? eventUtc.ToString("o") : null,
                     snapshotGeneration = _positionSnapshotGeneration,
@@ -1301,8 +1353,11 @@ namespace Matriks.Lean.Algotrader
                 levels = Math.Max(1, Math.Min(25, parsed));
             try
             {
-                if (IsIndexSymbol(symbol))
+                if (!IsEquitySymbol(symbol))
                 {
+                    string skipReason = IsIndexSymbol(symbol)
+                        ? IndexDepthSkipReason
+                        : "INSTRUMENT_ADAPTER_REQUIRED";
                     await WriteJsonAsync(stream, 200, new
                     {
                         ok = true,
@@ -1313,7 +1368,7 @@ namespace Matriks.Lean.Algotrader
                         asks = new List<DepthLevelSnapshot>(),
                         depthAvailable = false,
                         depthReliable = false,
-                        depthSkipReason = IndexDepthSkipReason,
+                        depthSkipReason = skipReason,
                         timestamp = (string)null
                     });
                     return;
@@ -2093,7 +2148,13 @@ namespace Matriks.Lean.Algotrader
                         { "lastPrice", ToDouble(quote.Last) },
                         { "refPrice", ToDouble(refPrice) },
                         { "changePct", Math.Round(changePct, 2) },
-                        { "volume", ToDouble(quote.Volume) },
+                        // Movers historically calls this field volume and the
+                        // discovery service treats it as TL turnover. Keep the
+                        // alias, but publish the semantic fields explicitly.
+                        { "volume", ToDouble(quote.TotalVol) },
+                        { "sessionTurnoverTl", ToDouble(quote.TotalVol) },
+                        { "volumeSemantic", "CUMULATIVE_SESSION_TURNOVER_TL" },
+                        { "volumeSource", "SymbolUpdateField.TotalVol" },
                         { "quoteAgeSeconds", Math.Round((DateTime.Now - quote.UpdatedAt).TotalSeconds, 1) }
                     });
                 }
@@ -2999,26 +3060,24 @@ namespace Matriks.Lean.Algotrader
         private static decimal SafePercent(decimal numerator, decimal denominator)
         { return denominator > 0m ? numerator / denominator * 100m : 0m; }
 
-        private MarketDataPayload BuildMarketData(string symbolRaw, string dataType)
+        private MarketDataPayload BuildMarketData(string symbolRaw, string dataType, string requestedTimeframe = null)
         {
             string symbol = NormalizeSymbol(symbolRaw);
             bool isIndexSymbol = IsIndexSymbol(symbol);
+            bool supportsEquityDepth = IsEquitySymbol(symbol);
 
             MarketQuoteSnapshot quote = ReadMarketQuote(symbol);
             decimal lastPrice = quote.Last;
             decimal bidPrice = quote.Bid;
             decimal askPrice = quote.Ask;
-            decimal volume = quote.Volume;
+            decimal totalVol = quote.TotalVol;
 
-            OhlcvSnapshot ohlc = ResolveOhlcvSnapshot(symbol, lastPrice, volume);
+            OhlcvSnapshot ohlc = ResolveOhlcvSnapshot(symbol, lastPrice, 0m);
             if (lastPrice <= 0m && ohlc.Close > 0m)
             {
                 lastPrice = ohlc.Close;
             }
-            if (volume <= 0m && ohlc.Volume > 0m)
-            {
-                volume = ohlc.Volume;
-            }
+            decimal barVolume = ohlc.Volume;
             decimal open = ohlc.Open;
             decimal high = ohlc.High;
             decimal low = ohlc.Low;
@@ -3038,10 +3097,12 @@ namespace Matriks.Lean.Algotrader
             string depthSummary = "";
             string depthSkipReason = null;
             DepthAnalysisSnapshot depthAnalysis = new DepthAnalysisSnapshot { OrderBookSignal = "UNAVAILABLE", DepthReliable = false };
-            if (isIndexSymbol)
+            if (!supportsEquityDepth)
             {
-                depthSkipReason = IndexDepthSkipReason;
-                depthSummary = "depth skipped: " + IndexDepthSkipReason;
+                depthSkipReason = isIndexSymbol
+                    ? IndexDepthSkipReason
+                    : "INSTRUMENT_ADAPTER_REQUIRED";
+                depthSummary = "depth skipped: " + depthSkipReason;
             }
             else
             {
@@ -3106,6 +3167,18 @@ namespace Matriks.Lean.Algotrader
             double? macd = GetNativeMacdLine(symbol) ?? CalculateMacdLine(symbol);
             double? macdSignal = GetNativeMacdSignal(symbol) ?? CalculateMacdSignal(symbol);
             string indicatorSource = ResolveIndicatorSource(rsi, ema20, ema50, macd, macdSignal);
+            string instrumentType = ResolveInstrumentType(symbol);
+            string configuredPeriod = NormalizePeriodName(IndicatorPeriod.ToString());
+            string requestedPeriod = NormalizePeriodName(
+                string.IsNullOrWhiteSpace(requestedTimeframe)
+                    ? configuredPeriod
+                    : requestedTimeframe);
+            string actualBarPeriod = ohlc.ActualBarPeriod;
+            int? actualBarPeriodSeconds = ohlc.ActualBarPeriodSeconds;
+            bool timeframeMismatch = !string.IsNullOrWhiteSpace(actualBarPeriod)
+                && !PeriodsEquivalent(requestedPeriod, actualBarPeriod);
+            decimal? volumeIndicatorValue = ReadIndicatorCurrentValue(_volumeIndicatorBySymbol, symbol);
+            decimal? volumeTlIndicatorValue = ReadIndicatorCurrentValue(_volumeTlIndicatorBySymbol, symbol);
             var technicalFeatures = BuildTechnicalFeaturePayload(
                 symbol,
                 lastPrice,
@@ -3121,6 +3194,19 @@ namespace Matriks.Lean.Algotrader
                 depthReliable);
 
             var payload = new Dictionary<string, object>();
+            payload["marketDataContractVersion"] = "matriks-market-data-v2";
+            payload["instrumentType"] = instrumentType;
+            payload["requestedTimeframe"] = requestedPeriod;
+            payload["actualBarPeriod"] = actualBarPeriod;
+            payload["actualBarPeriodSeconds"] = actualBarPeriodSeconds;
+            payload["barPeriodSource"] = ohlc.BarPeriodSource;
+            payload["timeframeMismatch"] = timeframeMismatch;
+            payload["timeframe"] = string.IsNullOrWhiteSpace(actualBarPeriod) ? "UNKNOWN" : actualBarPeriod;
+            payload["indicatorPeriod"] = configuredPeriod;
+            payload["indicatorPeriodSeconds"] = PeriodSeconds(configuredPeriod);
+            payload["indicatorPeriodSource"] = "ACTIVE_TRADE_PROFILE";
+            payload["ohlcPeriod"] = actualBarPeriod;
+            payload["barVolumePeriod"] = actualBarPeriod;
             payload["lastPrice"] = ToDouble(lastPrice);
             payload["open"] = ToDouble(open);
             payload["high"] = ToDouble(high);
@@ -3137,10 +3223,42 @@ namespace Matriks.Lean.Algotrader
             payload["barEventUtc"] = ohlc.UpdatedAt == DateTime.MinValue ? null : ohlc.UpdatedAt.ToUniversalTime().ToString("o");
             payload["snapshotBuiltUtc"] = DateTime.UtcNow.ToString("o");
             payload["sessionOpen"] = IsOrderSessionOpen();
-            payload["depthAvailable"] = !isIndexSymbol && depthAnalysis.Available;
+            payload["depthAvailable"] = supportsEquityDepth && depthAnalysis.Available;
             payload["depthReliable"] = depthReliable;
             payload["depthSkipReason"] = depthSkipReason;
-            payload["volume"] = ToDouble(volume);
+            // Compatibility alias: from v2 onward `volume` always means the
+            // current Matriks bar volume. TotalVol is cumulative session TL
+            // turnover and is deliberately published under a separate name.
+            payload["volume"] = ToDouble(barVolume);
+            payload["volumeSemantic"] = "BAR_VOLUME";
+            payload["barVolume"] = ToDouble(barVolume);
+            payload["barVolumeSource"] = ohlc.Source == "QUOTE_FALLBACK"
+                ? "UNAVAILABLE"
+                : "BarData.BarData.Volume";
+            payload["barVolumeUnit"] = "LOTS";
+            payload["barVolumeReliable"] = ohlc.Reliable && ohlc.Source != "QUOTE_FALLBACK";
+            payload["totalVol"] = supportsEquityDepth ? (object)ToDouble(totalVol) : null;
+            payload["sessionTurnoverTl"] = supportsEquityDepth ? (object)ToDouble(totalVol) : null;
+            payload["totalVolSemantic"] = "CUMULATIVE_SESSION_TURNOVER_TL";
+            payload["totalVolSource"] = supportsEquityDepth ? "SymbolUpdateField.TotalVol" : "NOT_APPLICABLE";
+            payload["totalVolUnit"] = "TRY";
+            payload["totalVolReliable"] = supportsEquityDepth && totalVol > 0m;
+            payload["volumeIndicatorValue"] = volumeIndicatorValue;
+            payload["volumeIndicatorSource"] = volumeIndicatorValue.HasValue
+                ? "VolumeIndicator.CurrentValue"
+                : "UNAVAILABLE";
+            payload["volumeIndicatorUnit"] = "LOTS";
+            payload["volumeTlIndicatorValue"] = volumeTlIndicatorValue;
+            payload["volumeTlIndicatorSource"] = volumeTlIndicatorValue.HasValue
+                ? "VolumeTLIndicator.CurrentValue"
+                : "UNAVAILABLE";
+            payload["volumeTlIndicatorUnit"] = "TRY";
+            payload["barClosed"] = ohlc.BarClosed;
+            payload["barIsNew"] = ohlc.BarIsNew;
+            payload["barDataIndex"] = ohlc.BarDataIndex;
+            payload["lastTickTime"] = ohlc.LastTickTime == DateTime.MinValue
+                ? null
+                : ohlc.LastTickTime.ToUniversalTime().ToString("o");
             payload["rsi"] = rsi;
             payload["ema20"] = ema20;
             payload["ema50"] = ema50;
@@ -3158,7 +3276,7 @@ namespace Matriks.Lean.Algotrader
             payload["depthAnalysis"] = depthAnalysis;
             payload["quoteAgeSeconds"] = Math.Max(0.0, (DateTime.Now - quote.UpdatedAt).TotalSeconds);
             payload["ohlcvAgeSeconds"] = Math.Max(0.0, (DateTime.Now - ohlc.UpdatedAt).TotalSeconds);
-            payload["depthAgeSeconds"] = isIndexSymbol ? (object)null : depthAnalysis.DepthAgeSeconds;
+            payload["depthAgeSeconds"] = supportsEquityDepth ? (object)depthAnalysis.DepthAgeSeconds : null;
             payload["botPositionQty"] = ToDouble(GetAccountAvailableQty(symbol));
             payload["totalAccountQty"] = ToDouble(GetTotalAccountQty(symbol));
             payload["lockedLongTermQty"] = ToDouble(GetLockedLongTermQty(symbol));
@@ -3167,6 +3285,16 @@ namespace Matriks.Lean.Algotrader
                 payload[item.Key] = item.Value;
             }
             payload["technicalFeatures"] = technicalFeatures;
+
+            ValidateAndLogMarketDataSemantics(
+                symbol,
+                requestedPeriod,
+                actualBarPeriod,
+                totalVol,
+                barVolume,
+                volumeIndicatorValue,
+                volumeTlIndicatorValue,
+                instrumentType);
 
             return new MarketDataPayload
             {
@@ -3186,12 +3314,156 @@ namespace Matriks.Lean.Algotrader
                 _ema20BySymbol[symbol] = MOVIndicator(symbol, IndicatorPeriod, OHLCType.Close, 20, MovMethod.Exponential);
                 _ema50BySymbol[symbol] = MOVIndicator(symbol, IndicatorPeriod, OHLCType.Close, 50, MovMethod.Exponential);
                 _macdBySymbol[symbol] = MACDIndicator(symbol, IndicatorPeriod, OHLCType.Close, 26, 12, 9);
+                if (IsEquitySymbol(symbol))
+                {
+                    object volumeIndicator = TryCreateVolumeIndicator("VolumeIndicator", symbol);
+                    if (volumeIndicator != null)
+                        _volumeIndicatorBySymbol[symbol] = volumeIndicator;
+                    object volumeTlIndicator = TryCreateVolumeIndicator("VolumeTLIndicator", symbol);
+                    if (volumeTlIndicator != null)
+                        _volumeTlIndicatorBySymbol[symbol] = volumeTlIndicator;
+                }
                 SafeDebug("Native indicators initialized symbol=" + symbol + " period=" + IndicatorPeriod);
             }
             catch (Exception ex)
             {
                 SafeDebug("Native indicator init failed symbol=" + symbol + " error=" + ex.Message);
             }
+        }
+
+        private object TryCreateVolumeIndicator(string methodName, string symbol)
+        {
+            try
+            {
+                MethodInfo factory = GetType()
+                    .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .FirstOrDefault(method =>
+                    {
+                        if (!string.Equals(method.Name, methodName, StringComparison.Ordinal))
+                            return false;
+                        ParameterInfo[] parameters = method.GetParameters();
+                        return parameters.Length == 2
+                            && parameters[0].ParameterType == typeof(string)
+                            && parameters[1].ParameterType == typeof(SymbolPeriod);
+                    });
+                return factory == null
+                    ? null
+                    : factory.Invoke(this, new object[] { symbol, IndicatorPeriod });
+            }
+            catch (Exception ex)
+            {
+                if (MarketDataDiagnosticsEnabled)
+                    SafeDebug(methodName + " unavailable symbol=" + symbol + " error=" + ex.Message);
+                return null;
+            }
+        }
+
+        private static decimal? ReadIndicatorCurrentValue(
+            ConcurrentDictionary<string, object> indicators,
+            string symbol)
+        {
+            object indicator;
+            if (!indicators.TryGetValue(NormalizeSymbol(symbol), out indicator) || indicator == null)
+                return null;
+            object current = ReadPublicMember(indicator, "CurrentValue");
+            if (current == null)
+                return null;
+            try
+            {
+                return Convert.ToDecimal(current);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string NormalizePeriodName(string raw)
+        {
+            string value = (raw ?? string.Empty).Trim().ToUpperInvariant().Replace("_", string.Empty);
+            if (value == "MIN" || value == "1M" || value == "MIN1") return "MIN1";
+            if (value == "5M" || value == "MIN5") return "MIN5";
+            if (value == "15M" || value == "MIN15") return "MIN15";
+            if (value == "30M" || value == "MIN30") return "MIN30";
+            if (value == "HOUR" || value == "1H" || value == "MIN60") return "MIN60";
+            if (value == "DAY" || value == "1D" || value == "DAY1") return "DAY1";
+            return value;
+        }
+
+        private static int PeriodSeconds(string period)
+        {
+            switch (NormalizePeriodName(period))
+            {
+                case "MIN1": return 60;
+                case "MIN5": return 300;
+                case "MIN15": return 900;
+                case "MIN30": return 1800;
+                case "MIN60": return 3600;
+                case "DAY1": return 86400;
+                default: return 0;
+            }
+        }
+
+        private static bool PeriodsEquivalent(string left, string right)
+        {
+            return string.Equals(
+                NormalizePeriodName(left),
+                NormalizePeriodName(right),
+                StringComparison.Ordinal);
+        }
+
+        private void ValidateAndLogMarketDataSemantics(
+            string symbol,
+            string requestedPeriod,
+            string actualPeriod,
+            decimal totalVol,
+            decimal barVolume,
+            decimal? volumeIndicatorValue,
+            decimal? volumeTlIndicatorValue,
+            string instrumentType)
+        {
+            if (totalVol < 0m || barVolume < 0m
+                || (volumeIndicatorValue.HasValue && volumeIndicatorValue.Value < 0m)
+                || (volumeTlIndicatorValue.HasValue && volumeTlIndicatorValue.Value < 0m))
+            {
+                LogMarketDataWarning(symbol, "VOLUME_SEMANTICS", "Negative volume/turnover value received");
+            }
+            if (!string.IsNullOrWhiteSpace(actualPeriod)
+                && !PeriodsEquivalent(requestedPeriod, actualPeriod))
+            {
+                LogMarketDataWarning(symbol, "TIMEFRAME_MISMATCH",
+                    "requested=" + requestedPeriod + " actual=" + actualPeriod);
+            }
+            if (!MarketDataDiagnosticsEnabled || !ShouldSampleDiagnostic(symbol))
+                return;
+
+            DateTime now = DateTime.UtcNow;
+            DateTime previous;
+            if (_marketDataDiagnosticUtcBySymbol.TryGetValue(symbol, out previous)
+                && (now - previous).TotalSeconds < MarketDataWarningRateLimitSeconds)
+                return;
+            _marketDataDiagnosticUtcBySymbol[symbol] = now;
+            SafeDebug("Market data semantic diagnostic symbol=" + symbol
+                + " instrumentType=" + instrumentType
+                + " requestedPeriod=" + requestedPeriod
+                + " actualPeriod=" + actualPeriod
+                + " totalVol=" + totalVol
+                + " barVolume=" + barVolume
+                + " volumeIndicator=" + (volumeIndicatorValue.HasValue ? volumeIndicatorValue.Value.ToString() : "UNAVAILABLE")
+                + " volumeTlIndicator=" + (volumeTlIndicatorValue.HasValue ? volumeTlIndicatorValue.Value.ToString() : "UNAVAILABLE"));
+        }
+
+        private bool ShouldSampleDiagnostic(string symbol)
+        {
+            if (MarketDataDiagnosticSampleRatePct >= 100m)
+                return true;
+            if (MarketDataDiagnosticSampleRatePct <= 0m)
+                return false;
+            int hash = 17;
+            foreach (char value in NormalizeSymbol(symbol))
+                hash = unchecked(hash * 31 + value);
+            decimal bucket = Math.Abs((long)hash) % 10000L / 100m;
+            return bucket < MarketDataDiagnosticSampleRatePct;
         }
 
         private double? GetNativeRsi(string symbol)
@@ -3339,6 +3611,14 @@ namespace Matriks.Lean.Algotrader
                         continue;
                     netSnapshot[symbol] = position.QtyNet;
                     availableSnapshot[symbol] = position.QtyAvailable;
+                    _positionMarketBySymbol[symbol] = new PositionMarketSnapshot
+                    {
+                        AvgCost = Convert.ToDecimal(position.AvgCost),
+                        OpeningAveragePrice = Convert.ToDecimal(position.OpeningAveragePrice),
+                        Amount = Convert.ToDecimal(position.Amount),
+                        SettlementPx = Convert.ToDecimal(position.SettlementPx),
+                        UpdatedAt = DateTime.UtcNow
+                    };
                     if (position.QtyNet != 0m || position.QtyAvailable != 0m)
                         EnsurePortfolioSymbolSubscribed(symbol);
                 }
@@ -3375,6 +3655,14 @@ namespace Matriks.Lean.Algotrader
                 EnsurePortfolioSymbolSubscribed(symbol);
             _accountNetQtyBySymbol[symbol] = position.QtyNet;
             _accountAvailableQtyBySymbol[symbol] = position.QtyAvailable;
+            _positionMarketBySymbol[symbol] = new PositionMarketSnapshot
+            {
+                AvgCost = Convert.ToDecimal(position.AvgCost),
+                OpeningAveragePrice = Convert.ToDecimal(position.OpeningAveragePrice),
+                Amount = Convert.ToDecimal(position.Amount),
+                SettlementPx = Convert.ToDecimal(position.SettlementPx),
+                UpdatedAt = DateTime.UtcNow
+            };
             _lastPositionEventUtcBySymbol[symbol] = DateTime.UtcNow;
             SafeDebug(source + " position symbol=" + symbol
                 + " qtyAvailable=" + position.QtyAvailable
@@ -3402,7 +3690,7 @@ namespace Matriks.Lean.Algotrader
                 if (IndicatorPeriod != SymbolPeriod.Min)
                     AddSymbol(symbol, IndicatorPeriod);
                 AddSymbolMarketData(symbol);
-                if (!IsIndexSymbol(symbol))
+                if (IsEquitySymbol(symbol))
                     AddSymbolMarketDepth(symbol);
                 RegisterNewsSubscriptionsForSymbol(symbol);
                 InitializeIndicators(symbol);
@@ -3504,9 +3792,9 @@ namespace Matriks.Lean.Algotrader
             decimal rawLast = SafeMarketData(symbol, SymbolUpdateField.Last);
             decimal rawBid = SafeMarketData(symbol, SymbolUpdateField.Bid);
             decimal rawAsk = SafeMarketData(symbol, SymbolUpdateField.Ask);
-            decimal rawVolume = IsIndexSymbol(symbol)
-                ? 0m
-                : SafeMarketData(symbol, SymbolUpdateField.TotalVol);
+            decimal rawTotalVol = IsEquitySymbol(symbol)
+                ? SafeMarketData(symbol, SymbolUpdateField.TotalVol)
+                : 0m;
 
             bool liveReliable = rawLast > 0m || rawBid > 0m || rawAsk > 0m;
             if (liveReliable)
@@ -3517,7 +3805,7 @@ namespace Matriks.Lean.Algotrader
                 if (_lastValidQuoteBySymbol.TryGetValue(symbol, out var previous))
                 {
                     if (rawLast <= 0m) rawLast = previous.Last;
-                    if (rawVolume <= 0m) rawVolume = previous.Volume;
+                    if (rawTotalVol <= 0m) rawTotalVol = previous.TotalVol;
                 }
 
                 var live = new MarketQuoteSnapshot
@@ -3525,7 +3813,7 @@ namespace Matriks.Lean.Algotrader
                     Last = rawLast,
                     Bid = rawBid,
                     Ask = rawAsk,
-                    Volume = rawVolume,
+                    TotalVol = rawTotalVol,
                     Reliable = quoteFresh,
                     Source = "LIVE",
                     UpdatedAt = hasEventTime ? quoteEventUtc.ToLocalTime() : DateTime.MinValue
@@ -3551,7 +3839,7 @@ namespace Matriks.Lean.Algotrader
                 Last = 0m,
                 Bid = 0m,
                 Ask = 0m,
-                Volume = 0m,
+                TotalVol = 0m,
                 Reliable = false,
                 Source = "ZERO_UNAVAILABLE",
                 UpdatedAt = DateTime.Now
@@ -3611,16 +3899,28 @@ namespace Matriks.Lean.Algotrader
                 if (high <= 0m) high = close;
                 if (low <= 0m) low = close;
 
-                DateTime barTimestamp;
-                bool hasBarTimestamp = TryResolveBarTimestamp(barData.BarData, out barTimestamp);
+                DateTime barTimestamp = barData.BarData.Dtime;
+                bool hasBarTimestamp = barTimestamp != DateTime.MinValue;
+                if (!hasBarTimestamp)
+                    hasBarTimestamp = TryResolveBarTimestamp(barData.BarData, out barTimestamp);
                 if (!hasBarTimestamp)
                     barTimestamp = DateTime.Now;
 
-                string barKey = hasBarTimestamp
-                    ? "TIME:" + barTimestamp.Ticks
-                    : barData.BarDataIndex >= 0
-                        ? "INDEX:" + barTimestamp.ToString("yyyyMMdd") + ":" + barData.BarDataIndex
-                        : null;
+                DateTime lastTickTime = barData.LastTickTime;
+                string actualBarPeriod = NormalizePeriodName(Convert.ToString(barData.PeriodInfo));
+                int periodSeconds = PeriodSeconds(actualBarPeriod);
+                DateTime closeReference = lastTickTime != DateTime.MinValue
+                    ? lastTickTime
+                    : DateTime.Now;
+                bool barClosed = hasBarTimestamp
+                    && periodSeconds > 0
+                    && closeReference >= barTimestamp.AddSeconds(periodSeconds);
+
+                string barKey = null;
+                if (hasBarTimestamp)
+                    barKey = "TIME:" + barTimestamp.Ticks;
+                else if (barData.BarDataIndex >= 0)
+                    barKey = "INDEX:" + barTimestamp.ToString("yyyyMMdd") + ":" + barData.BarDataIndex;
                 if (barKey == null)
                     LogMarketDataWarning(symbol, "BAR_TIME", "Bar timestamp and bar index unavailable; close history not updated");
 
@@ -3633,7 +3933,14 @@ namespace Matriks.Lean.Algotrader
                     Volume = volume,
                     Reliable = open > 0m && high > 0m && low > 0m && close > 0m,
                     Source = hasBarTimestamp ? "BAR" : "BAR_CALLBACK_TIME_FALLBACK",
-                    UpdatedAt = barTimestamp
+                    UpdatedAt = barTimestamp,
+                    ActualBarPeriod = actualBarPeriod,
+                    ActualBarPeriodSeconds = periodSeconds > 0 ? (int?)periodSeconds : null,
+                    BarPeriodSource = "BarDataEventArgs.PeriodInfo",
+                    BarClosed = barClosed,
+                    BarIsNew = barData.IsNewBar,
+                    BarDataIndex = barData.BarDataIndex,
+                    LastTickTime = lastTickTime
                 };
                 _lastOhlcvBySymbol[symbol] = snapshot;
                 if (barKey != null)
@@ -3661,7 +3968,7 @@ namespace Matriks.Lean.Algotrader
             string key = NormalizeSymbol(symbol) + "|" + field;
             DateTime now = DateTime.UtcNow;
             if (_marketDataWarningUtcByKey.TryGetValue(key, out var last)
-                && (now - last).TotalSeconds < 60)
+                && (now - last).TotalSeconds < MarketDataWarningRateLimitSeconds)
             {
                 return;
             }
@@ -4005,19 +4312,51 @@ namespace Matriks.Lean.Algotrader
 
         private bool IsIndexSymbol(string symbol)
         {
+            return string.Equals(
+                ResolveInstrumentType(symbol),
+                "INDEX",
+                StringComparison.Ordinal);
+        }
+
+        private bool IsEquitySymbol(string symbol)
+        {
+            return string.Equals(
+                ResolveInstrumentType(symbol),
+                "EQUITY",
+                StringComparison.Ordinal);
+        }
+
+        private string ResolveInstrumentType(string symbol)
+        {
             string normalized = NormalizeSymbol(symbol);
             if (normalized == "")
-                return false;
-            string configured = NormalizeSymbol(MarketIndexSymbol);
-            if (configured != "" && normalized == configured)
-                return true;
+                return "UNKNOWN";
+            string configuredType;
+            if (InstrumentTypes != null
+                && InstrumentTypes.TryGetValue(normalized, out configuredType))
+                return NormalizeInstrumentType(configuredType);
+            if (normalized == NormalizeSymbol(MarketIndexSymbol))
+                return "INDEX";
 
-            // Matriks BIST index codes use the X prefix (XU100, XBANK,
-            // XUSIN, ...). Keep this compile-safe fallback for older server
-            // payloads that do not yet include marketIndexSymbol.
-            return normalized.Length >= 4
+            // Compatibility fallback for old backends without instrumentTypes.
+            // New server payloads classify the full subscription universe, so
+            // normal production conversion is type-driven rather than keyed to
+            // any individual security code.
+            if (normalized.Length >= 4
                 && normalized[0] == 'X'
-                && normalized.All(char.IsLetterOrDigit);
+                && normalized.All(char.IsLetterOrDigit))
+                return "INDEX";
+            return "EQUITY";
+        }
+
+        private static string NormalizeInstrumentType(string raw)
+        {
+            string value = (raw ?? string.Empty).Trim().ToUpperInvariant();
+            if (value == "INDEX") return "INDEX";
+            if (value == "FUTURE" || value == "FUTURES" || value == "VIOP" || value == "DERIVATIVE")
+                return "DERIVATIVE";
+            if (value == "EQUITY" || value == "STOCK" || value == "SHARE") return "EQUITY";
+            return "UNKNOWN";
         }
 
         private static bool NewsMatchesKeyword(NewsSnapshot item, string keyword)
@@ -4434,7 +4773,7 @@ namespace Matriks.Lean.Algotrader
             public decimal Last { get; set; }
             public decimal Bid { get; set; }
             public decimal Ask { get; set; }
-            public decimal Volume { get; set; }
+            public decimal TotalVol { get; set; }
             public bool Reliable { get; set; }
             public string Source { get; set; }
             public DateTime UpdatedAt { get; set; }
@@ -4449,6 +4788,22 @@ namespace Matriks.Lean.Algotrader
             public decimal Volume { get; set; }
             public bool Reliable { get; set; }
             public string Source { get; set; }
+            public DateTime UpdatedAt { get; set; }
+            public string ActualBarPeriod { get; set; }
+            public int? ActualBarPeriodSeconds { get; set; }
+            public string BarPeriodSource { get; set; }
+            public bool BarClosed { get; set; }
+            public bool BarIsNew { get; set; }
+            public int BarDataIndex { get; set; }
+            public DateTime LastTickTime { get; set; }
+        }
+
+        private sealed class PositionMarketSnapshot
+        {
+            public decimal AvgCost { get; set; }
+            public decimal OpeningAveragePrice { get; set; }
+            public decimal Amount { get; set; }
+            public decimal SettlementPx { get; set; }
             public DateTime UpdatedAt { get; set; }
         }
 

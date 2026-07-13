@@ -113,6 +113,14 @@ async def gateway_runtime_config() -> dict:
         s.strip().upper() for s in settings.discovery_symbols.split(",") if s.strip()
     )
     symbols.update(str(s).strip().upper() for s in watchlist)
+    instrument_types = {
+        symbol: (
+            "INDEX"
+            if _is_index_symbol(symbol, market_index_symbol)
+            else "EQUITY"
+        )
+        for symbol in symbols
+    }
     locked_qty: dict[str, float] = {}
     for row in locked:
         symbol = row.symbol.strip().upper()
@@ -129,6 +137,7 @@ async def gateway_runtime_config() -> dict:
         "symbols": sorted(symbols),
         "subscriptionSymbols": sorted(symbols),
         "marketIndexSymbol": market_index_symbol or None,
+        "instrumentTypes": instrument_types,
         "buyAllowedSymbols": sorted(set(buy_symbols)),
         "sellExitAllowedSymbols": sorted(set(sell_symbols)),
         "tradingKillSwitchActive": values["tradingKillSwitchActive"] == "true"
@@ -154,6 +163,15 @@ async def gateway_runtime_config() -> dict:
         "maxOrdersPerSymbolPerDay": profile.max_orders_per_symbol_per_day,
         "orderTimeInForce": profile.order_time_in_force,
         "indicatorPeriod": profile.indicator_period,
+        "marketDataDiagnosticsEnabled": (
+            values["marketDataDiagnosticsEnabled"] == "true"
+        ),
+        "marketDataDiagnosticSampleRatePct": float(
+            values["marketDataDiagnosticSampleRatePct"]
+        ),
+        "marketDataWarningRateLimitSeconds": int(
+            values["marketDataWarningRateLimitSeconds"]
+        ),
         "scanIntervalMinutes": profile.scan_interval_minutes,
         # Matriks-side news aboneliği ayarları (algo panelinde parametre değil).
         "newsKeywordsCsv": settings.news_keywords_csv,

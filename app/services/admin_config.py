@@ -242,6 +242,24 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "UNKNOWN",
         "Whether broker buying power already deducts open BUY orders.",
     ),
+    "marketDataDiagnosticsEnabled": ConfigDefinition(
+        "marketDataDiagnosticsEnabled",
+        "bool",
+        "false",
+        "Hacim/periyot semantik diagnostik loglarini etkinlestirir.",
+    ),
+    "marketDataDiagnosticSampleRatePct": ConfigDefinition(
+        "marketDataDiagnosticSampleRatePct",
+        "decimal",
+        "10",
+        "Diagnostik loglarda deterministik sembol sampling yuzdesi (0-100).",
+    ),
+    "marketDataWarningRateLimitSeconds": ConfigDefinition(
+        "marketDataWarningRateLimitSeconds",
+        "int",
+        "60",
+        "Ayni sembol/alan uyarilari arasindaki minimum sure.",
+    ),
 }
 
 RISKY_CONFIG_KEYS = {
@@ -324,6 +342,18 @@ CONFIG_SECTION_DEFINITIONS = (
             "botDemoAccountConfirmed",
             "botHttpTimeoutSeconds",
             "botAllowMarketOrders",
+        ),
+    ),
+    ConfigSectionDefinition(
+        title="Matriks piyasa verisi sozlesmesi",
+        description=(
+            "Hacim ve bar periyodu semantik diagnostikleri. Mum/indikator periyodu "
+            "aktif Trade Profile ekranindaki indicator_period alanindan yonetilir."
+        ),
+        keys=(
+            "marketDataDiagnosticsEnabled",
+            "marketDataDiagnosticSampleRatePct",
+            "marketDataWarningRateLimitSeconds",
         ),
     ),
     ConfigSectionDefinition(
@@ -681,6 +711,8 @@ def _serialize_value(key: str, raw_value: Any, value_type: str) -> str:
         value = int(raw_value)
         if value < 0:
             raise ValueError(f"{key} must be >= 0")
+        if key == "marketDataWarningRateLimitSeconds" and not 1 <= value <= 3600:
+            raise ValueError(f"{key} must be between 1 and 3600")
         return str(value)
     if value_type == "float":
         value = float(raw_value)
@@ -696,6 +728,8 @@ def _serialize_value(key: str, raw_value: Any, value_type: str) -> str:
             raise ValueError(f"{key} must be a decimal number") from exc
         if not value.is_finite() or value < 0:
             raise ValueError(f"{key} must be a finite value >= 0")
+        if key == "marketDataDiagnosticSampleRatePct" and value > 100:
+            raise ValueError(f"{key} must be <= 100")
         return str(value)
     if value_type == "mode":
         value = str(raw_value).upper()

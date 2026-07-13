@@ -26,6 +26,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.services.market_data_contract import normalize_gateway_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -74,14 +75,20 @@ class MatriksGatewayClient:
         """GET /health — Matriks/veri/pozisyon durumu."""
         return await self._get("/health")
 
-    async def get_snapshot(self, symbol: str) -> dict[str, Any]:
+    async def get_snapshot(
+        self, symbol: str, requested_timeframe: str | None = None
+    ) -> dict[str, Any]:
         """GET /snapshot — sembol için OHLCV + derinlik + teknik feature bloğu.
 
         Dönen dict'in ``payload`` alanı, eski bot'un ``BuildMarketData``
         çıktısıyla aynı şemadadır (lastPrice, open/high/low, rsi, ema20/50,
         macd, technicalFeatures, botPositionQty, ...).
         """
-        return await self._get("/snapshot", params={"symbol": symbol.strip().upper()})
+        params = {"symbol": symbol.strip().upper()}
+        if requested_timeframe:
+            params["timeframe"] = requested_timeframe.strip()
+        response = await self._get("/snapshot", params=params)
+        return normalize_gateway_snapshot(response)
 
     async def get_positions(self) -> dict[str, Any]:
         """GET /positions — pozisyon anlık görüntüsü.

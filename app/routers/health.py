@@ -16,7 +16,7 @@ from app.services.matriks_gateway import gateway_client
 from app.services.scanner import scanner
 
 router = APIRouter(tags=["Health"])
-EXPECTED_MIGRATION = "20260712_01"
+EXPECTED_MIGRATION = "20260713_04"
 
 
 @router.get("/health")

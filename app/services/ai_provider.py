@@ -158,7 +158,7 @@ def _build_payload_str(payload: dict[str, Any]) -> str:
     """Serialize payload to a compact JSON string for the user message."""
     # Filter out large/token fields to keep prompt concise
     relevant = {k: v for k, v in payload.items() if k != "requestId"}
-    return json.dumps(relevant, indent=2, ensure_ascii=False)
+    return json.dumps(relevant, indent=2, ensure_ascii=False, default=str)
 
 
 # ── Abstract base ─────────────────────────────────────────────────────────────

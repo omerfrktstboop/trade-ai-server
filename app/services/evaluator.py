@@ -25,6 +25,7 @@ router'ı bunları buradan alır — beyin serviste, HTTP katmanı ince.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -89,6 +90,11 @@ from app.services.signal_override import consume_override, override_to_raw_decis
 from app.services.trade_profile import get_active_profile, get_static_default_profile
 
 logger = logging.getLogger(__name__)
+
+
+def _json_safe(value: Any) -> Any:
+    """Return a JSON-compatible copy for DB JSON columns."""
+    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
 # Statik singleton — runtime config yüklenemediğinde kullanılan yedek motor.
 _static_effective_config = EffectiveRiskConfigResolver().resolve(
@@ -553,8 +559,8 @@ async def persist_evaluation(
                     symbol=req.symbol,
                     provider=provider_name,
                     model=model_name,
-                    raw_request=payload,
-                    raw_response=raw_ai.get("_audit_raw_response", raw_ai),
+                    raw_request=_json_safe(payload),
+                    raw_response=_json_safe(raw_ai.get("_audit_raw_response", raw_ai)),
                     action=raw_ai.get("action", "WAIT"),
                     confidence=float(raw_ai.get("confidence", 0)),
                     qty=0,

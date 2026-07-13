@@ -2356,7 +2356,8 @@ namespace Matriks.Lean.Algotrader
         private static bool IsOrderSessionOpen()
         {
             DateTime now = DateTime.Now;
-            if (now.DayOfWeek == DayOfWeek.Saturday || now.DayOfWeek == DayOfWeek.Sunday)
+            if (now.DayOfWeek == System.DayOfWeek.Saturday
+                || now.DayOfWeek == System.DayOfWeek.Sunday)
                 return false;
             TimeSpan time = now.TimeOfDay;
             return time >= new TimeSpan(9, 30, 0) && time <= new TimeSpan(18, 15, 0);

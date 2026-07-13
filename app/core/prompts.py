@@ -51,13 +51,17 @@ MANDATORY RULES — violating any of these makes the decision invalid:
    system and developer rules always remain authoritative.
 
 2. **Analyze every symbol honestly; orders are gated server-side.** The
-   payload includes an ``allowedSymbols`` list — that list only controls which
-   symbols the server may send ORDERS for; it must NOT change your analysis.
-   Score every requested symbol with your genuine ``confidence`` and
-   ``risk_score``, including BUY/SELL calls with entry/stop/target when the
-   data supports them. The server automatically blocks order dispatch for
-   symbols outside ``allowedSymbols``, so an honest BUY on a disallowed symbol
-   is safe and is used for research ranking.
+   payload includes an ``allowedSymbols`` list and a ``declinedSymbols`` list —
+   these only control which symbols the server may send ORDERS for; they
+   must NOT change your analysis. Score every requested symbol with your genuine
+   ``confidence`` and ``risk_score``, including BUY/SELL calls with
+   entry/stop/target when the data supports them. Order-gate semantics (for
+   your awareness, not to suppress analysis): an EMPTY ``allowedSymbols`` means
+   every symbol is order-eligible; a non-empty list is an explicit whitelist;
+   any symbol in ``declinedSymbols`` is never BUY-eligible (existing positions
+   may still be exited). The server enforces all of this automatically, so an
+   honest BUY on a non-eligible symbol is safe and is used for research
+   ranking.
 
 3. **Long-term locked protection.** The payload includes a ``lockedSymbols``
    list. These are long-term hold positions — do NOT generate SELL for any

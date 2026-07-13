@@ -48,7 +48,20 @@ class RiskConfig(BaseSettings):
 
     allowed_symbols: str = Field(
         default="THYAO,AKBNK,SISE,KCHOL,TUPRS",
-        description="Comma-separated list of symbols that may be traded",
+        description=(
+            "Comma-separated allow-list of tradeable symbols. EMPTY means "
+            "'allow all symbols' (the whole scanned universe); declined "
+            "symbols are still blocked."
+        ),
+    )
+
+    decline_symbols: str = Field(
+        default="",
+        description=(
+            "Comma-separated blacklist. Symbols here are never BUY-able even "
+            "when allowed_symbols is empty (allow-all). Exiting an existing "
+            "position (SELL) stays permitted so holdings never get trapped."
+        ),
     )
 
     locked_long_term_symbols: str = Field(
@@ -171,7 +184,12 @@ class RiskConfig(BaseSettings):
             ) from exc
         return v
 
-    @field_validator("allowed_symbols", "locked_long_term_symbols", mode="before")
+    @field_validator(
+        "allowed_symbols",
+        "decline_symbols",
+        "locked_long_term_symbols",
+        mode="before",
+    )
     @classmethod
     def _normalise_str(cls, v: Any) -> str:
         """Accept list, set, or JSON array and convert to comma-separated string."""
@@ -192,9 +210,24 @@ class RiskConfig(BaseSettings):
 
     # ── Helpers ────────────────────────────────────────────────────────────
 
+    def is_symbol_declined(self, symbol: str) -> bool:
+        """Check whether a symbol is on the never-BUY blacklist."""
+        return symbol.strip().upper() in _to_set(self.decline_symbols)
+
     def is_symbol_allowed(self, symbol: str) -> bool:
-        """Check whether a symbol is in the allowed trading list."""
-        return symbol.strip().upper() in _to_set(self.allowed_symbols)
+        """Check whether a symbol may be traded.
+
+        A declined symbol is never allowed. Otherwise an EMPTY allow-list
+        means "allow all" (whole scanned universe); a non-empty list is an
+        explicit whitelist.
+        """
+        normalized = symbol.strip().upper()
+        if normalized in _to_set(self.decline_symbols):
+            return False
+        allowed = _to_set(self.allowed_symbols)
+        if not allowed:
+            return True
+        return normalized in allowed
 
     def is_long_term_locked(self, symbol: str) -> bool:
         """Check whether a symbol is protected from automated sells."""
@@ -225,6 +258,10 @@ class RiskConfig(BaseSettings):
     def _allowed_set(self) -> set[str]:
         """Return the allowed symbols as a set (for injection into AI prompts)."""
         return _to_set(self.allowed_symbols)
+
+    def _declined_set(self) -> set[str]:
+        """Return the declined (never-BUY) symbols as a set."""
+        return _to_set(self.decline_symbols)
 
     def _locked_set(self) -> set[str]:
         """Return the locked long-term symbols as a set (for injection into AI prompts)."""

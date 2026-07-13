@@ -233,6 +233,7 @@ def build_payload(
         "dailyAcceptedOrderCount": req.daily_accepted_order_count,
         "dailyFilledOrderCount": req.daily_filled_order_count,
         "allowedSymbols": sorted(config._allowed_set()),
+        "declinedSymbols": sorted(config._declined_set()),
         "lockedSymbols": sorted(config._locked_set()),
     }
     technical_features = _build_technical_feature_payload(req)

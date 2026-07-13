@@ -110,6 +110,54 @@ class TestAllowedSymbols:
         assert resp.allow_order is True
 
 
+class TestEmptyAllowListAllowsAll:
+    """allowedSymbols boş → tüm semboller emir evrenine dahil."""
+
+    def test_empty_allowed_symbols_permits_any_symbol(self):
+        engine = RiskEngine(_cfg(allowed_symbols=""))
+        req = _make_request(symbol="GARAN", mode=SignalMode.LIVE)
+        dec = _make_buy_decision()
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is True
+        assert resp.action == SignalAction.BUY
+
+    def test_nonempty_allowed_symbols_still_whitelists(self):
+        engine = RiskEngine(_cfg(allowed_symbols="THYAO"))
+        req = _make_request(symbol="GARAN", mode=SignalMode.LIVE)
+        dec = _make_buy_decision()
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert "not in the allowed order list" in resp.reason
+
+
+class TestDeclineSymbols:
+    """declineSymbols kara listesi: BUY yasak, çıkış (SELL) serbest."""
+
+    def test_declined_symbol_blocks_buy_even_when_allow_all(self):
+        engine = RiskEngine(_cfg(allowed_symbols="", decline_symbols="GARAN"))
+        req = _make_request(symbol="GARAN", mode=SignalMode.LIVE)
+        dec = _make_buy_decision()
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.confidence_score == 85.0  # analiz korunur
+        assert "decline blacklist" in resp.reason
+
+    def test_declined_symbol_sell_exit_still_allowed(self):
+        engine = RiskEngine(_cfg(allowed_symbols="", decline_symbols="THYAO"))
+        req = _make_request(
+            symbol="THYAO",
+            totalAccountQty=20,
+            accountAvailableQty=20,
+            botPositionQty=10,
+            mode=SignalMode.LIVE,
+        )
+        dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
+        resp = engine.evaluate(req, dec)
+        assert resp.action == SignalAction.SELL
+        assert resp.allow_order is True
+        assert "decline blacklist" not in resp.reason
+
+
 class TestLockedLongTerm:
     """Check 2: lockedLongTermSymbols block SELL."""
 

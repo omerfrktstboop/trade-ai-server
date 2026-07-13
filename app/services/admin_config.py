@@ -50,6 +50,13 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         risk_config.allowed_symbols,
         "İşlem yapılmasına izin verilen semboller. Virgülle ayrılmış liste kullanın.",
     ),
+    "declineSymbols": ConfigDefinition(
+        "declineSymbols",
+        "string",
+        risk_config.decline_symbols,
+        "Kara liste: buraya eklenen semboller allowedSymbols boş (hepsine izin) "
+        "olsa bile ASLA alınmaz. Mevcut pozisyondan çıkış (SELL) engellenmez.",
+    ),
     "lockedLongTermSymbols": ConfigDefinition(
         "lockedLongTermSymbols",
         "string",
@@ -321,6 +328,7 @@ CONFIG_SECTION_DEFINITIONS = (
             "allowedSymbols",
             "buyAllowedSymbols",
             "sellExitAllowedSymbols",
+            "declineSymbols",
             "lockedLongTermSymbols",
             "disableTradingAfter",
             "timezone",
@@ -651,6 +659,7 @@ async def build_runtime_risk_config(session: AsyncSession) -> RiskConfig:
     real_live_armed = _parse_bool(values["botRealLiveArmed"])
     return RiskConfig(
         allowed_symbols=values["allowedSymbols"],
+        decline_symbols=values.get("declineSymbols", ""),
         locked_long_term_symbols=values["lockedLongTermSymbols"],
         max_position_value_per_symbol=profile.max_position_value_per_symbol,
         max_daily_trade_count=profile.max_orders_per_day,
@@ -782,7 +791,13 @@ def _serialize_value(key: str, raw_value: Any, value_type: str) -> str:
         return allowed[normalized]
 
     value = str(raw_value).strip()
-    if key in {"allowedSymbols", "lockedLongTermSymbols"}:
+    if key in {
+        "allowedSymbols",
+        "declineSymbols",
+        "buyAllowedSymbols",
+        "sellExitAllowedSymbols",
+        "lockedLongTermSymbols",
+    }:
         return ",".join(
             symbol.strip().upper() for symbol in value.split(",") if symbol.strip()
         )

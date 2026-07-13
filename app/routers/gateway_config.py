@@ -103,6 +103,11 @@ async def gateway_runtime_config() -> dict:
         for s in values["sellExitAllowedSymbols"].split(",")
         if s.strip() and not _is_index_symbol(s, market_index_symbol)
     ]
+    decline_symbols = [
+        s.strip().upper()
+        for s in values.get("declineSymbols", "").split(",")
+        if s.strip()
+    ]
     symbols.update(row.symbol.strip().upper() for row in portfolio if row.qty > 0)
     # Data-only abonelikler: emir yolu RiskEngine'in allowedSymbols
     # kontrolünden geçtiği için bunlara emir gidemez; gateway yalnızca
@@ -143,6 +148,7 @@ async def gateway_runtime_config() -> dict:
         "instrumentTypes": instrument_types,
         "buyAllowedSymbols": sorted(set(buy_symbols)),
         "sellExitAllowedSymbols": sorted(set(sell_symbols)),
+        "declineSymbols": sorted(set(decline_symbols)),
         "tradingKillSwitchActive": values["tradingKillSwitchActive"] == "true"
         or values["killSwitchEnabled"] == "true",
         "forceSafeMode": values["forceSafeMode"] == "true",

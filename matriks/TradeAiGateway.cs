@@ -95,6 +95,7 @@ namespace Matriks.Lean.Algotrader
         private bool ForceSafeMode;
         private string[] BuyAllowedSymbols = new string[0];
         private string[] SellExitAllowedSymbols = new string[0];
+        private string[] DeclineSymbols = new string[0];
         private string MarketIndexSymbol = "XU100";
         private Dictionary<string, string> InstrumentTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private bool MarketDataDiagnosticsEnabled;
@@ -808,6 +809,7 @@ namespace Matriks.Lean.Algotrader
                     bool forceSafeMode = cfg.Value<bool?>("forceSafeMode") ?? false;
                     string[] buyAllowedSymbols = (cfg["buyAllowedSymbols"] as JArray ?? new JArray()).Select(x => NormalizeSymbol(Convert.ToString(x))).ToArray();
                     string[] sellExitAllowedSymbols = (cfg["sellExitAllowedSymbols"] as JArray ?? new JArray()).Select(x => NormalizeSymbol(Convert.ToString(x))).ToArray();
+                    string[] declineSymbols = (cfg["declineSymbols"] as JArray ?? new JArray()).Select(x => NormalizeSymbol(Convert.ToString(x))).ToArray();
                     bool requireDemoAccount = cfg.Value<bool?>("requireDemoAccount") ?? true;
                     bool demoAccountConfirmed = cfg.Value<bool?>("demoAccountConfirmed") ?? false;
                     decimal maxOrderValueTl = cfg.Value<decimal?>("maxOrderValueTl") ?? 0m;
@@ -856,6 +858,7 @@ namespace Matriks.Lean.Algotrader
                     MarketDataWarningRateLimitSeconds = marketDataWarningRateLimitSeconds;
                     buyAllowedSymbols = buyAllowedSymbols.Where(x => !IsIndexSymbol(x)).ToArray();
                     sellExitAllowedSymbols = sellExitAllowedSymbols.Where(x => !IsIndexSymbol(x)).ToArray();
+                    declineSymbols = declineSymbols.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
                     if (_subscriptionsInitialized)
                     {
                         foreach (string symbol in symbols)
@@ -899,6 +902,7 @@ namespace Matriks.Lean.Algotrader
                     ForceSafeMode = forceSafeMode;
                     BuyAllowedSymbols = buyAllowedSymbols;
                     SellExitAllowedSymbols = sellExitAllowedSymbols;
+                    DeclineSymbols = declineSymbols;
                     if (hasDailyCounterDate && dailyCounterConfigDate.Date == DateTime.Today)
                     {
                         lock (_dailyCounterLock)
@@ -917,7 +921,7 @@ namespace Matriks.Lean.Algotrader
                     // Publish one immutable reference only after every parsed
                     // field was validated. Order handlers read this snapshot
                     // once, so config reloads cannot mix versions.
-                    _activeConfig = new GatewayConfigSnapshot(runtimeMode, enableDemoOrders, enableRealOrders, realLiveModeAllowed, realLiveArmed, requireDemoAccount, demoAccountConfirmed, tradingKillSwitchActive, forceSafeMode, buyAllowedSymbols, sellExitAllowedSymbols, configVersion, activeProfileCode);
+                    _activeConfig = new GatewayConfigSnapshot(runtimeMode, enableDemoOrders, enableRealOrders, realLiveModeAllowed, realLiveArmed, requireDemoAccount, demoAccountConfirmed, tradingKillSwitchActive, forceSafeMode, buyAllowedSymbols, sellExitAllowedSymbols, declineSymbols, configVersion, activeProfileCode);
                     bool accountVerificationPolicyChanged =
                         RequireDemoAccount != requireDemoAccount
                         || DemoAccountConfirmed != demoAccountConfirmed;
@@ -958,6 +962,9 @@ namespace Matriks.Lean.Algotrader
                         ActiveProfileCode,
                         RuntimeMode,
                         string.Join(",", AllowedSymbols.OrderBy(x => x, StringComparer.Ordinal)),
+                        string.Join(",", BuyAllowedSymbols.OrderBy(x => x, StringComparer.Ordinal)),
+                        string.Join(",", SellExitAllowedSymbols.OrderBy(x => x, StringComparer.Ordinal)),
+                        string.Join(",", DeclineSymbols.OrderBy(x => x, StringComparer.Ordinal)),
                         EnableDemoOrders.ToString(),
                         EnableRealOrders.ToString(),
                         RealLiveModeAllowed.ToString(),
@@ -2311,9 +2318,11 @@ namespace Matriks.Lean.Algotrader
                 rejection = "trading kill switch / force safe mode is active";
             else if (IsIndexSymbol(symbol))
                 rejection = "index symbols are data-only and cannot receive orders: " + symbol;
-            else if (side == "BUY" && !orderConfig.BuyAllowedSymbols.Contains(symbol))
+            else if (side == "BUY" && orderConfig.DeclineSymbols.Contains(symbol))
+                rejection = "BUY symbol is on the decline blacklist: " + symbol;
+            else if (side == "BUY" && orderConfig.BuyAllowedSymbols.Length > 0 && !orderConfig.BuyAllowedSymbols.Contains(symbol))
                 rejection = "BUY symbol not allowed: " + symbol;
-            else if (side == "SELL" && !orderConfig.SellExitAllowedSymbols.Contains(symbol))
+            else if (side == "SELL" && orderConfig.SellExitAllowedSymbols.Length > 0 && !orderConfig.SellExitAllowedSymbols.Contains(symbol))
                 rejection = "SELL_EXIT symbol not allowed: " + symbol;
             else if (!TryConvertOrderQuantity(qty, out finalQty, out quantityError))
                 rejection = quantityError;
@@ -2329,8 +2338,6 @@ namespace Matriks.Lean.Algotrader
                 rejection = "real positions are not loaded yet";
             else if (IsConfigStale())
                 rejection = "gateway config is stale";
-            else if (AllowedSymbols == null || AllowedSymbols.Length == 0)
-                rejection = "AllowedSymbols is empty";
             else if (MaxOrderValueTl <= 0m || MaxQtyPerOrder <= 0m || MaxOrdersPerDay <= 0 || MaxOrdersPerSymbolPerDay <= 0)
                 rejection = "live risk limits are not valid";
             else if (!string.IsNullOrWhiteSpace(order.Mode) && requestMode != RuntimeMode)
@@ -4568,6 +4575,11 @@ namespace Matriks.Lean.Algotrader
 
         private bool IsAllowedSymbol(string symbol)
         {
+            // Empty AllowedSymbols means "whole scanned universe" (allow all);
+            // a non-empty set is an explicit whitelist. The BUY/SELL and
+            // decline gates run separately in TrySendOrderAsync.
+            if (AllowedSymbols == null || AllowedSymbols.Length == 0)
+                return true;
             string normalized = NormalizeSymbol(symbol);
             return AllowedSymbols.Any(x => NormalizeSymbol(x) == normalized);
         }
@@ -5436,10 +5448,10 @@ namespace Matriks.Lean.Algotrader
         {
             public readonly string RuntimeMode, ConfigVersion, ProfileCode;
             public readonly bool EnableDemoOrders, EnableRealOrders, RealLiveModeAllowed, RealLiveArmed, RequireDemoAccount, DemoAccountConfirmed, TradingKillSwitchActive, ForceSafeMode;
-            public readonly string[] BuyAllowedSymbols, SellExitAllowedSymbols;
-            public GatewayConfigSnapshot(string runtimeMode, bool demo, bool real, bool realAllowed, bool armed, bool requireDemo, bool confirmed, bool kill, bool safe, string[] buy, string[] sell, string version, string profile)
-            { RuntimeMode = runtimeMode; EnableDemoOrders = demo; EnableRealOrders = real; RealLiveModeAllowed = realAllowed; RealLiveArmed = armed; RequireDemoAccount = requireDemo; DemoAccountConfirmed = confirmed; TradingKillSwitchActive = kill; ForceSafeMode = safe; BuyAllowedSymbols = buy ?? new string[0]; SellExitAllowedSymbols = sell ?? new string[0]; ConfigVersion = version; ProfileCode = profile; }
-            public static GatewayConfigSnapshot SafeDefault() { return new GatewayConfigSnapshot("PAPER", false, false, false, false, true, false, true, true, new string[0], new string[0], "UNAVAILABLE", "UNAVAILABLE"); }
+            public readonly string[] BuyAllowedSymbols, SellExitAllowedSymbols, DeclineSymbols;
+            public GatewayConfigSnapshot(string runtimeMode, bool demo, bool real, bool realAllowed, bool armed, bool requireDemo, bool confirmed, bool kill, bool safe, string[] buy, string[] sell, string[] decline, string version, string profile)
+            { RuntimeMode = runtimeMode; EnableDemoOrders = demo; EnableRealOrders = real; RealLiveModeAllowed = realAllowed; RealLiveArmed = armed; RequireDemoAccount = requireDemo; DemoAccountConfirmed = confirmed; TradingKillSwitchActive = kill; ForceSafeMode = safe; BuyAllowedSymbols = buy ?? new string[0]; SellExitAllowedSymbols = sell ?? new string[0]; DeclineSymbols = decline ?? new string[0]; ConfigVersion = version; ProfileCode = profile; }
+            public static GatewayConfigSnapshot SafeDefault() { return new GatewayConfigSnapshot("PAPER", false, false, false, false, true, false, true, true, new string[0], new string[0], new string[0], "UNAVAILABLE", "UNAVAILABLE"); }
         }
 
         private sealed class IdempotencyEntry

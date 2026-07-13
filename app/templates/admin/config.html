@@ -36,7 +36,7 @@
            name="{{ item.key }}" value="{{ current_value }}" required>
   {% else %}
     <input class="form-input config-value-control" name="{{ item.key }}"
-           value="{{ current_value }}" required>
+           value="{{ current_value }}"{% if not item.allow_empty %} required{% endif %}>
   {% endif %}
 {% endmacro %}
 

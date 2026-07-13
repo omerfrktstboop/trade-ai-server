@@ -303,6 +303,20 @@ RISKY_CONFIG_KEYS = {
 
 READ_ONLY_CONFIG_KEYS = frozenset({"botAllowMarketOrders"})
 
+# Symbol allow/deny lists may be submitted empty. An empty allowedSymbols /
+# buyAllowedSymbols / sellExitAllowedSymbols means "trade the whole scanned
+# universe"; an empty declineSymbols / lockedLongTermSymbols simply means no
+# blacklist. These must not carry the HTML ``required`` attribute.
+EMPTY_ALLOWED_CONFIG_KEYS = frozenset(
+    {
+        "allowedSymbols",
+        "buyAllowedSymbols",
+        "sellExitAllowedSymbols",
+        "declineSymbols",
+        "lockedLongTermSymbols",
+    }
+)
+
 
 CONFIG_SECTION_DEFINITIONS = (
     ConfigSectionDefinition(
@@ -427,6 +441,11 @@ class AdminConfigItem:
     @property
     def is_editable(self) -> bool:
         return self.key not in READ_ONLY_CONFIG_KEYS
+
+    @property
+    def allow_empty(self) -> bool:
+        """Whether this field may be submitted blank (symbol allow/deny lists)."""
+        return self.key in EMPTY_ALLOWED_CONFIG_KEYS
 
 
 @dataclass(frozen=True)

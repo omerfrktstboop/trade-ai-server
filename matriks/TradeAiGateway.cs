@@ -3811,14 +3811,6 @@ namespace Matriks.Lean.Algotrader
             };
         }
 
-        private static string MaskAccountId(string accountId)
-        {
-            if (string.IsNullOrWhiteSpace(accountId)) return null;
-            string trimmed = accountId.Trim();
-            if (trimmed.Length <= 4) return "****";
-            return new string('*', Math.Min(8, trimmed.Length - 4)) + trimmed.Substring(trimmed.Length - 4);
-        }
-
         /// <summary>
         /// A portfolio symbol may not be part of the configured market-data
         /// watchlist.  Manual SELL must still be able to obtain its price and

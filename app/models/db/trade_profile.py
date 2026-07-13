@@ -109,6 +109,7 @@ class TradeProfile(Base):
 
     allow_real_live: Mapped[bool] = mapped_column(Boolean, default=False)
     allow_demo_live: Mapped[bool] = mapped_column(Boolean, default=True)
+    allow_margin_buying: Mapped[bool] = mapped_column(Boolean, default=False)
 
     scan_interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     max_fetch_loop_per_session: Mapped[int] = mapped_column(Integer, default=3)

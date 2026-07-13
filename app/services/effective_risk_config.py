@@ -75,6 +75,7 @@ class RiskConfigLayer(BaseModel):
     sizing_enabled: bool = True
     demo_orders_enabled: bool = True
     real_orders_enabled: bool = False
+    allow_margin_buying: bool = False
 
     @field_validator(*sorted(_DECIMAL_FIELDS), mode="before")
     @classmethod
@@ -160,6 +161,7 @@ class EffectiveRiskConfigResolver:
         "sizing_enabled",
         "demo_orders_enabled",
         "real_orders_enabled",
+        "allow_margin_buying",
     }
 
     def resolve(
@@ -225,6 +227,7 @@ class EffectiveRiskConfigResolver:
             "per_symbol_daily_order_limit": "max_orders_per_symbol_per_day",
             "demo_orders_enabled": "allow_demo_live",
             "real_orders_enabled": "allow_real_live",
+            "allow_margin_buying": "allow_margin_buying",
         }
         values: dict[str, Any] = {}
         defaults = RiskConfigLayer()
@@ -253,6 +256,7 @@ _SYSTEM_CONFIG_KEYS = {
     "minimum_sell_confidence": "sizingMinimumSellConfidence",
     "daily_order_limit": "sizingDailyOrderLimit",
     "per_symbol_daily_order_limit": "sizingPerSymbolDailyOrderLimit",
+    "allow_margin_buying": "sizingAllowMarginBuying",
 }
 
 

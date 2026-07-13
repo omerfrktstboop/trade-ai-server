@@ -62,6 +62,7 @@ EDITABLE_FIELDS = (
     "allow_short_selling",
     "allow_real_live",
     "allow_demo_live",
+    "allow_margin_buying",
     "scan_interval_minutes",
     "max_fetch_loop_per_session",
     "order_time_in_force",
@@ -106,6 +107,7 @@ FIELD_TYPES: dict[str, type] = {
     "allow_short_selling": bool,
     "allow_real_live": bool,
     "allow_demo_live": bool,
+    "allow_margin_buying": bool,
     "scan_interval_minutes": int,
     "max_fetch_loop_per_session": int,
     "order_time_in_force": str,
@@ -135,6 +137,7 @@ BUILTIN_PROFILES: dict[str, dict[str, Any]] = {
         "allow_short_selling": False,
         "allow_real_live": True,
         "allow_demo_live": True,
+        "allow_margin_buying": False,
         "scan_interval_minutes": 60,
         "max_fetch_loop_per_session": 3,
         "order_time_in_force": "Day",
@@ -160,6 +163,7 @@ BUILTIN_PROFILES: dict[str, dict[str, Any]] = {
         "allow_short_selling": False,
         "allow_real_live": True,
         "allow_demo_live": True,
+        "allow_margin_buying": False,
         "scan_interval_minutes": 30,
         "max_fetch_loop_per_session": 3,
         "order_time_in_force": "Day",
@@ -185,6 +189,7 @@ BUILTIN_PROFILES: dict[str, dict[str, Any]] = {
         "allow_short_selling": False,
         "allow_real_live": False,
         "allow_demo_live": True,
+        "allow_margin_buying": False,
         "scan_interval_minutes": 15,
         "max_fetch_loop_per_session": 3,
         "order_time_in_force": "Day",
@@ -210,6 +215,7 @@ BUILTIN_PROFILES: dict[str, dict[str, Any]] = {
         "allow_short_selling": False,
         "allow_real_live": False,
         "allow_demo_live": True,
+        "allow_margin_buying": False,
         "scan_interval_minutes": 5,
         "max_fetch_loop_per_session": 3,
         "order_time_in_force": "Day",
@@ -435,6 +441,8 @@ def profile_requires_confirmation(old: TradeProfile, changes: dict[str, Any]) ->
     ):
         return True
     if changes.get("allow_real_live") is True and not old.allow_real_live:
+        return True
+    if changes.get("allow_margin_buying") is True and not old.allow_margin_buying:
         return True
     if (
         changes.get("require_alpha_trend_alignment") is False

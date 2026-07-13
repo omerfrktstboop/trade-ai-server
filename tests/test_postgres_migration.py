@@ -12,6 +12,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.services.order_ledger import reserve_order
+from app.services.account_context import MatriksAccountContextAdapter
+from app.services.cash_reservation import reserve_sized_buy
+from app.services.cash_reservation import sync_cash_reservation
+from app.models.db import OrderCashReservation, OrderLog
+from sqlalchemy import select
+from app.services.effective_risk_config import (
+    EffectiveRiskConfigResolver,
+    EnvironmentRiskLimits,
+    SystemRiskConfig,
+)
+from app.services.position_sizing import TradeSizingContext
+from app.services.trade_profile import get_static_default_profile
 
 
 POSTGRES_URL = os.environ.get("TEST_POSTGRES_URL", "")
@@ -136,6 +148,81 @@ async def _verify_upgrade_and_concurrent_upsert() -> None:
 
     results = await asyncio.gather(reserve(), reserve())
     assert sorted(result[1] for result in results) == [False, True]
+
+    limits = EffectiveRiskConfigResolver().resolve(
+        environment_limits=EnvironmentRiskLimits(),
+        system_config=SystemRiskConfig(),
+        trade_profile=get_static_default_profile(),
+    )
+
+    async def reserve_cash(request_id: str, symbol: str):
+        async with factory() as session:
+            return await reserve_sized_buy(
+                session,
+                request_id=request_id,
+                symbol=symbol,
+                original_decision_qty=1,
+                limit_price=Decimal("100"),
+                mode="DEMO_LIVE",
+                raw_account={
+                    "sourceProvider": "MATRIKS_IQ",
+                    "accountDataAgeSeconds": "1",
+                    "accountDataReliable": True,
+                    "account": {
+                        "TotalEquity": "100000",
+                        "OrderableCash": "450",
+                    },
+                },
+                raw_positions=[],
+                raw_open_orders=[],
+                market_prices={symbol: Decimal("100")},
+                trade=TradeSizingContext(
+                    symbol=symbol,
+                    entry_price=Decimal("100"),
+                    stop_loss=Decimal("96"),
+                    target_price=Decimal("110"),
+                    confidence=Decimal("90"),
+                    current_price=Decimal("100"),
+                ),
+                limits=limits,
+                adapter=MatriksAccountContextAdapter(
+                    reservation_handling="BACKEND_DEDUCTED"
+                ),
+            )
+
+    cash_results = await asyncio.gather(
+        reserve_cash("postgres-cash-1", "THYAO"),
+        reserve_cash("postgres-cash-2", "EREGL"),
+    )
+    assert sorted(result.allowed for result in cash_results) == [False, True]
+
+    async with factory() as session:
+        rollback_row = OrderLog(
+            request_id="postgres-rollback-reservation",
+            symbol="BIMAS",
+            action="BUY",
+            qty=1,
+            order_qty=1,
+            filled_qty=0,
+            limit_price=100,
+            rounded_limit_price=100,
+            status="RESERVED",
+            state="RESERVED",
+        )
+        session.add(rollback_row)
+        await session.flush()
+        await sync_cash_reservation(session, rollback_row)
+        await session.rollback()
+    async with factory() as session:
+        leaked = (
+            await session.execute(
+                select(OrderCashReservation).where(
+                    OrderCashReservation.request_id
+                    == "postgres-rollback-reservation"
+                )
+            )
+        ).scalar_one_or_none()
+        assert leaked is None
     await engine.dispose()
 
 
@@ -167,6 +254,9 @@ async def _verify_rollback() -> None:
             )
         }
         assert "position_sizing_audits" not in tables
+        assert "order_cash_reservations" not in tables
+        assert "account_normalization_audits" not in tables
+        assert "account_reservation_scopes" not in tables
     await engine.dispose()
 
 

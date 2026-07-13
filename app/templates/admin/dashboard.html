@@ -52,6 +52,16 @@
   </div>
 </div>
 
+{% set account = latest_account_normalization %}
+<div class="mb-24">
+  <div class="flex-between mb-16"><h2 class="section-title">Account Sizing Context</h2></div>
+  <div class="stat-grid">
+    <div class="card"><div class="card-header">Reliability</div><div class="card-value">{% if account and account.account_data_reliable %}<span class="status status-ok">Reliable</span>{% else %}<span class="status status-danger">BUY blocked</span>{% endif %}</div><div class="mt-16 text-sm text-muted">age: {{ account.account_data_age_seconds if account else 'unknown' }} s<br>{{ account.unreliable_reasons | join(', ') if account else 'No normalization audit yet' }}</div></div>
+    <div class="card"><div class="card-header">Buying Power</div><div class="card-value">{{ account.broker_reported_buying_power_tl if account and account.broker_reported_buying_power_tl is not none else 'unknown' }}</div><div class="mt-16 text-sm text-muted">backend reserved: {{ account.backend_reserved_cash_tl if account else 'n/a' }}<br>effective: {{ account.effective_available_cash_tl if account and account.effective_available_cash_tl is not none else 'blocked' }}</div></div>
+    <div class="card"><div class="card-header">Reservation Policy</div><div class="card-value" style="font-size:16px">{{ account.reservation_handling if account else 'UNKNOWN' }}</div><div class="mt-16 text-sm text-muted">margin buying: {{ account.margin_buying_enabled if account else false }}<br>provider: {{ account.source_provider if account else 'unknown' }}</div></div>
+  </div>
+</div>
+
 <div class="mb-24">
   <div class="flex-between mb-16">
     <h2 class="section-title">Son Risk Kararları</h2>

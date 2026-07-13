@@ -97,6 +97,19 @@ class FakeGateway:
         self.token = token
         self.symbols = symbols or list(DEFAULT_SYMBOLS)
         self.positions_loaded = True
+        self.account_payload: dict[str, Any] = {
+            "ok": True,
+            "sourceProvider": "MATRIKS_IQ",
+            "accountDataAgeSeconds": "1",
+            "accountDataReliable": True,
+            "account": {
+                "TotalEquity": "100000.00",
+                "OrderableCash": "50000.00",
+                "T1Balance": "2500.00",
+                "T2Balance": "3000.00",
+                "CreditLimit": "10000.00",
+            },
+        }
         self.request_log: list[httpx.Request] = []
         # sembol → snapshot payload override'ları
         self.snapshot_overrides: dict[str, dict[str, Any]] = {}
@@ -116,6 +129,7 @@ class FakeGateway:
         ]
         # /order davranışı: None → kabul (SENT_PENDING); string → red gerekçesi
         self.order_rejection: str | None = None
+        self.order_transport_error: bool = False
         # Gateway'e ulaşan emir istekleri (parse edilmiş body'ler)
         self.orders: list[dict[str, Any]] = []
         self.order_states: list[dict[str, Any]] = []
@@ -200,7 +214,12 @@ class FakeGateway:
                 },
             )
 
+        if path == "/account" and request.method == "GET":
+            return self._json(200, self.account_payload)
+
         if path == "/order" and request.method == "POST":
+            if self.order_transport_error:
+                raise httpx.ConnectError("simulated send uncertainty", request=request)
             body = json.loads(request.content.decode("utf-8"))
             self.orders.append(body)
             if self.order_rejection is not None:

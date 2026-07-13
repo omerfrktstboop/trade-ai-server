@@ -222,6 +222,18 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
     "sizingPerSymbolDailyOrderLimit": ConfigDefinition(
         "sizingPerSymbolDailyOrderLimit", "int", "1", "Per-symbol daily order limit."
     ),
+    "sizingAllowMarginBuying": ConfigDefinition(
+        "sizingAllowMarginBuying",
+        "bool",
+        "false",
+        "Permit margin buying only when environment, system and profile all allow it.",
+    ),
+    "accountReservationHandling": ConfigDefinition(
+        "accountReservationHandling",
+        "reservation_handling",
+        "UNKNOWN",
+        "Whether broker buying power already deducts open BUY orders.",
+    ),
 }
 
 RISKY_CONFIG_KEYS = {
@@ -248,6 +260,8 @@ RISKY_CONFIG_KEYS = {
     "sizingMinimumSellConfidence",
     "sizingDailyOrderLimit",
     "sizingPerSymbolDailyOrderLimit",
+    "sizingAllowMarginBuying",
+    "accountReservationHandling",
 }
 
 
@@ -520,6 +534,15 @@ def _serialize_value(key: str, raw_value: Any, value_type: str) -> str:
         value = str(raw_value).upper()
         SignalMode(value)
         return value
+    if value_type == "reservation_handling":
+        value = str(raw_value).strip().upper()
+        if value not in {
+            "BROKER_ALREADY_DEDUCTED",
+            "BACKEND_DEDUCTED",
+            "UNKNOWN",
+        }:
+            raise ValueError(f"{key} has an invalid reservation handling policy")
+        return value
     if value_type == "time":
         value = str(raw_value).strip()
         hour, minute = value.split(":", 1)
@@ -605,8 +628,11 @@ def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
         "botRealLiveModeAllowed",
         "botRealLiveArmed",
         "botDemoAccountConfirmed",
+        "sizingAllowMarginBuying",
     }:
         return _parse_bool(new_value) is True and old_value != new_value
+    if key == "accountReservationHandling":
+        return old_value == "UNKNOWN" and new_value != "UNKNOWN"
     increase_is_risky = {
         "sizingRiskPerTradePct",
         "sizingMaxCashUtilizationPct",

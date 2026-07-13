@@ -57,6 +57,12 @@ from app.services.admin_config import (
     is_kill_switch_enabled,
 )
 from app.services.broker_flow_service import get_broker_flow_context
+from app.services.account_context import (
+    MatriksAccountContextAdapter,
+    fetch_fresh_account_inputs,
+    get_account_reservation_handling,
+)
+from app.services.cash_reservation import calculate_backend_reserved_cash
 from app.services.daily_trade_count import get_today_trade_counts
 from app.services.decision_gate import (
     decision_cache,
@@ -332,6 +338,50 @@ async def with_resolved_daily_trade_count(req: SignalRequest) -> SignalRequest:
         counts.effective_count,
     )
     return req.model_copy(update={"daily_trade_count": counts.effective_count})
+
+
+async def with_fresh_account_sizing_context(
+    req: SignalRequest,
+    *,
+    gateway: MatriksGatewayClient,
+    snapshot: dict[str, Any],
+    runtime_engine: RiskEngine,
+) -> SignalRequest:
+    """Attach normalized account data for an AI BUY, otherwise fail closed."""
+    effective = runtime_engine.effective_config
+    if effective is None:
+        return req
+    try:
+        inputs = await fetch_fresh_account_inputs(
+            gateway, symbol=req.symbol, target_snapshot=snapshot
+        )
+        async with async_session_factory() as session:
+            reserved = await calculate_backend_reserved_cash(session)
+            handling = await get_account_reservation_handling(session)
+            adapter = MatriksAccountContextAdapter(
+                reservation_handling=handling,
+                allow_margin_buying=effective.allow_margin_buying,
+                max_account_data_age_seconds=effective.max_account_data_age_seconds,
+            )
+            context = adapter.normalize(
+                raw_account=inputs.raw_account,
+                raw_positions=inputs.raw_positions,
+                raw_open_orders=inputs.raw_open_orders,
+                backend_reserved_cash_tl=reserved,
+                symbol=req.symbol,
+                market_prices=inputs.market_prices,
+            )
+            await adapter.add_audit(
+                session, request_id=req.request_id, symbol=req.symbol
+            )
+            await session.commit()
+        return req.model_copy(update={"account_sizing_context": context})
+    except Exception:
+        logger.exception(
+            "Fresh account normalization failed; BUY remains blocked request_id=%s",
+            req.request_id,
+        )
+        return req
 
 
 def _has_explicit_daily_trade_count(req: SignalRequest) -> bool:
@@ -955,6 +1005,13 @@ async def evaluate_symbol(
 
     # ── 7. RiskEngine (makro rejim filtresiyle) ──────────────────────────
     decision = dict_to_risk_decision(raw, sig_req)
+    if decision.action == SignalAction.BUY:
+        sig_req = await with_fresh_account_sizing_context(
+            sig_req,
+            gateway=gateway,
+            snapshot=snapshot,
+            runtime_engine=runtime_engine,
+        )
     sig_req = await with_resolved_daily_trade_count(sig_req)
     response = runtime_engine.evaluate(sig_req, decision, market_regime=market_regime)
     await persist_sizing_audit(sig_req, runtime_engine)

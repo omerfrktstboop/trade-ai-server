@@ -23,6 +23,7 @@ from sqlalchemy import delete, select
 from app.config import settings
 from app.db.session import async_session_factory
 from app.models.db import (
+    AccountNormalizationAudit,
     AiDecision,
     BotPosition,
     KapEvent,
@@ -217,6 +218,7 @@ class TradeProfileFieldsBody(BaseModel):
     allow_short_selling: bool | None = Field(None, alias="allowShortSelling")
     allow_real_live: bool | None = Field(None, alias="allowRealLive")
     allow_demo_live: bool | None = Field(None, alias="allowDemoLive")
+    allow_margin_buying: bool | None = Field(None, alias="allowMarginBuying")
     scan_interval_minutes: int | None = Field(None, alias="scanIntervalMinutes")
     max_fetch_loop_per_session: int | None = Field(None, alias="maxFetchLoopPerSession")
     order_time_in_force: str | None = Field(None, alias="orderTimeInForce")
@@ -1702,6 +1704,7 @@ def _trade_profile_dict(profile: TradeProfile, active_code: str) -> dict[str, An
         "allowShortSelling": profile.allow_short_selling,
         "allowRealLive": profile.allow_real_live,
         "allowDemoLive": profile.allow_demo_live,
+        "allowMarginBuying": profile.allow_margin_buying,
         "scanIntervalMinutes": profile.scan_interval_minutes,
         "maxFetchLoopPerSession": profile.max_fetch_loop_per_session,
         "orderTimeInForce": profile.order_time_in_force,
@@ -1938,6 +1941,7 @@ async def _dashboard_context() -> dict[str, Any]:
             today_counts = await get_today_trade_counts(session, "*")
             latest_risk = await _latest(session, RiskDecision, 20)
             latest_orders = await _latest(session, OrderLog, 20)
+            latest_account = await _latest(session, AccountNormalizationAudit, 1)
             status_ctx = await _status_strip_context(
                 session, configs=configs, profile=active_profile
             )
@@ -1949,6 +1953,7 @@ async def _dashboard_context() -> dict[str, Any]:
         today_trade_count = 0
         latest_risk = []
         latest_orders = []
+        latest_account = []
         status_ctx = {
             "status_mode": "UNKNOWN",
             "status_kill_switch": False,
@@ -1964,6 +1969,7 @@ async def _dashboard_context() -> dict[str, Any]:
         "today_trade_count": today_trade_count,
         "latest_risk": latest_risk,
         "latest_orders": latest_orders,
+        "latest_account_normalization": latest_account[0] if latest_account else None,
         "bot_status": await _bot_status(db_error=db_error),
         "dashboard_db_error": db_error,
         **status_ctx,
@@ -2031,6 +2037,7 @@ async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
             counts = await get_today_trade_counts(session, "*")
             latest_risk = await _latest(session, RiskDecision, 1)
             latest_order = await _latest(session, OrderLog, 1)
+            latest_account = await _latest(session, AccountNormalizationAudit, 1)
         config_values = {key: item.value for key, item in configs.items()}
         config_hash = hashlib.sha256(
             json.dumps(config_values, sort_keys=True).encode("utf-8")
@@ -2057,6 +2064,18 @@ async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
                 ),
             }
         )
+        if latest_account:
+            account = latest_account[0]
+            result["runtime"]["accountNormalization"] = {
+                "reliable": account.account_data_reliable,
+                "ageSeconds": account.account_data_age_seconds,
+                "brokerBuyingPowerTl": account.broker_reported_buying_power_tl,
+                "backendReservedCashTl": account.backend_reserved_cash_tl,
+                "effectiveAvailableCashTl": account.effective_available_cash_tl,
+                "reservationHandling": account.reservation_handling,
+                "marginBuyingEnabled": account.margin_buying_enabled,
+                "unreliableReasons": account.unreliable_reasons,
+            }
     except Exception as exc:
         logger.warning("Bot status DB query failed: %s", exc)
         result["runtime"].update({"dbAvailable": False, "dbError": str(exc)})

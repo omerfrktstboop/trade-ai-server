@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 import asyncio
+from decimal import Decimal
 
 import pytest
 
@@ -24,6 +25,9 @@ from app.services.evaluator import EvaluationResult
 from app.services.matriks_gateway import GatewayUnavailable, MatriksGatewayClient
 from app.services.scanner import SymbolScanner
 from app.db.init_db import drop_all, init_db
+from app.db.session import async_session_factory
+from app.models.db import OrderCashReservation, SystemConfig
+from sqlalchemy import select
 from tests.fake_gateway import FakeGateway
 
 
@@ -51,6 +55,8 @@ def make_result(
         requiresConfirmation=requires_confirmation,
         reason="test",
         entryRange=EntryRange(min=70.0, max=71.5) if price else None,
+        stopLoss=Decimal("68.00") if price else None,
+        targetPrice=Decimal("75.00") if price else None,
     )
     return EvaluationResult(response=response, mode=mode)
 
@@ -304,6 +310,20 @@ class TestOrderPath:
     def no_db_persist(self, monkeypatch):
         asyncio.run(drop_all())
         asyncio.run(init_db())
+
+        async def seed_account_policy():
+            async with async_session_factory() as session:
+                session.add(
+                    SystemConfig(
+                        key="accountReservationHandling",
+                        value="BACKEND_DEDUCTED",
+                        value_type="reservation_handling",
+                        description="test account policy",
+                    )
+                )
+                await session.commit()
+
+        asyncio.run(seed_account_policy())
         self.persisted: list[tuple[str, str]] = []
 
         async def fake_persist(scanner_self, response, status, reason):
@@ -326,6 +346,7 @@ class TestOrderPath:
     async def test_demo_live_buy_sends_order(self, monkeypatch):
         monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()
+        fake.positions = []
 
         await self.make_scanner(fake)._maybe_send_order(make_result())
 
@@ -342,6 +363,75 @@ class TestOrderPath:
                 "Limit order SENT_PENDING; final status will be reported by OnOrderUpdate",
             )
         ]
+
+    async def test_order_time_sizing_can_only_reduce_qty(self, monkeypatch):
+        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+        fake = FakeGateway()
+        fake.positions = []
+        fake.account_payload["account"]["OrderableCash"] = "300"
+
+        await self.make_scanner(fake)._maybe_send_order(make_result(qty=3))
+
+        assert len(fake.orders) == 1
+        assert fake.orders[0]["qty"] == 1
+
+    async def test_order_time_sizing_never_increases_original_qty(self, monkeypatch):
+        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+        fake = FakeGateway()
+        fake.positions = []
+        fake.account_payload["account"]["OrderableCash"] = "50000"
+
+        await self.make_scanner(fake)._maybe_send_order(make_result(qty=1))
+
+        assert len(fake.orders) == 1
+        assert fake.orders[0]["qty"] == 1
+
+    async def test_buy_blocks_when_cash_becomes_insufficient(self, monkeypatch):
+        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+        fake = FakeGateway()
+        fake.positions = []
+        fake.account_payload["account"]["OrderableCash"] = "100"
+
+        await self.make_scanner(fake)._maybe_send_order(make_result(qty=1))
+
+        assert fake.orders == []
+
+    async def test_buy_blocks_stale_account_data(self, monkeypatch):
+        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+        fake = FakeGateway()
+        fake.positions = []
+        fake.account_payload["accountDataAgeSeconds"] = "61"
+
+        await self.make_scanner(fake)._maybe_send_order(make_result())
+
+        assert fake.orders == []
+
+    async def test_buy_blocks_when_position_price_snapshot_is_missing(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+        fake = FakeGateway()
+        fake.positions = [{"symbol": "UNMAPPED", "accountNetQty": 1}]
+
+        await self.make_scanner(fake)._maybe_send_order(make_result())
+
+        assert fake.orders == []
+
+    async def test_gateway_send_uncertainty_keeps_cash_reserved(self, monkeypatch):
+        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+        fake = FakeGateway()
+        fake.positions = []
+        fake.order_transport_error = True
+
+        await self.make_scanner(fake)._maybe_send_order(make_result())
+
+        async with async_session_factory() as session:
+            reservation = (
+                await session.execute(select(OrderCashReservation))
+            ).scalar_one()
+        assert reservation.status == "SEND_UNKNOWN"
+        assert reservation.remaining_qty == 1
+        assert reservation.reserved_amount_tl == Decimal("71.5000000000")
 
     async def test_paper_mode_never_sends(self, monkeypatch):
         monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)

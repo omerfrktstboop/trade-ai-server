@@ -32,11 +32,11 @@ class _DecimalModel(BaseModel):
 
 
 class AccountSizingContext(_DecimalModel):
-    account_equity_tl: Decimal
-    effective_available_cash_tl: Decimal
+    account_equity_tl: Decimal | None
+    effective_available_cash_tl: Decimal | None
     reserved_cash_tl: Decimal
     current_symbol_qty: int
-    current_symbol_value_tl: Decimal
+    current_symbol_value_tl: Decimal | None
     total_account_exposure_tl: Decimal | None
     account_data_age_seconds: Decimal | None
     account_data_reliable: bool
@@ -109,12 +109,18 @@ class PositionSizingService:
             return blocked("BUY blocked: account sizing data age is unknown")
         if account.account_data_age_seconds > limits.max_account_data_age_seconds:
             return blocked("BUY blocked: account sizing data is stale")
+        if account.account_equity_tl is None:
+            return blocked("BUY blocked: account equity is unknown")
         if account.account_equity_tl <= zero:
             return blocked("BUY blocked: account equity must be positive")
+        if account.effective_available_cash_tl is None:
+            return blocked("BUY blocked: available cash is unknown")
         if account.effective_available_cash_tl <= zero:
             return blocked("BUY blocked: available cash must be positive")
         if account.reserved_cash_tl < zero:
             return blocked("BUY blocked: reserved cash cannot be negative")
+        if account.current_symbol_value_tl is None:
+            return blocked("BUY blocked: current symbol value is unknown")
         if account.current_symbol_value_tl < zero:
             return blocked("BUY blocked: current symbol value cannot be negative")
         if account.total_account_exposure_tl is None:

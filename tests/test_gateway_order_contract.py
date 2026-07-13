@@ -20,3 +20,15 @@ def test_cancel_endpoint_does_not_send_a_new_order():
     assert "SendCancelOrder" in handler
     assert "SendLimitOrder" not in handler
     assert "SendMarketOrder" not in handler
+
+
+def test_account_endpoint_marks_provider_timestamp_and_reliability():
+    source = (Path(__file__).parents[1] / "matriks" / "TradeAiGateway.cs").read_text(
+        encoding="utf-8"
+    )
+    handler = source.split("private async Task HandleAccountAsync", 1)[1]
+    handler = handler.split("private async Task HandleRealPositionsAsync", 1)[0]
+    assert 'sourceProvider = "MATRIKS_IQ"' in handler
+    assert 'DateTime.UtcNow.ToString("o")' in handler
+    assert "accountDataReliable = user != null" in handler
+    assert "accountDataReliable = false" in handler

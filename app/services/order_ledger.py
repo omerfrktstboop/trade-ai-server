@@ -69,6 +69,7 @@ async def reserve_order(
     order_type: str = "LIMIT",
     config_version: str | None = None,
     profile_code: str | None = None,
+    commit: bool = True,
 ) -> tuple[OrderLog, bool, str | None]:
     """Atomically reserve an order; return (row, may_send, rejection)."""
     request_id = request_id.strip()
@@ -138,7 +139,10 @@ async def reserve_order(
         index_elements=[OrderLog.request_id]
     ).returning(OrderLog.id)
     inserted_id = (await session.execute(statement)).scalar_one_or_none()
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     row = (
         await session.execute(select(OrderLog).where(OrderLog.request_id == request_id))
     ).scalar_one()
@@ -151,7 +155,11 @@ async def reserve_order(
 
 async def mark_send_started(session: AsyncSession, row: OrderLog) -> None:
     row.status = "SEND_IN_PROGRESS"
+    row.state = "SEND_IN_PROGRESS"
     row.send_started_at = datetime.now(timezone.utc)
+    from app.services.cash_reservation import sync_cash_reservation
+
+    await sync_cash_reservation(session, row)
     await session.commit()
 
 
@@ -174,4 +182,7 @@ async def mark_send_result(
         row.sent_at = datetime.now(timezone.utc)
     elif state in FINAL_STATES:
         row.finalized_at = datetime.now(timezone.utc)
+    from app.services.cash_reservation import sync_cash_reservation
+
+    await sync_cash_reservation(session, row)
     await session.commit()

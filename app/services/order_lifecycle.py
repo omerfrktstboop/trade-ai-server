@@ -79,5 +79,8 @@ async def apply_callback(
     row.matrix_message = message
     if row.status in FINAL:
         row.finalized_at = datetime.now(timezone.utc)
+    from app.services.cash_reservation import sync_cash_reservation
+
+    await sync_cash_reservation(session, row, strict=False)
     await session.commit()
     return row, changed

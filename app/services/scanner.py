@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from sqlalchemy import select
 
@@ -40,6 +41,13 @@ from app.services.discovery_agent import (
     run_discovery_scan,
 )
 from app.services.evaluator import EvaluationResult, evaluate_symbol
+from app.services.account_context import (
+    MatriksAccountContextAdapter,
+    fetch_fresh_account_inputs,
+    get_account_reservation_handling,
+)
+from app.services.cash_reservation import reserve_sized_buy
+from app.services.effective_risk_config import resolve_effective_risk_config
 from app.services.matriks_gateway import (
     GatewayError,
     GatewayUnavailable,
@@ -55,6 +63,7 @@ from app.services.manual_approvals import queue_response
 from app.services.order_sync import cancel_timed_out_orders
 from app.services.order_ledger import mark_send_result, mark_send_started, reserve_order
 from app.services.order_preflight import validate_order_preflight
+from app.services.position_sizing import TradeSizingContext
 from app.services.signal_override import list_pending_override_symbols
 from app.services.trade_profile import get_active_profile
 
@@ -474,6 +483,13 @@ class SymbolScanner:
                 decision_created_utc=result.decision_created_utc,
                 max_spread_pct=preflight_config.max_spread_pct_for_buy,
             )
+            account_inputs = None
+            if response.action == SignalAction.BUY:
+                account_inputs = await fetch_fresh_account_inputs(
+                    self._gateway,
+                    symbol=response.symbol,
+                    target_snapshot=fresh_snapshot,
+                )
         except Exception as exc:
             preflight_reason = "order-time snapshot unavailable: " + str(exc)
         if preflight_reason:
@@ -540,24 +556,96 @@ class SymbolScanner:
             )
             return
 
-        async with async_session_factory() as session:
-            ledger_row, may_send, ledger_rejection = await reserve_order(
-                session,
-                request_id=response.request_id,
-                symbol=response.symbol,
-                side=response.action.value,
-                qty=response.qty,
-                limit_price=response.price,
-                mode=result.mode.value,
-            )
-            if not may_send:
+        if response.action == SignalAction.BUY:
+            if account_inputs is None:
                 logger.warning(
-                    "Order replay blocked requestId=%s reason=%s",
+                    "BUY blocked: fresh account inputs missing requestId=%s",
                     response.request_id,
-                    ledger_rejection or ledger_row.status,
                 )
                 return
-            await mark_send_started(session, ledger_row)
+            if response.stop_loss is None or response.target_price is None:
+                logger.warning(
+                    "BUY blocked: entry/stop/target incomplete requestId=%s",
+                    response.request_id,
+                )
+                return
+            try:
+                async with async_session_factory() as session:
+                    limits = await resolve_effective_risk_config(session)
+                    reservation_handling = await get_account_reservation_handling(
+                        session
+                    )
+                    adapter = MatriksAccountContextAdapter(
+                        reservation_handling=reservation_handling,
+                        allow_margin_buying=limits.allow_margin_buying,
+                        max_account_data_age_seconds=(
+                            limits.max_account_data_age_seconds
+                        ),
+                    )
+                    reservation = await reserve_sized_buy(
+                        session,
+                        request_id=response.request_id,
+                        symbol=response.symbol,
+                        original_decision_qty=response.qty,
+                        limit_price=Decimal(str(response.price)),
+                        mode=result.mode.value,
+                        raw_account=account_inputs.raw_account,
+                        raw_positions=account_inputs.raw_positions,
+                        raw_open_orders=account_inputs.raw_open_orders,
+                        market_prices=account_inputs.market_prices,
+                        trade=TradeSizingContext(
+                            symbol=response.symbol,
+                            entry_price=response.price,
+                            stop_loss=response.stop_loss,
+                            target_price=response.target_price,
+                            confidence=Decimal(str(response.confidence_score)),
+                            current_price=account_inputs.market_prices[
+                                response.symbol.strip().upper()
+                            ],
+                        ),
+                        limits=limits,
+                        adapter=adapter,
+                    )
+                if not reservation.allowed:
+                    logger.warning(
+                        "BUY reservation blocked requestId=%s reason=%s",
+                        response.request_id,
+                        reservation.reason,
+                    )
+                    return
+                response.qty = reservation.qty
+                ledger_row = reservation.ledger
+                if ledger_row is None:
+                    return
+            except Exception as exc:
+                logger.exception(
+                    "BUY account sizing/reservation failed requestId=%s",
+                    response.request_id,
+                )
+                await notify_risk_block(
+                    f"Fresh account sizing unavailable: {exc}",
+                    {"symbol": response.symbol, "requestId": response.request_id},
+                )
+                return
+        else:
+            async with async_session_factory() as session:
+                ledger_row, may_send, ledger_rejection = await reserve_order(
+                    session,
+                    request_id=response.request_id,
+                    symbol=response.symbol,
+                    side=response.action.value,
+                    qty=response.qty,
+                    limit_price=response.price,
+                    mode=result.mode.value,
+                )
+                if not may_send:
+                    logger.warning(
+                        "Order replay blocked requestId=%s reason=%s",
+                        response.request_id,
+                        ledger_rejection or ledger_row.status,
+                    )
+                    return
+                await mark_send_started(session, ledger_row)
 
         try:
             outcome = await self._gateway.send_order(

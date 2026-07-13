@@ -1674,11 +1674,27 @@ namespace Matriks.Lean.Algotrader
             try
             {
                 object user = GetTradeUser();
-                await WriteJsonAsync(stream, 200, new { ok = true, available = user != null, account = ReflectToDict(user) });
+                await WriteJsonAsync(stream, 200, new
+                {
+                    ok = true,
+                    available = user != null,
+                    sourceProvider = "MATRIKS_IQ",
+                    receivedAtUtc = DateTime.UtcNow.ToString("o"),
+                    accountDataReliable = user != null,
+                    account = ReflectToDict(user)
+                });
             }
             catch (Exception ex)
             {
-                await WriteJsonAsync(stream, 200, new { ok = true, available = false, error = Unwrap(ex) });
+                await WriteJsonAsync(stream, 200, new
+                {
+                    ok = true,
+                    available = false,
+                    sourceProvider = "MATRIKS_IQ",
+                    receivedAtUtc = DateTime.UtcNow.ToString("o"),
+                    accountDataReliable = false,
+                    error = Unwrap(ex)
+                });
             }
         }
 

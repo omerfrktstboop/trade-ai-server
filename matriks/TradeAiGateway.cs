@@ -95,6 +95,7 @@ namespace Matriks.Lean.Algotrader
         private bool ForceSafeMode;
         private string[] BuyAllowedSymbols = new string[0];
         private string[] SellExitAllowedSymbols = new string[0];
+        private string MarketIndexSymbol = "XU100";
         private bool RequireDemoAccount = true;
         private bool DemoAccountConfirmed;
         private decimal MaxOrderValueTl;
@@ -128,6 +129,7 @@ namespace Matriks.Lean.Algotrader
         private const int MaxPositionSyncAgeSeconds = 90;
         private const int MaxQuoteAgeSecondsForOrder = 15;
         private const int MaxDepthAgeSecondsForOrder = 10;
+        private const string IndexDepthSkipReason = "INDEX_SYMBOL_NOT_APPLICABLE";
         private static readonly TimeSpan IdempotencyTtl = TimeSpan.FromHours(24);
 
         // ── HTTP server state ────────────────────────────────────────
@@ -226,7 +228,8 @@ namespace Matriks.Lean.Algotrader
                     AddSymbol(normalized, IndicatorPeriod);
                 }
                 AddSymbolMarketData(normalized);
-                AddSymbolMarketDepth(normalized);
+                if (!IsIndexSymbol(normalized))
+                    AddSymbolMarketDepth(normalized);
                 RegisterNewsSubscriptionsForSymbol(normalized);
                 InitializeIndicators(normalized);
 
@@ -797,6 +800,7 @@ namespace Matriks.Lean.Algotrader
                     string orderTimeInForce = cfg.Value<string>("orderTimeInForce") ?? "Day";
                     string activeProfileCode = cfg.Value<string>("profileCode") ?? "UNKNOWN";
                     string configVersion = cfg.Value<string>("configHash") ?? "UNKNOWN";
+                    string marketIndexSymbol = NormalizeSymbol(cfg.Value<string>("marketIndexSymbol"));
 
                     bool liveMode = runtimeMode == "DEMO_LIVE" || runtimeMode == "REAL_LIVE";
                     if (liveMode && (symbols.Length == 0 || maxOrderValueTl <= 0m
@@ -809,6 +813,9 @@ namespace Matriks.Lean.Algotrader
 
                     // Parsing above is deliberately completed before any live
                     // field is changed. Invalid live limits remain fail-closed.
+                    MarketIndexSymbol = marketIndexSymbol;
+                    buyAllowedSymbols = buyAllowedSymbols.Where(x => !IsIndexSymbol(x)).ToArray();
+                    sellExitAllowedSymbols = sellExitAllowedSymbols.Where(x => !IsIndexSymbol(x)).ToArray();
                     if (_subscriptionsInitialized)
                     {
                         foreach (string symbol in symbols)
@@ -877,6 +884,7 @@ namespace Matriks.Lean.Algotrader
                         MaxOrdersPerSymbolPerDay.ToString(),
                         OrderTimeInForce,
                         IndicatorPeriod.ToString(),
+                        MarketIndexSymbol,
                     });
                     if (!string.Equals(_lastAppliedConfigSignature, configSignature, StringComparison.Ordinal))
                     {
@@ -1266,6 +1274,23 @@ namespace Matriks.Lean.Algotrader
                 levels = Math.Max(1, Math.Min(25, parsed));
             try
             {
+                if (IsIndexSymbol(symbol))
+                {
+                    await WriteJsonAsync(stream, 200, new
+                    {
+                        ok = true,
+                        symbol = symbol,
+                        levels = levels,
+                        available = false,
+                        bids = new List<DepthLevelSnapshot>(),
+                        asks = new List<DepthLevelSnapshot>(),
+                        depthAvailable = false,
+                        depthReliable = false,
+                        depthSkipReason = IndexDepthSkipReason,
+                        timestamp = (string)null
+                    });
+                    return;
+                }
                 DepthSnapshot depth = ReadDepthSnapshot(symbol, levels);
                 await WriteJsonAsync(stream, 200, new
                 {
@@ -2157,6 +2182,8 @@ namespace Matriks.Lean.Algotrader
                 rejection = "qty/limitPrice must be finite";
             else if (orderConfig.TradingKillSwitchActive || orderConfig.ForceSafeMode)
                 rejection = "trading kill switch / force safe mode is active";
+            else if (IsIndexSymbol(symbol))
+                rejection = "index symbols are data-only and cannot receive orders: " + symbol;
             else if (side == "BUY" && !orderConfig.BuyAllowedSymbols.Contains(symbol))
                 rejection = "BUY symbol not allowed: " + symbol;
             else if (side == "SELL" && !orderConfig.SellExitAllowedSymbols.Contains(symbol))
@@ -2835,6 +2862,7 @@ namespace Matriks.Lean.Algotrader
         private MarketDataPayload BuildMarketData(string symbolRaw, string dataType)
         {
             string symbol = NormalizeSymbol(symbolRaw);
+            bool isIndexSymbol = IsIndexSymbol(symbol);
 
             MarketQuoteSnapshot quote = ReadMarketQuote(symbol);
             decimal lastPrice = quote.Last;
@@ -2868,48 +2896,57 @@ namespace Matriks.Lean.Algotrader
             decimal depthQueueDropPct = 0m;
             bool depthReliable = false;
             string depthSummary = "";
+            string depthSkipReason = null;
             DepthAnalysisSnapshot depthAnalysis = new DepthAnalysisSnapshot { OrderBookSignal = "UNAVAILABLE", DepthReliable = false };
-            try
+            if (isIndexSymbol)
             {
-                DepthSnapshot depth = ReadDepthSnapshot(symbol, 25);
-                depthAnalysis = depth.Analysis;
-                bestBid = depthAnalysis.BestBid;
-                bid1Size = depthAnalysis.BidSizeTop1;
-                ask1Size = depthAnalysis.AskSizeTop1;
-                if (depth.Bids.Count >= 2) secondBid = depth.Bids[1].Price;
-                if (depth.Bids.Count >= 3) thirdBid = depth.Bids[2].Price;
-                if (bestBid > 0m && bid1Size > 0m)
-                {
-                    maxBid1Size = _maxBid1SizeBySymbol.AddOrUpdate(
-                        symbol,
-                        bid1Size,
-                        (_, existing) => bid1Size > existing ? bid1Size : existing);
-
-                    if (maxBid1Size > 0m)
-                    {
-                        depthQueueDropPct = Math.Max(0m, (maxBid1Size - bid1Size) / maxBid1Size * 100m);
-                    }
-                }
-                depthReliable = depthAnalysis.DepthReliable;
-                if (!depthReliable)
-                {
-                    depthQueueDropPct = 0m;
-                    LogMarketDataWarning(symbol, "DEPTH", "Depth unavailable or zero; depthReliable=false");
-                }
-
-                depthSummary = "bestBid=" + bestBid
-                    + ";secondBid=" + secondBid
-                    + ";thirdBid=" + thirdBid
-                    + ";bid1Size=" + bid1Size
-                    + ";maxBid1Size=" + maxBid1Size
-                    + ";depthQueueDropPct=" + depthQueueDropPct
-                    + ";depthReliable=" + depthReliable;
+                depthSkipReason = IndexDepthSkipReason;
+                depthSummary = "depth skipped: " + IndexDepthSkipReason;
             }
-            catch (Exception ex)
+            else
             {
-                depthSummary = "depth unavailable: " + ex.Message;
-                depthReliable = false;
-                LogMarketDataWarning(symbol, "DEPTH", ex.Message);
+                try
+                {
+                    DepthSnapshot depth = ReadDepthSnapshot(symbol, 25);
+                    depthAnalysis = depth.Analysis;
+                    bestBid = depthAnalysis.BestBid;
+                    bid1Size = depthAnalysis.BidSizeTop1;
+                    ask1Size = depthAnalysis.AskSizeTop1;
+                    if (depth.Bids.Count >= 2) secondBid = depth.Bids[1].Price;
+                    if (depth.Bids.Count >= 3) thirdBid = depth.Bids[2].Price;
+                    if (bestBid > 0m && bid1Size > 0m)
+                    {
+                        maxBid1Size = _maxBid1SizeBySymbol.AddOrUpdate(
+                            symbol,
+                            bid1Size,
+                            (_, existing) => bid1Size > existing ? bid1Size : existing);
+
+                        if (maxBid1Size > 0m)
+                        {
+                            depthQueueDropPct = Math.Max(0m, (maxBid1Size - bid1Size) / maxBid1Size * 100m);
+                        }
+                    }
+                    depthReliable = depthAnalysis.DepthReliable;
+                    if (!depthReliable)
+                    {
+                        depthQueueDropPct = 0m;
+                        LogMarketDataWarning(symbol, "DEPTH", "Depth unavailable or zero; depthReliable=false");
+                    }
+
+                    depthSummary = "bestBid=" + bestBid
+                        + ";secondBid=" + secondBid
+                        + ";thirdBid=" + thirdBid
+                        + ";bid1Size=" + bid1Size
+                        + ";maxBid1Size=" + maxBid1Size
+                        + ";depthQueueDropPct=" + depthQueueDropPct
+                        + ";depthReliable=" + depthReliable;
+                }
+                catch (Exception ex)
+                {
+                    depthSummary = "depth unavailable: " + ex.Message;
+                    depthReliable = false;
+                    LogMarketDataWarning(symbol, "DEPTH", ex.Message);
+                }
             }
 
             double? rsi = GetNativeRsi(symbol) ?? CalculateRsi(symbol, 14);
@@ -2949,7 +2986,9 @@ namespace Matriks.Lean.Algotrader
             payload["barEventUtc"] = ohlc.UpdatedAt == DateTime.MinValue ? null : ohlc.UpdatedAt.ToUniversalTime().ToString("o");
             payload["snapshotBuiltUtc"] = DateTime.UtcNow.ToString("o");
             payload["sessionOpen"] = IsOrderSessionOpen();
+            payload["depthAvailable"] = !isIndexSymbol && depthAnalysis.Available;
             payload["depthReliable"] = depthReliable;
+            payload["depthSkipReason"] = depthSkipReason;
             payload["volume"] = ToDouble(volume);
             payload["rsi"] = rsi;
             payload["ema20"] = ema20;
@@ -2968,7 +3007,7 @@ namespace Matriks.Lean.Algotrader
             payload["depthAnalysis"] = depthAnalysis;
             payload["quoteAgeSeconds"] = Math.Max(0.0, (DateTime.Now - quote.UpdatedAt).TotalSeconds);
             payload["ohlcvAgeSeconds"] = Math.Max(0.0, (DateTime.Now - ohlc.UpdatedAt).TotalSeconds);
-            payload["depthAgeSeconds"] = depthAnalysis.DepthAgeSeconds;
+            payload["depthAgeSeconds"] = isIndexSymbol ? (object)null : depthAnalysis.DepthAgeSeconds;
             payload["botPositionQty"] = ToDouble(GetAccountAvailableQty(symbol));
             payload["totalAccountQty"] = ToDouble(GetTotalAccountQty(symbol));
             payload["lockedLongTermQty"] = ToDouble(GetLockedLongTermQty(symbol));
@@ -3212,7 +3251,8 @@ namespace Matriks.Lean.Algotrader
                 if (IndicatorPeriod != SymbolPeriod.Min)
                     AddSymbol(symbol, IndicatorPeriod);
                 AddSymbolMarketData(symbol);
-                AddSymbolMarketDepth(symbol);
+                if (!IsIndexSymbol(symbol))
+                    AddSymbolMarketDepth(symbol);
                 RegisterNewsSubscriptionsForSymbol(symbol);
                 InitializeIndicators(symbol);
 
@@ -3313,7 +3353,9 @@ namespace Matriks.Lean.Algotrader
             decimal rawLast = SafeMarketData(symbol, SymbolUpdateField.Last);
             decimal rawBid = SafeMarketData(symbol, SymbolUpdateField.Bid);
             decimal rawAsk = SafeMarketData(symbol, SymbolUpdateField.Ask);
-            decimal rawVolume = SafeMarketData(symbol, SymbolUpdateField.TotalVol);
+            decimal rawVolume = IsIndexSymbol(symbol)
+                ? 0m
+                : SafeMarketData(symbol, SymbolUpdateField.TotalVol);
 
             bool liveReliable = rawLast > 0m || rawBid > 0m || rawAsk > 0m;
             if (liveReliable)
@@ -3803,6 +3845,23 @@ namespace Matriks.Lean.Algotrader
         {
             string normalized = NormalizeSymbol(symbol);
             return AllowedSymbols.Any(x => NormalizeSymbol(x) == normalized);
+        }
+
+        private bool IsIndexSymbol(string symbol)
+        {
+            string normalized = NormalizeSymbol(symbol);
+            if (normalized == "")
+                return false;
+            string configured = NormalizeSymbol(MarketIndexSymbol);
+            if (configured != "" && normalized == configured)
+                return true;
+
+            // Matriks BIST index codes use the X prefix (XU100, XBANK,
+            // XUSIN, ...). Keep this compile-safe fallback for older server
+            // payloads that do not yet include marketIndexSymbol.
+            return normalized.Length >= 4
+                && normalized[0] == 'X'
+                && normalized.All(char.IsLetterOrDigit);
         }
 
         private static bool NewsMatchesKeyword(NewsSnapshot item, string keyword)

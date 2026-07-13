@@ -31,6 +31,21 @@ _LIVE_REAL_MODES = {"REAL_LIVE"}
 _LIVE_DEMO_MODES = {"DEMO_LIVE"}
 
 
+def _is_index_symbol(symbol: str, configured_market_index: str) -> bool:
+    normalized = symbol.strip().upper()
+    return bool(
+        normalized
+        and (
+            normalized == configured_market_index
+            or (
+                len(normalized) >= 4
+                and normalized.startswith("X")
+                and normalized.isalnum()
+            )
+        )
+    )
+
+
 def _effective_mode(
     bot_mode: str, profile, *, real_live_mode_allowed: bool, real_live_armed: bool
 ) -> str:
@@ -74,13 +89,16 @@ async def gateway_runtime_config() -> dict:
         for value in values["allowedSymbols"].split(",")
         if value.strip()
     }
+    market_index_symbol = settings.market_index_symbol.strip().upper()
     buy_symbols = [
-        s.strip().upper() for s in values["buyAllowedSymbols"].split(",") if s.strip()
+        s.strip().upper()
+        for s in values["buyAllowedSymbols"].split(",")
+        if s.strip() and not _is_index_symbol(s, market_index_symbol)
     ]
     sell_symbols = [
         s.strip().upper()
         for s in values["sellExitAllowedSymbols"].split(",")
-        if s.strip()
+        if s.strip() and not _is_index_symbol(s, market_index_symbol)
     ]
     symbols.update(row.symbol.strip().upper() for row in portfolio if row.qty > 0)
     # Data-only abonelikler: emir yolu RiskEngine'in allowedSymbols
@@ -89,8 +107,8 @@ async def gateway_runtime_config() -> dict:
     #   - Makro filtre endeksi (XU100)
     #   - Discovery keşif evreni (movers ranking'i genişletir)
     #   - Aktif watchlist adayları (scanner analizi için snapshot gerekir)
-    if settings.market_index_symbol.strip():
-        symbols.add(settings.market_index_symbol.strip().upper())
+    if market_index_symbol:
+        symbols.add(market_index_symbol)
     symbols.update(
         s.strip().upper() for s in settings.discovery_symbols.split(",") if s.strip()
     )
@@ -110,6 +128,7 @@ async def gateway_runtime_config() -> dict:
         "ok": True,
         "symbols": sorted(symbols),
         "subscriptionSymbols": sorted(symbols),
+        "marketIndexSymbol": market_index_symbol or None,
         "buyAllowedSymbols": sorted(set(buy_symbols)),
         "sellExitAllowedSymbols": sorted(set(sell_symbols)),
         "tradingKillSwitchActive": values["tradingKillSwitchActive"] == "true"

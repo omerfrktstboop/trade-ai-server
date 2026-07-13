@@ -70,6 +70,10 @@ DEFAULT_WAIT = RiskDecision(
     action=SignalAction.WAIT, reason="Safe default: no AI decision yet."
 )
 
+# BUY asimetri tabanı: hedefe mesafe, stopa mesafenin en az bu katı olmalı.
+# Prompt (kural 15) modelden aynı oranı ister; burası son savunma hattı.
+MIN_BUY_REWARD_RISK_RATIO = Decimal("1.5")
+
 
 # ---------------------------------------------------------------------------
 # RiskEngine
@@ -417,6 +421,21 @@ class RiskEngine:
                 return self._block(
                     request,
                     "BUY blocked: targetPrice must be above entryRange.max",
+                )
+
+            # Asimetri şartı sunucu tarafında da zorunlu: prompt 1.5× R/G
+            # ister ama model bazen 1:1 setup öneriyor (ör. TUPRS R/G≈0.99).
+            # Ödül/risk girişten ölçülür: (hedef − giriş) / (giriş − stop).
+            # sl/tp float da Decimal da gelebilir — Decimal'e normalize et.
+            entry_max = Decimal(str(entry.max))  # type: ignore[union-attr]
+            reward = Decimal(str(tp)) - entry_max
+            risk = entry_max - Decimal(str(sl))
+            if risk > 0 and reward / risk < MIN_BUY_REWARD_RISK_RATIO:
+                return self._block(
+                    request,
+                    f"BUY blocked: reward/risk {float(reward / risk):.2f} below "
+                    f"minimum {float(MIN_BUY_REWARD_RISK_RATIO):.2f} "
+                    f"(entry={entry.max}, stop={sl}, target={tp})",
                 )
 
         # ── Determine order type and price ──────────────────────────

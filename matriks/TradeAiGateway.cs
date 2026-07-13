@@ -3494,13 +3494,21 @@ namespace Matriks.Lean.Algotrader
 
         private static string NormalizePeriodName(string raw)
         {
-            string value = (raw ?? string.Empty).Trim().ToUpperInvariant().Replace("_", string.Empty);
-            if (value == "MIN" || value == "1M" || value == "MIN1") return "MIN1";
-            if (value == "5M" || value == "MIN5") return "MIN5";
-            if (value == "15M" || value == "MIN15") return "MIN15";
-            if (value == "30M" || value == "MIN30") return "MIN30";
-            if (value == "HOUR" || value == "1H" || value == "MIN60") return "MIN60";
-            if (value == "DAY" || value == "1D" || value == "DAY1") return "DAY1";
+            // Matriks bar olayları periyodu Türkçe raporlar ("1 DAKIKA",
+            // "1 SAAT", "GÜNLÜK"); boşluklar da atılır ki "1 DAKIKA" ile
+            // MIN1 aynı kanonik ada insin — aksi halde timeframeMismatch
+            // her zaman true kalıyordu ve actualBarPeriodSeconds null'du.
+            string value = (raw ?? string.Empty)
+                .Trim()
+                .ToUpperInvariant()
+                .Replace("_", string.Empty)
+                .Replace(" ", string.Empty);
+            if (value == "MIN" || value == "1M" || value == "MIN1" || value == "1DAKIKA" || value == "DAKIKA") return "MIN1";
+            if (value == "5M" || value == "MIN5" || value == "5DAKIKA") return "MIN5";
+            if (value == "15M" || value == "MIN15" || value == "15DAKIKA") return "MIN15";
+            if (value == "30M" || value == "MIN30" || value == "30DAKIKA") return "MIN30";
+            if (value == "HOUR" || value == "1H" || value == "MIN60" || value == "60DAKIKA" || value == "1SAAT" || value == "SAAT" || value == "SAATLIK" || value == "SAATLİK") return "MIN60";
+            if (value == "DAY" || value == "1D" || value == "DAY1" || value == "1GUN" || value == "1GÜN" || value == "GUNLUK" || value == "GÜNLÜK") return "DAY1";
             return value;
         }
 

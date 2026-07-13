@@ -606,6 +606,13 @@ async def persist_evaluation(
                     mode=req.mode.value,
                 )
             )
+            # Cache tekrarında sağlayıcının eski gecikmesini yazmak yanıltıcı
+            # olur — süre yalnızca gerçek LLM çağrısında kaydedilir.
+            response_time_ms = (
+                raw_ai.get("_response_time_ms")
+                if payload.get("decisionSource") == "llm"
+                else None
+            )
             session.add(
                 AiDecisionModel(
                     request_id=req.request_id,
@@ -618,6 +625,7 @@ async def persist_evaluation(
                     confidence=float(raw_ai.get("confidence", 0)),
                     qty=0,
                     reason=raw_ai.get("reason"),
+                    response_time_ms=response_time_ms,
                 )
             )
             session.add(

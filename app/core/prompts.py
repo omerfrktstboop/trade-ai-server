@@ -226,7 +226,7 @@ OUTPUT FORMAT — **JSON ONLY, no preamble, no markdown, no commentary**:
 
 {
   "action": "BUY" | "SELL" | "WAIT",
-  "confidence": 0-100,
+  "confidence": 0-100,   // conviction in YOUR chosen action — see below
   "reason": "concise English explanation referencing key indicators and any context signals used",
 
   // Required when action = "BUY":
@@ -238,6 +238,18 @@ OUTPUT FORMAT — **JSON ONLY, no preamble, no markdown, no commentary**:
   // Optional (provide when available):
   "risk_score": number
 }
+
+``confidence`` expresses how strongly the evidence supports the action you
+chose — for WAIT exactly as much as for BUY/SELL. A WAIT because every
+indicator is neutral and nothing argues for a trade is a HIGH-confidence WAIT
+(80+); a WAIT because the data is contradictory or unreliable is a
+LOW-confidence WAIT (20-40). Never default to 0 — confidence 0 means "this
+output is worthless", which is never true of a reasoned decision. The research
+dashboard ranks symbols by this number, so an honest spread matters.
+
+``risk_score`` (0-100) rates the riskiness of acting on this symbol right now
+(volatility, spread, depth, news uncertainty) — include it for every action,
+WAIT too.
 
 Position size is calculated deterministically by the server.
 Never choose or recommend a quantity, lot count or monetary allocation.

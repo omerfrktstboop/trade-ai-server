@@ -50,7 +50,7 @@ def _make_buy_decision(
         qty=qty,
         entry_range=EntryRange(min=95.0, max=102.0),
         stop_loss=93.0,
-        target_price=110.0,
+        target_price=116.0,
     )
     defaults.update(kwargs)
     return RiskDecision(**defaults)
@@ -598,7 +598,7 @@ class TestBuyPreflight:
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=102.0),
             stop_loss=93.0,
-            target_price=110.0,
+            target_price=116.0,
         )
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -613,6 +613,33 @@ class TestBuyPreflight:
         assert resp.allow_order is False
         assert resp.action == SignalAction.WAIT
         assert "missing entryRange, stopLoss, targetPrice" in resp.reason
+
+    def test_buy_symmetric_reward_risk_blocked(self):
+        """R/G < 1.5 (ör. 1:1 setup) → BUY bloklanır."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(mode=SignalMode.LIVE)
+        dec = _make_buy_decision(
+            entry_range=EntryRange(min=95.0, max=102.0),
+            stop_loss=93.0,   # risk = 9
+            target_price=110.0,  # reward = 8 → R/G ≈ 0.89
+        )
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is False
+        assert resp.action == SignalAction.WAIT
+        assert "reward/risk" in resp.reason
+
+    def test_buy_exact_minimum_reward_risk_passes(self):
+        """R/G tam 1.5 → sınır dahil, geçer."""
+        engine = RiskEngine(_cfg())
+        req = _make_request(mode=SignalMode.LIVE)
+        dec = _make_buy_decision(
+            entry_range=EntryRange(min=95.0, max=102.0),
+            stop_loss=94.0,   # risk = 8
+            target_price=114.0,  # reward = 12 → R/G = 1.5
+        )
+        resp = engine.evaluate(req, dec)
+        assert resp.allow_order is True
+        assert resp.action == SignalAction.BUY
 
 
 class TestLimitOrderBehaviour:
@@ -632,7 +659,7 @@ class TestLimitOrderBehaviour:
         req = _make_request(mode=SignalMode.LIVE, lastPrice=100.0)
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=110.0),
-            target_price=115.0,
+            target_price=136.0,
         )
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -742,7 +769,7 @@ class TestLimitOrderBehaviour:
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=102.0),
             stop_loss=93.0,
-            target_price=110.0,
+            target_price=116.0,
         )
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False

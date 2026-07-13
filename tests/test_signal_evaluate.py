@@ -163,7 +163,7 @@ class TestRiskEngineEdgeCases:
             qty=5,
             entry_range=EntryRange(min=95.0, max=102.0),
             stop_loss=93.0,
-            target_price=110.0,
+            target_price=116.0,
         )
         resp = engine.evaluate(req, decision)
         assert resp.allow_order is False
@@ -180,7 +180,7 @@ class TestRiskEngineEdgeCases:
             qty=5,
             entry_range=EntryRange(min=95.0, max=102.0),
             stop_loss=93.0,
-            target_price=110.0,
+            target_price=116.0,
         )
         resp = engine.evaluate(req, decision)
         assert resp.action == SignalAction.BUY

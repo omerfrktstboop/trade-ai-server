@@ -345,10 +345,14 @@ class DeepSeekProvider(AiProvider):
             }
 
         decision = _normalize_decision(parsed)
+        # Persisted to ai_decisions.response_time_ms; underscore prefix keeps
+        # it out of the trading schema like _audit_raw_response.
+        decision["_response_time_ms"] = int((time.monotonic() - t0) * 1000)
         logger.info(
-            "DeepSeek decision: action=%s confidence=%.1f",
+            "DeepSeek decision: action=%s confidence=%.1f elapsed_ms=%d",
             decision["action"],
             decision["confidence"],
+            decision["_response_time_ms"],
         )
         return decision
 

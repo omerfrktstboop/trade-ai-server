@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat
+
+from app.services.position_sizing import AccountSizingContext
 
 
 # ── Enums ──────────────────────────────────────────────────────────────────
@@ -94,8 +97,8 @@ class SignalMode(str, Enum):
 class EntryRange(BaseModel):
     """Price range for limit order entry."""
 
-    min: float = Field(..., description="Lower bound of entry range")
-    max: float = Field(..., description="Upper bound of entry range")
+    min: Decimal = Field(..., description="Lower bound of entry range")
+    max: Decimal = Field(..., description="Upper bound of entry range")
 
 
 # ── Request ────────────────────────────────────────────────────────────────
@@ -210,9 +213,12 @@ class SignalRequest(BaseModel):
     market_regime: Optional[str] = Field(None, alias="marketRegime")
 
     # Position context
-    bot_position_qty: float = Field(0.0, alias="botPositionQty")
-    total_account_qty: float = Field(0.0, alias="totalAccountQty")
-    locked_long_term_qty: float = Field(0.0, alias="lockedLongTermQty")
+    bot_position_qty: int = Field(0, alias="botPositionQty")
+    total_account_qty: int = Field(0, alias="totalAccountQty")
+    locked_long_term_qty: int = Field(0, alias="lockedLongTermQty")
+    account_sizing_context: AccountSizingContext | None = Field(
+        None, alias="accountSizingContext"
+    )
 
     # Daily trade count (fed by caller — e.g. Matriks IQ or DB)
     daily_trade_count: int = Field(0, alias="dailyTradeCount", ge=0)
@@ -244,17 +250,17 @@ class SignalResponse(BaseModel):
     request_id: str = Field(..., alias="requestId")
     symbol: str
     action: SignalAction
-    qty: FiniteFloat
+    qty: int
     order_type: OrderType = Field(..., alias="orderType")
-    price: Optional[FiniteFloat] = None
+    price: Optional[Decimal] = None
     confidence_score: float = Field(..., alias="confidenceScore")
     risk_score: float = Field(..., alias="riskScore")
     allow_order: bool = Field(..., alias="allowOrder")
     requires_confirmation: bool = Field(False, alias="requiresConfirmation")
     reason: str
     entry_range: Optional[EntryRange] = Field(None, alias="entryRange")
-    stop_loss: Optional[float] = Field(None, alias="stopLoss")
-    target_price: Optional[float] = Field(None, alias="targetPrice")
+    stop_loss: Optional[Decimal] = Field(None, alias="stopLoss")
+    target_price: Optional[Decimal] = Field(None, alias="targetPrice")
 
     model_config = {"populate_by_name": True}
 

@@ -28,6 +28,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app.config import AIProvider, settings
@@ -39,6 +40,7 @@ from sqlalchemy import select
 from app.models.db import AiDecision as AiDecisionModel
 from app.models.db import BotPosition as BotPositionModel
 from app.models.db import MarketSnapshot
+from app.models.db import PositionSizingAudit
 from app.models.db import RiskDecision as RiskDecisionModel
 from app.models.signal import (
     EntryRange,
@@ -62,6 +64,12 @@ from app.services.decision_gate import (
     preflight_wait_reason,
 )
 from app.services.fundamentals_service import get_fundamentals_context
+from app.services.effective_risk_config import (
+    EffectiveRiskConfigResolver,
+    EnvironmentRiskLimits,
+    SystemRiskConfig,
+    resolve_effective_risk_config,
+)
 from app.services.market_regime import get_index_regime
 from app.services.matriks_gateway import (
     GatewayError,
@@ -72,12 +80,17 @@ from app.services.news_service import get_news_context
 from app.services.kap_service import get_kap_context
 from app.services.risk_engine import RiskDecision, RiskEngine
 from app.services.signal_override import consume_override, override_to_raw_decision
-from app.services.trade_profile import get_active_profile
+from app.services.trade_profile import get_active_profile, get_static_default_profile
 
 logger = logging.getLogger(__name__)
 
 # Statik singleton — runtime config yüklenemediğinde kullanılan yedek motor.
-_static_risk_engine = RiskEngine(risk_config)
+_static_effective_config = EffectiveRiskConfigResolver().resolve(
+    environment_limits=EnvironmentRiskLimits.from_environment(),
+    system_config=SystemRiskConfig(),
+    trade_profile=get_static_default_profile(),
+)
+_static_risk_engine = RiskEngine(risk_config, _static_effective_config)
 
 
 def _decision_persistence_metadata(payload: dict[str, Any]) -> tuple[str, str | None]:
@@ -262,6 +275,7 @@ async def with_runtime_controls(
             runtime_config = await build_runtime_risk_config(session)
             mode_override = await get_trading_mode_override(session)
             kill_switch_enabled = await is_kill_switch_enabled(session)
+            effective_config = await resolve_effective_risk_config(session)
     except Exception:
         logger.exception(
             "Failed to load runtime admin config request_id=%s symbol=%s",
@@ -272,7 +286,7 @@ async def with_runtime_controls(
 
     if mode_override is not None:
         req = req.model_copy(update={"mode": mode_override})
-    return req, RiskEngine(runtime_config), kill_switch_enabled
+    return req, RiskEngine(runtime_config, effective_config), kill_switch_enabled
 
 
 def kill_switch_response(req: SignalRequest) -> SignalResponse:
@@ -350,6 +364,17 @@ def _safe_float(raw_value: Any, default: Any = 0.0) -> Any:
         return default
 
 
+def _safe_decimal(raw_value: Any, default: Any = None) -> Decimal | Any:
+    """Parse an external financial value without Decimal(float)."""
+    if raw_value is None:
+        return default
+    try:
+        value = raw_value if isinstance(raw_value, Decimal) else Decimal(str(raw_value))
+    except (InvalidOperation, ValueError, TypeError):
+        return default
+    return value if value.is_finite() else default
+
+
 def dict_to_risk_decision(raw: dict, _req: SignalRequest | None = None) -> RiskDecision:
     """Parse a provider response dict into a RiskDecision.
 
@@ -377,14 +402,10 @@ def dict_to_risk_decision(raw: dict, _req: SignalRequest | None = None) -> RiskD
         confidence=_safe_float(raw.get("confidence")),
         risk_score=_safe_float(raw.get("risk_score")),
         reason=reason,
-        qty=_safe_float(raw.get("qty")),
+        qty=0,
         entry_range=_parse_entry_range(raw),
-        stop_loss=_safe_float(raw.get("stop_loss") or raw.get("stopLoss"), default=0.0)
-        or None,
-        target_price=_safe_float(
-            raw.get("target_price") or raw.get("targetPrice"), default=0.0
-        )
-        or None,
+        stop_loss=_safe_decimal(raw.get("stop_loss") or raw.get("stopLoss")),
+        target_price=_safe_decimal(raw.get("target_price") or raw.get("targetPrice")),
     )
 
 
@@ -407,8 +428,8 @@ def _parse_entry_range(raw: dict) -> EntryRange | None:
             or entry_range.get("entry_max")
         )
         if mn is not None and mx is not None:
-            mn = _safe_float(mn, default=None)
-            mx = _safe_float(mx, default=None)
+            mn = _safe_decimal(mn)
+            mx = _safe_decimal(mx)
             if mn is not None and mx is not None:
                 return EntryRange(min=mn, max=mx)
 
@@ -416,8 +437,8 @@ def _parse_entry_range(raw: dict) -> EntryRange | None:
     entry_min = raw.get("entryMin") or raw.get("entry_min")
     entry_max = raw.get("entryMax") or raw.get("entry_max")
     if entry_min is not None and entry_max is not None:
-        entry_min = _safe_float(entry_min, default=None)
-        entry_max = _safe_float(entry_max, default=None)
+        entry_min = _safe_decimal(entry_min)
+        entry_max = _safe_decimal(entry_max)
         if entry_min is not None and entry_max is not None:
             return EntryRange(min=entry_min, max=entry_max)
 
@@ -483,10 +504,10 @@ async def persist_evaluation(
                     provider=provider_name,
                     model=model_name,
                     raw_request=payload,
-                    raw_response=raw_ai,
+                    raw_response=raw_ai.get("_audit_raw_response", raw_ai),
                     action=raw_ai.get("action", "WAIT"),
                     confidence=float(raw_ai.get("confidence", 0)),
-                    qty=float(raw_ai.get("qty", 0)),
+                    qty=0,
                     reason=raw_ai.get("reason"),
                 )
             )
@@ -518,6 +539,63 @@ async def persist_evaluation(
         # DB is optional for the evaluation flow — never fail the caller
         logger.exception(
             "Failed to persist signal evaluation request_id=%s symbol=%s",
+            req.request_id,
+            req.symbol,
+        )
+
+
+async def persist_sizing_audit(req: SignalRequest, engine: RiskEngine) -> None:
+    """Persist the exact server-side sizing inputs and result, without secrets."""
+    result = engine.last_sizing_result
+    trade = engine.last_sizing_trade
+    limits = engine.effective_config
+    account = req.account_sizing_context
+    if result is None or limits is None or account is None or trade is None:
+        return
+    details = result.calculation_details
+    try:
+        async with async_session_factory() as session:
+            session.add(
+                PositionSizingAudit(
+                    request_id=req.request_id,
+                    symbol=req.symbol,
+                    trade_profile_id=limits.trade_profile_id,
+                    trade_profile_version=limits.trade_profile_version,
+                    system_config_version=limits.system_config_version,
+                    environment_config_fingerprint=(
+                        limits.environment_config_fingerprint
+                    ),
+                    account_equity_tl=account.account_equity_tl,
+                    effective_available_cash_tl=(account.effective_available_cash_tl),
+                    risk_per_trade_pct=limits.risk_per_trade_pct,
+                    risk_budget_tl=result.risk_budget_tl,
+                    entry_price=trade.entry_price,
+                    stop_loss=trade.stop_loss,
+                    raw_stop_distance_tl=result.raw_stop_distance_tl,
+                    slippage_buffer_tl=result.slippage_buffer_tl,
+                    effective_stop_distance_tl=result.effective_stop_distance_tl,
+                    qty_by_risk=details.get("qty_by_risk"),
+                    qty_by_cash=details.get("qty_by_cash"),
+                    qty_by_account_exposure=details.get("qty_by_account_exposure"),
+                    qty_by_symbol_position=details.get("qty_by_symbol_position"),
+                    qty_by_order_value=details.get("qty_by_order_value"),
+                    qty_by_profile_max=details.get("qty_by_profile_max"),
+                    final_qty=result.qty,
+                    order_value_tl=result.order_value_tl,
+                    estimated_loss_at_stop_tl=result.estimated_loss_at_stop_tl,
+                    binding_limits=result.binding_limits,
+                    allowed=result.allowed,
+                    reason=result.reason,
+                    effective_risk_config=limits.model_dump(mode="json"),
+                    calculation_details=result.model_dump(mode="json")[
+                        "calculation_details"
+                    ],
+                )
+            )
+            await session.commit()
+    except Exception:
+        logger.exception(
+            "Failed to persist sizing audit request_id=%s symbol=%s",
             req.request_id,
             req.symbol,
         )
@@ -879,6 +957,7 @@ async def evaluate_symbol(
     decision = dict_to_risk_decision(raw, sig_req)
     sig_req = await with_resolved_daily_trade_count(sig_req)
     response = runtime_engine.evaluate(sig_req, decision, market_regime=market_regime)
+    await persist_sizing_audit(sig_req, runtime_engine)
     from app.services.news_risk_lock import apply_news_risk_lock
 
     response = await apply_news_risk_lock(response, sig_req.symbol)
@@ -940,6 +1019,6 @@ def _log_evaluation(req: SignalRequest, response: SignalResponse) -> None:
         request_id=req.request_id,
         symbol=req.symbol,
         mode=req.mode.value,
-        request=req.model_dump(by_alias=True, exclude={"mode"}),
-        response=response.model_dump(by_alias=True),
+        request=req.model_dump(by_alias=True, exclude={"mode"}, mode="json"),
+        response=response.model_dump(by_alias=True, mode="json"),
     )

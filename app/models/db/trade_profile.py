@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -37,9 +38,42 @@ class TradeProfile(Base):
         String(64), default="PAPER,MANUAL,DEMO_LIVE,REAL_LIVE"
     )
 
-    max_order_value_tl: Mapped[float] = mapped_column(Float, nullable=False)
-    max_qty_per_order: Mapped[float] = mapped_column(Float, nullable=False)
-    max_position_value_per_symbol: Mapped[float] = mapped_column(Float, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    risk_per_trade_pct: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), default=Decimal("0.50"), nullable=False
+    )
+    max_cash_utilization_pct: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), default=Decimal("25"), nullable=False
+    )
+    max_account_exposure_pct: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), default=Decimal("50"), nullable=False
+    )
+    max_order_value_tl: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
+    max_qty_per_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_position_value_per_symbol: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), nullable=False
+    )
+    min_order_value_tl: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), default=Decimal("1"), nullable=False
+    )
+    min_stop_distance_pct: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), default=Decimal("0.10"), nullable=False
+    )
+    max_stop_distance_pct: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), default=Decimal("10"), nullable=False
+    )
+    minimum_stop_slippage_pct: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), default=Decimal("0.05"), nullable=False
+    )
+    maximum_stop_slippage_pct: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), default=Decimal("1"), nullable=False
+    )
+    profile_stop_slippage_pct: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), default=Decimal("0.20"), nullable=False
+    )
+    max_account_data_age_seconds: Mapped[Decimal] = mapped_column(
+        Numeric(20, 8), default=Decimal("60"), nullable=False
+    )
     max_orders_per_day: Mapped[int] = mapped_column(Integer, nullable=False)
     max_orders_per_symbol_per_day: Mapped[int] = mapped_column(Integer, nullable=False)
 

@@ -213,9 +213,12 @@ OUTPUT FORMAT — **JSON ONLY, no preamble, no markdown, no commentary**:
   "bear_case": "1-2 sentences: what refutes this thesis; when to abandon the position entirely",
 
   // Optional (provide when available):
-  "qty": number,
   "risk_score": number
 }
+
+Position size is calculated deterministically by the server.
+Never choose or recommend a quantity, lot count or monetary allocation.
+Do not include qty in the response.
 
 ────────────────────────────────────────────────────────────
 INDICATOR REFERENCE (technical):

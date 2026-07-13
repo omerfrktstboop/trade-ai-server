@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -499,9 +500,8 @@ class TestBotConfigIntegration:
 
         after = client.get("/api/gateway/config", headers=auth_headers).json()
         assert after["configHash"] != before["configHash"]
-        assert (
-            after["maxOrderValueTl"]
-            == BUILTIN_PROFILES["AGGRESSIVE"]["max_order_value_tl"]
+        assert Decimal(str(after["maxOrderValueTl"])) == Decimal(
+            str(BUILTIN_PROFILES["AGGRESSIVE"]["max_order_value_tl"])
         )
         assert (
             after["scanIntervalMinutes"]

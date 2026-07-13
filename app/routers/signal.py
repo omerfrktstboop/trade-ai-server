@@ -30,6 +30,7 @@ from app.services.evaluator import (
     dict_to_risk_decision,
     kill_switch_response,
     persist_evaluation,
+    persist_sizing_audit,
     with_resolved_daily_trade_count,
     with_runtime_controls,
 )
@@ -68,8 +69,8 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
             request_id=body.request_id,
             symbol=body.symbol,
             mode=body.mode.value,
-            request=body.model_dump(by_alias=True, exclude={"mode"}),
-            response=response.model_dump(by_alias=True),
+            request=body.model_dump(by_alias=True, exclude={"mode"}, mode="json"),
+            response=response.model_dump(by_alias=True, mode="json"),
         )
         await persist_evaluation(body, payload, raw, response)
         return response
@@ -96,14 +97,15 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
     decision = dict_to_risk_decision(raw, body)
     body = await with_resolved_daily_trade_count(body)
     response = runtime_engine.evaluate(body, decision)
+    await persist_sizing_audit(body, runtime_engine)
 
     # ── 5. Persist to JSON-lines log ──────────────────────────────────────
     log_signal_evaluation(
         request_id=body.request_id,
         symbol=body.symbol,
         mode=body.mode.value,
-        request=body.model_dump(by_alias=True, exclude={"mode"}),
-        response=response.model_dump(by_alias=True),
+        request=body.model_dump(by_alias=True, exclude={"mode"}, mode="json"),
+        response=response.model_dump(by_alias=True, mode="json"),
     )
 
     # ── 6. Persist to the database ────────────────────────────────────────

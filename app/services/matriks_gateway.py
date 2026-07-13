@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -257,8 +258,8 @@ class MatriksGatewayClient:
         request_id: str,
         symbol: str,
         side: str,
-        qty: float,
-        limit_price: float,
+        qty: int,
+        limit_price: Decimal | float,
         mode: str,
     ) -> dict[str, Any]:
         """POST /order — gateway'e LIMIT emir isteği gönder.
@@ -280,7 +281,9 @@ class MatriksGatewayClient:
             "symbol": symbol.strip().upper(),
             "side": side.strip().upper(),
             "qty": qty,
-            "limitPrice": limit_price,
+            "limitPrice": str(limit_price)
+            if isinstance(limit_price, Decimal)
+            else limit_price,
             "mode": mode.strip().upper(),
         }
         try:

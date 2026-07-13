@@ -75,7 +75,7 @@ async def apply_news_risk_lock(response: SignalResponse, symbol: str) -> SignalR
     response.allow_order = False
     response.requires_confirmation = False
     response.order_type = OrderType.NONE
-    response.qty = 0.0
+    response.qty = 0
     response.price = None
     response.reason = (
         f"BUY blocked: negative news/KAP risk detected: {keyword} - {headline}"

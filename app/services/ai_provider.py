@@ -109,12 +109,12 @@ def _normalize_decision(raw: dict[str, Any]) -> dict[str, Any]:
         "action": action,
         "confidence": confidence,
         "reason": reason,
+        "_audit_raw_response": raw,
     }
 
     # Optional numeric fields — accept camelCase (matches the rest of the API's
     # JSON convention) as well as the snake_case documented in the system prompt.
     numeric_aliases: dict[str, tuple[str, ...]] = {
-        "qty": ("qty",),
         "stop_loss": ("stop_loss", "stopLoss"),
         "target_price": ("target_price", "targetPrice"),
         "risk_score": ("risk_score", "riskScore"),
@@ -179,7 +179,7 @@ class AiProvider(ABC):
             - ``action``: ``"BUY"``, ``"SELL"``, or ``"WAIT"``
             - ``confidence``: float 0-100
             - ``reason``: human-readable explanation
-            Optional: ``qty``, ``stop_loss``, ``target_price``, ``risk_score``
+            Optional: ``stop_loss``, ``target_price``, ``risk_score``
         """
         ...
 

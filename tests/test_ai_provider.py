@@ -163,7 +163,8 @@ class TestNormalizeDecision:
                 "target_price": 110.0,
             }
         )
-        assert result["qty"] == 5.0
+        assert "qty" not in result
+        assert result["_audit_raw_response"]["qty"] == 5
         assert result["stop_loss"] == 95.5
         assert result["target_price"] == 110.0
 
@@ -294,7 +295,8 @@ class TestDeepSeekDecide:
 
         assert result["action"] == "SELL"
         assert result["confidence"] == 90.0
-        assert result.get("qty") == 10.0
+        assert result.get("qty") is None
+        assert result["_audit_raw_response"]["qty"] == 10
 
     @pytest.mark.asyncio
     async def test_json_inside_code_block(self):

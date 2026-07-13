@@ -23,6 +23,7 @@ Checks applied (in order):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import ROUND_DOWN, Decimal
 from typing import Optional
 
 from app.core.risk_config import RiskConfig
@@ -33,6 +34,12 @@ from app.models.signal import (
     SignalMode,
     SignalRequest,
     SignalResponse,
+)
+from app.services.effective_risk_config import EffectiveRiskConfig
+from app.services.position_sizing import (
+    PositionSizingResult,
+    PositionSizingService,
+    TradeSizingContext,
 )
 
 
@@ -49,10 +56,10 @@ class RiskDecision:
     confidence: float = 0.0
     risk_score: float = 0.0
     reason: str = ""
-    qty: float = 0.0
+    qty: int = 0
     entry_range: Optional[EntryRange] = None
-    stop_loss: Optional[float] = None
-    target_price: Optional[float] = None
+    stop_loss: Optional[Decimal] = None
+    target_price: Optional[Decimal] = None
 
 
 # ---------------------------------------------------------------------------
@@ -79,8 +86,15 @@ class RiskEngine:
         response = engine.evaluate(signal_request, decision)
     """
 
-    def __init__(self, config: RiskConfig) -> None:
+    def __init__(
+        self,
+        config: RiskConfig,
+        effective_config: EffectiveRiskConfig | None = None,
+    ) -> None:
         self.config = config
+        self.effective_config = effective_config
+        self.last_sizing_result: PositionSizingResult | None = None
+        self.last_sizing_trade: TradeSizingContext | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -117,6 +131,8 @@ class RiskEngine:
         """
         if decision is None:
             decision = DEFAULT_WAIT
+        self.last_sizing_result = None
+        self.last_sizing_trade = None
 
         reasons: list[str] = []
 
@@ -230,7 +246,7 @@ class RiskEngine:
         qty = decision.qty
         if action == SignalAction.SELL:
             account_free_qty = max(
-                0.0, request.total_account_qty - request.locked_long_term_qty
+                0, request.total_account_qty - request.locked_long_term_qty
             )
             sellable_qty = min(request.bot_position_qty, account_free_qty)
 
@@ -242,16 +258,53 @@ class RiskEngine:
                     f"free_acct={account_free_qty}, "
                     f"locked={request.locked_long_term_qty})",
                 )
-            if qty > sellable_qty:
-                reasons.append(
-                    f"SELL qty clamped from {qty} to {sellable_qty} "
-                    f"(bot_pos={request.bot_position_qty}, "
-                    f"free_acct={account_free_qty})"
+            # AI never selects SELL quantity either. Preserve the existing
+            # ownership/locked-lot safety rule and deterministically exit only
+            # the integer quantity the bot is allowed to sell.
+            qty = int(Decimal(str(sellable_qty)).to_integral_value(rounding=ROUND_DOWN))
+            if qty <= 0:
+                return self._block(
+                    request, "SELL blocked: sellable integer qty is zero"
                 )
-                qty = sellable_qty
+            reasons.append(
+                f"SELL qty deterministically clamped to {qty} "
+                f"(bot_pos={request.bot_position_qty}, free_acct={account_free_qty})"
+            )
+
+        if action == SignalAction.BUY and self.effective_config is not None:
+            if request.account_sizing_context is None:
+                return self._block(
+                    request,
+                    "BUY blocked: AccountSizingContext unavailable; TASK 1B adapter required",
+                )
+            if (
+                decision.entry_range is None
+                or decision.stop_loss is None
+                or decision.target_price is None
+            ):
+                return self._block(
+                    request,
+                    "BUY blocked: deterministic sizing requires entryRange, stopLoss and targetPrice",
+                )
+            self.last_sizing_trade = TradeSizingContext(
+                symbol=request.symbol,
+                entry_price=decision.entry_range.max,
+                stop_loss=decision.stop_loss,
+                target_price=decision.target_price,
+                confidence=Decimal(str(decision.confidence)),
+                current_price=Decimal(str(request.last_price)),
+            )
+            self.last_sizing_result = PositionSizingService().calculate_buy_size(
+                account=request.account_sizing_context,
+                trade=self.last_sizing_trade,
+                limits=self.effective_config,
+            )
+            if not self.last_sizing_result.allowed:
+                return self._block(request, self.last_sizing_result.reason)
+            qty = self.last_sizing_result.qty
 
         # ── 6. Max position value check ──────────────────────────────
-        if action == SignalAction.BUY and qty > 0:
+        if action == SignalAction.BUY and qty > 0 and self.effective_config is None:
             current_qty = max(
                 0.0,
                 request.bot_position_qty,

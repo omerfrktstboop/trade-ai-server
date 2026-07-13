@@ -12,6 +12,7 @@ admin_config's synchronous ``_serialize_value`` can't do).
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -33,6 +34,16 @@ EDITABLE_FIELDS = (
     "max_order_value_tl",
     "max_qty_per_order",
     "max_position_value_per_symbol",
+    "risk_per_trade_pct",
+    "max_cash_utilization_pct",
+    "max_account_exposure_pct",
+    "min_order_value_tl",
+    "min_stop_distance_pct",
+    "max_stop_distance_pct",
+    "minimum_stop_slippage_pct",
+    "maximum_stop_slippage_pct",
+    "profile_stop_slippage_pct",
+    "max_account_data_age_seconds",
     "max_orders_per_day",
     "max_orders_per_symbol_per_day",
     "min_confidence_for_buy",
@@ -64,9 +75,19 @@ FIELD_TYPES: dict[str, type] = {
     "description": str,
     "risk_level": str,
     "allowed_modes": str,
-    "max_order_value_tl": float,
-    "max_qty_per_order": float,
-    "max_position_value_per_symbol": float,
+    "max_order_value_tl": Decimal,
+    "max_qty_per_order": int,
+    "max_position_value_per_symbol": Decimal,
+    "risk_per_trade_pct": Decimal,
+    "max_cash_utilization_pct": Decimal,
+    "max_account_exposure_pct": Decimal,
+    "min_order_value_tl": Decimal,
+    "min_stop_distance_pct": Decimal,
+    "max_stop_distance_pct": Decimal,
+    "minimum_stop_slippage_pct": Decimal,
+    "maximum_stop_slippage_pct": Decimal,
+    "profile_stop_slippage_pct": Decimal,
+    "max_account_data_age_seconds": Decimal,
     "max_orders_per_day": int,
     "max_orders_per_symbol_per_day": int,
     "min_confidence_for_buy": float,
@@ -99,9 +120,9 @@ BUILTIN_PROFILES: dict[str, dict[str, Any]] = {
         "description": "Sıkı limitler, yüksek güven eşiği — küçük ve seyrek işlemler.",
         "risk_level": "LOW",
         "is_default": False,
-        "max_order_value_tl": 500.0,
-        "max_qty_per_order": 1.0,
-        "max_position_value_per_symbol": 1000.0,
+        "max_order_value_tl": Decimal("500"),
+        "max_qty_per_order": 1,
+        "max_position_value_per_symbol": Decimal("1000"),
         "max_orders_per_day": 1,
         "max_orders_per_symbol_per_day": 1,
         "min_confidence_for_buy": 85.0,
@@ -124,9 +145,9 @@ BUILTIN_PROFILES: dict[str, dict[str, Any]] = {
         "description": "Varsayılan dengeli profil.",
         "risk_level": "MEDIUM",
         "is_default": True,
-        "max_order_value_tl": 1000.0,
-        "max_qty_per_order": 3.0,
-        "max_position_value_per_symbol": 3000.0,
+        "max_order_value_tl": Decimal("1000"),
+        "max_qty_per_order": 3,
+        "max_position_value_per_symbol": Decimal("3000"),
         "max_orders_per_day": 3,
         "max_orders_per_symbol_per_day": 1,
         "min_confidence_for_buy": 75.0,
@@ -149,9 +170,9 @@ BUILTIN_PROFILES: dict[str, dict[str, Any]] = {
         "description": "Gevşek limitler, düşük güven eşiği — sık ve büyük işlemler.",
         "risk_level": "HIGH",
         "is_default": False,
-        "max_order_value_tl": 3000.0,
-        "max_qty_per_order": 10.0,
-        "max_position_value_per_symbol": 10000.0,
+        "max_order_value_tl": Decimal("3000"),
+        "max_qty_per_order": 10,
+        "max_position_value_per_symbol": Decimal("10000"),
         "max_orders_per_day": 8,
         "max_orders_per_symbol_per_day": 3,
         "min_confidence_for_buy": 65.0,
@@ -174,9 +195,9 @@ BUILTIN_PROFILES: dict[str, dict[str, Any]] = {
         "description": "En gevşek limitler — sadece deney/test amaçlı, REAL_LIVE varsayılan kapalı.",
         "risk_level": "EXTREME",
         "is_default": False,
-        "max_order_value_tl": 5000.0,
-        "max_qty_per_order": 20.0,
-        "max_position_value_per_symbol": 15000.0,
+        "max_order_value_tl": Decimal("5000"),
+        "max_qty_per_order": 20,
+        "max_position_value_per_symbol": Decimal("15000"),
         "max_orders_per_day": 15,
         "max_orders_per_symbol_per_day": 5,
         "min_confidence_for_buy": 55.0,
@@ -195,6 +216,40 @@ BUILTIN_PROFILES: dict[str, dict[str, Any]] = {
         "indicator_period": "Min5",
     },
 }
+
+_SIZING_DEFAULTS: dict[str, dict[str, Any]] = {
+    "CONSERVATIVE": {
+        "risk_per_trade_pct": Decimal("0.25"),
+        "max_cash_utilization_pct": Decimal("15"),
+        "max_account_exposure_pct": Decimal("30"),
+    },
+    "NORMAL": {
+        "risk_per_trade_pct": Decimal("0.50"),
+        "max_cash_utilization_pct": Decimal("25"),
+        "max_account_exposure_pct": Decimal("50"),
+    },
+    "AGGRESSIVE": {
+        "risk_per_trade_pct": Decimal("0.75"),
+        "max_cash_utilization_pct": Decimal("35"),
+        "max_account_exposure_pct": Decimal("65"),
+    },
+    "HIGH_RISK": {
+        "risk_per_trade_pct": Decimal("1"),
+        "max_cash_utilization_pct": Decimal("50"),
+        "max_account_exposure_pct": Decimal("75"),
+    },
+}
+for _profile_code, _profile_defaults in _SIZING_DEFAULTS.items():
+    BUILTIN_PROFILES[_profile_code].update(
+        **_profile_defaults,
+        min_order_value_tl=Decimal("1"),
+        min_stop_distance_pct=Decimal("0.10"),
+        max_stop_distance_pct=Decimal("10"),
+        minimum_stop_slippage_pct=Decimal("0.05"),
+        maximum_stop_slippage_pct=Decimal("1"),
+        profile_stop_slippage_pct=Decimal("0.20"),
+        max_account_data_age_seconds=Decimal("60"),
+    )
 
 
 def _builtin_profile_instance(code: str) -> TradeProfile:
@@ -339,19 +394,44 @@ async def create_profile(
 def profile_requires_confirmation(old: TradeProfile, changes: dict[str, Any]) -> bool:
     """True if ``changes`` applied to ``old`` loosen a safety-relevant field."""
 
+    def _decimal(value: Any) -> Decimal:
+        return value if isinstance(value, Decimal) else Decimal(str(value))
+
     def _increased(field: str) -> bool:
-        return field in changes and float(changes[field]) > float(getattr(old, field))
+        return field in changes and _decimal(changes[field]) > _decimal(
+            getattr(old, field)
+        )
 
     def _decreased(field: str) -> bool:
-        return field in changes and float(changes[field]) < float(getattr(old, field))
+        return field in changes and _decimal(changes[field]) < _decimal(
+            getattr(old, field)
+        )
 
     if any(
         _increased(f)
-        for f in ("max_order_value_tl", "max_qty_per_order", "max_orders_per_day")
+        for f in (
+            "max_order_value_tl",
+            "max_qty_per_order",
+            "max_position_value_per_symbol",
+            "max_orders_per_day",
+            "risk_per_trade_pct",
+            "max_cash_utilization_pct",
+            "max_account_exposure_pct",
+            "max_stop_distance_pct",
+            "max_account_data_age_seconds",
+        )
     ):
         return True
     if any(
-        _decreased(f) for f in ("min_confidence_for_buy", "min_confidence_for_sell")
+        _decreased(f)
+        for f in (
+            "min_confidence_for_buy",
+            "min_confidence_for_sell",
+            "min_stop_distance_pct",
+            "minimum_stop_slippage_pct",
+            "profile_stop_slippage_pct",
+            "maximum_stop_slippage_pct",
+        )
     ):
         return True
     if changes.get("allow_real_live") is True and not old.allow_real_live:
@@ -394,6 +474,7 @@ async def update_profile(
 
     for field, value in changes.items():
         setattr(profile, field, value)
+    profile.version = int(profile.version or 1) + 1
 
     session.add(
         ConfigAuditLog(

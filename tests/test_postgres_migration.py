@@ -4,6 +4,7 @@ import asyncio
 import os
 import subprocess
 import sys
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import text
@@ -84,6 +85,34 @@ async def _verify_upgrade_and_concurrent_upsert() -> None:
         assert merged.status == "FILLED"
         assert merged.state == "FILLED"
         assert merged.order_qty == 2
+        await connection.execute(
+            text(
+                """
+                INSERT INTO position_sizing_audits (
+                    request_id, symbol, trade_profile_version,
+                    system_config_version, environment_config_fingerprint,
+                    risk_per_trade_pct, risk_budget_tl, raw_stop_distance_tl,
+                    slippage_buffer_tl, effective_stop_distance_tl, final_qty,
+                    order_value_tl, estimated_loss_at_stop_tl, binding_limits,
+                    allowed, reason, effective_risk_config, calculation_details
+                ) VALUES (
+                    'decimal-pg', 'THYAO', 1, 'v1', :fingerprint,
+                    0.5000000000, 123.1234567890, 5.0000000000,
+                    0.1234567890, 5.1234567890, 24,
+                    2400.0000000000, 122.9629629360, '[]',
+                    true, 'test', '{}', '{}'
+                )
+                """
+            ),
+            {"fingerprint": "a" * 64},
+        )
+        exact = await connection.scalar(
+            text(
+                "SELECT risk_budget_tl FROM position_sizing_audits "
+                "WHERE request_id='decimal-pg'"
+            )
+        )
+        assert exact == Decimal("123.1234567890")
         with pytest.raises(IntegrityError):
             await connection.execute(
                 text(
@@ -126,6 +155,18 @@ async def _verify_rollback() -> None:
         }
         assert "request_fingerprint" not in columns
         assert "order_qty" not in columns
+        tables = {
+            row[0]
+            for row in (
+                await connection.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema='public'"
+                    )
+                )
+            )
+        }
+        assert "position_sizing_audits" not in tables
     await engine.dispose()
 
 

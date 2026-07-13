@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
+from decimal import Decimal
 import time
 from collections import Counter
 from datetime import UTC, datetime, timedelta
@@ -157,10 +158,32 @@ class TradeProfileFieldsBody(BaseModel):
     description: str | None = None
     risk_level: str | None = Field(None, alias="riskLevel")
     allowed_modes: str | None = Field(None, alias="allowedModes")
-    max_order_value_tl: float | None = Field(None, alias="maxOrderValueTl")
-    max_qty_per_order: float | None = Field(None, alias="maxQtyPerOrder")
-    max_position_value_per_symbol: float | None = Field(
+    max_order_value_tl: Decimal | None = Field(None, alias="maxOrderValueTl")
+    max_qty_per_order: int | None = Field(None, alias="maxQtyPerOrder")
+    max_position_value_per_symbol: Decimal | None = Field(
         None, alias="maxPositionValuePerSymbol"
+    )
+    risk_per_trade_pct: Decimal | None = Field(None, alias="riskPerTradePct")
+    max_cash_utilization_pct: Decimal | None = Field(
+        None, alias="maxCashUtilizationPct"
+    )
+    max_account_exposure_pct: Decimal | None = Field(
+        None, alias="maxAccountExposurePct"
+    )
+    min_order_value_tl: Decimal | None = Field(None, alias="minOrderValueTl")
+    min_stop_distance_pct: Decimal | None = Field(None, alias="minStopDistancePct")
+    max_stop_distance_pct: Decimal | None = Field(None, alias="maxStopDistancePct")
+    minimum_stop_slippage_pct: Decimal | None = Field(
+        None, alias="minimumStopSlippagePct"
+    )
+    maximum_stop_slippage_pct: Decimal | None = Field(
+        None, alias="maximumStopSlippagePct"
+    )
+    profile_stop_slippage_pct: Decimal | None = Field(
+        None, alias="profileStopSlippagePct"
+    )
+    max_account_data_age_seconds: Decimal | None = Field(
+        None, alias="maxAccountDataAgeSeconds"
     )
     max_orders_per_day: int | None = Field(None, alias="maxOrdersPerDay")
     max_orders_per_symbol_per_day: int | None = Field(
@@ -858,6 +881,8 @@ def _parse_profile_form_fields(form: Any) -> dict[str, Any]:
             value = _to_float(raw)
             if value is not None:
                 changes[field] = value
+        elif field_type is Decimal:
+            changes[field] = Decimal(str(raw))
         elif field_type is int:
             value = _to_float(raw)
             if value is not None:
@@ -1649,6 +1674,16 @@ def _trade_profile_dict(profile: TradeProfile, active_code: str) -> dict[str, An
         "maxOrderValueTl": profile.max_order_value_tl,
         "maxQtyPerOrder": profile.max_qty_per_order,
         "maxPositionValuePerSymbol": profile.max_position_value_per_symbol,
+        "riskPerTradePct": profile.risk_per_trade_pct,
+        "maxCashUtilizationPct": profile.max_cash_utilization_pct,
+        "maxAccountExposurePct": profile.max_account_exposure_pct,
+        "minOrderValueTl": profile.min_order_value_tl,
+        "minStopDistancePct": profile.min_stop_distance_pct,
+        "maxStopDistancePct": profile.max_stop_distance_pct,
+        "minimumStopSlippagePct": profile.minimum_stop_slippage_pct,
+        "maximumStopSlippagePct": profile.maximum_stop_slippage_pct,
+        "profileStopSlippagePct": profile.profile_stop_slippage_pct,
+        "maxAccountDataAgeSeconds": profile.max_account_data_age_seconds,
         "maxOrdersPerDay": profile.max_orders_per_day,
         "maxOrdersPerSymbolPerDay": profile.max_orders_per_symbol_per_day,
         "minConfidenceForBuy": profile.min_confidence_for_buy,

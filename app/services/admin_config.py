@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -149,6 +150,78 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "15",
         "Matriks bot HTTP timeout suresi, saniye.",
     ),
+    "sizingRiskPerTradePct": ConfigDefinition(
+        "sizingRiskPerTradePct", "decimal", "0.50", "Per-trade equity risk percent."
+    ),
+    "sizingMaxCashUtilizationPct": ConfigDefinition(
+        "sizingMaxCashUtilizationPct",
+        "decimal",
+        "25",
+        "Maximum cash utilization percent.",
+    ),
+    "sizingMaxAccountExposurePct": ConfigDefinition(
+        "sizingMaxAccountExposurePct",
+        "decimal",
+        "50",
+        "Maximum account exposure percent.",
+    ),
+    "sizingMaxPositionValuePerSymbol": ConfigDefinition(
+        "sizingMaxPositionValuePerSymbol",
+        "decimal",
+        "3000",
+        "Maximum symbol position value.",
+    ),
+    "sizingMaxOrderValueTl": ConfigDefinition(
+        "sizingMaxOrderValueTl", "decimal", "1000", "Maximum order value in TL."
+    ),
+    "sizingMaxQtyPerOrder": ConfigDefinition(
+        "sizingMaxQtyPerOrder", "int", "3", "Maximum integer lot quantity per order."
+    ),
+    "sizingMinOrderValueTl": ConfigDefinition(
+        "sizingMinOrderValueTl", "decimal", "1", "Minimum order value in TL."
+    ),
+    "sizingMinStopDistancePct": ConfigDefinition(
+        "sizingMinStopDistancePct", "decimal", "0.10", "Minimum stop distance percent."
+    ),
+    "sizingMaxStopDistancePct": ConfigDefinition(
+        "sizingMaxStopDistancePct", "decimal", "10", "Maximum stop distance percent."
+    ),
+    "sizingMinimumStopSlippagePct": ConfigDefinition(
+        "sizingMinimumStopSlippagePct",
+        "decimal",
+        "0.05",
+        "Minimum stop slippage buffer percent.",
+    ),
+    "sizingMaximumStopSlippagePct": ConfigDefinition(
+        "sizingMaximumStopSlippagePct",
+        "decimal",
+        "1",
+        "Maximum stop slippage buffer percent.",
+    ),
+    "sizingProfileStopSlippagePct": ConfigDefinition(
+        "sizingProfileStopSlippagePct",
+        "decimal",
+        "0.20",
+        "System stop slippage preference percent.",
+    ),
+    "sizingMaxAccountDataAgeSeconds": ConfigDefinition(
+        "sizingMaxAccountDataAgeSeconds",
+        "decimal",
+        "60",
+        "Maximum account sizing data age.",
+    ),
+    "sizingMinimumBuyConfidence": ConfigDefinition(
+        "sizingMinimumBuyConfidence", "decimal", "75", "Minimum BUY confidence."
+    ),
+    "sizingMinimumSellConfidence": ConfigDefinition(
+        "sizingMinimumSellConfidence", "decimal", "70", "Minimum SELL confidence."
+    ),
+    "sizingDailyOrderLimit": ConfigDefinition(
+        "sizingDailyOrderLimit", "int", "3", "Global daily order limit."
+    ),
+    "sizingPerSymbolDailyOrderLimit": ConfigDefinition(
+        "sizingPerSymbolDailyOrderLimit", "int", "1", "Per-symbol daily order limit."
+    ),
 }
 
 RISKY_CONFIG_KEYS = {
@@ -159,6 +232,22 @@ RISKY_CONFIG_KEYS = {
     "botRealLiveModeAllowed",
     "botRealLiveArmed",
     "botDemoAccountConfirmed",
+    "sizingRiskPerTradePct",
+    "sizingMaxCashUtilizationPct",
+    "sizingMaxAccountExposurePct",
+    "sizingMaxPositionValuePerSymbol",
+    "sizingMaxOrderValueTl",
+    "sizingMaxQtyPerOrder",
+    "sizingMinStopDistancePct",
+    "sizingMaxStopDistancePct",
+    "sizingMinimumStopSlippagePct",
+    "sizingMaximumStopSlippagePct",
+    "sizingProfileStopSlippagePct",
+    "sizingMaxAccountDataAgeSeconds",
+    "sizingMinimumBuyConfidence",
+    "sizingMinimumSellConfidence",
+    "sizingDailyOrderLimit",
+    "sizingPerSymbolDailyOrderLimit",
 }
 
 
@@ -417,6 +506,16 @@ def _serialize_value(key: str, raw_value: Any, value_type: str) -> str:
         if value < 0:
             raise ValueError(f"{key} must be >= 0")
         return str(value)
+    if value_type == "decimal":
+        try:
+            value = (
+                raw_value if isinstance(raw_value, Decimal) else Decimal(str(raw_value))
+            )
+        except (InvalidOperation, ValueError, TypeError) as exc:
+            raise ValueError(f"{key} must be a decimal number") from exc
+        if not value.is_finite() or value < 0:
+            raise ValueError(f"{key} must be a finite value >= 0")
+        return str(value)
     if value_type == "mode":
         value = str(raw_value).upper()
         SignalMode(value)
@@ -508,4 +607,30 @@ def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
         "botDemoAccountConfirmed",
     }:
         return _parse_bool(new_value) is True and old_value != new_value
+    increase_is_risky = {
+        "sizingRiskPerTradePct",
+        "sizingMaxCashUtilizationPct",
+        "sizingMaxAccountExposurePct",
+        "sizingMaxPositionValuePerSymbol",
+        "sizingMaxOrderValueTl",
+        "sizingMaxQtyPerOrder",
+        "sizingMaxStopDistancePct",
+        "sizingMaxAccountDataAgeSeconds",
+        "sizingDailyOrderLimit",
+        "sizingPerSymbolDailyOrderLimit",
+    }
+    decrease_is_risky = {
+        "sizingMinStopDistancePct",
+        "sizingMinimumStopSlippagePct",
+        "sizingMaximumStopSlippagePct",
+        "sizingProfileStopSlippagePct",
+        "sizingMinimumBuyConfidence",
+        "sizingMinimumSellConfidence",
+    }
+    old_decimal = Decimal(old_value)
+    new_decimal = Decimal(new_value)
+    if key in increase_is_risky:
+        return new_decimal > old_decimal
+    if key in decrease_is_risky:
+        return new_decimal < old_decimal
     return False

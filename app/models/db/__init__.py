@@ -18,3 +18,4 @@ from app.models.db.manual_approval_request import ManualApprovalRequest  # noqa:
 from app.models.db.position_management_decision import PositionManagementDecision  # noqa: F401
 from app.models.db.watchlist_quality_score import WatchlistQualityScore  # noqa: F401
 from app.models.db.kap_event import KapEvent  # noqa: F401
+from app.models.db.position_sizing_audit import PositionSizingAudit  # noqa: F401

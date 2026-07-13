@@ -316,7 +316,7 @@ class TestDictToRiskDecisionDefense:
         assert decision.action == SignalAction.BUY
         assert decision.confidence == 85.0
         assert decision.risk_score == 10.0
-        assert decision.qty == 10.0
+        assert decision.qty == 0
         assert decision.stop_loss == 93.0
         assert decision.target_price == 110.0
         assert decision.reason == "strong signal"

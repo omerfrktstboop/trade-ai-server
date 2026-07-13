@@ -334,7 +334,7 @@ class TestOrderPath:
         assert sent["symbol"] == "THYAO"
         assert sent["side"] == "BUY"
         assert sent["qty"] == 1.0
-        assert sent["limitPrice"] == 71.5
+        assert sent["limitPrice"] == "71.5"
         assert sent["mode"] == "DEMO_LIVE"
         assert self.persisted == [
             (

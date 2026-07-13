@@ -40,6 +40,7 @@ from sqlalchemy import select
 
 from app.models.db import AiDecision as AiDecisionModel
 from app.models.db import BotPosition as BotPositionModel
+from app.models.db import OrderLog
 from app.models.db import MarketSnapshot
 from app.models.db import PositionSizingAudit
 from app.models.db import RiskDecision as RiskDecisionModel
@@ -166,6 +167,8 @@ def build_payload(
     """
     config = active_config or risk_config
     payload = {
+        "schemaVersion": "technical-features-v2",
+        "deprecatedFields": ["volume", "timeframe", "marketRegime", "dailyTradeCount"],
         "symbol": req.symbol,
         "timeframe": req.timeframe,
         "requestedTimeframe": req.requested_timeframe,
@@ -207,13 +210,28 @@ def build_payload(
         "macdSignal": req.macd_signal,
         "botPositionQty": req.bot_position_qty,
         "totalAccountQty": req.total_account_qty,
+        "accountAvailableQty": req.account_available_qty,
         "lockedLongTermQty": req.locked_long_term_qty,
-        "quoteEventUtc": req.quote_event_utc,
-        "depthEventUtc": req.depth_event_utc,
+        "lastTradeUtc": req.last_trade_utc,
+        "quoteReadUtc": req.quote_read_utc,
+        "depthReadUtc": req.depth_read_utc,
         "barEventUtc": req.bar_event_utc,
+        "quoteTimestampSource": req.quote_timestamp_source,
+        "depthTimestampSource": req.depth_timestamp_source,
+        "depthEventTimestampAvailable": req.depth_event_timestamp_available,
+        "depthReadLatencySeconds": req.depth_read_latency_seconds,
+        "barTimestampSource": req.bar_timestamp_source,
+        "barTimeReliable": req.bar_time_reliable,
+        "barTimestampFallbackObservationUtc": (
+            req.bar_timestamp_fallback_observation_utc
+        ),
+        "barTimestampFallbackObservationSource": (
+            req.bar_timestamp_fallback_observation_source
+        ),
         "snapshotBuiltUtc": req.snapshot_built_utc,
         "depthSummary": req.depth_summary,
-        "dailyTradeCount": req.daily_trade_count,
+        "dailyAcceptedOrderCount": req.daily_accepted_order_count,
+        "dailyFilledOrderCount": req.daily_filled_order_count,
         "allowedSymbols": sorted(config._allowed_set()),
         "lockedSymbols": sorted(config._locked_set()),
     }
@@ -277,6 +295,10 @@ def _build_technical_feature_payload(req: SignalRequest) -> dict[str, Any]:
         "indicatorConsensusRatio": req.indicator_consensus_ratio,
         "atr": req.atr,
         "natr": req.natr,
+        "atrPeriod": req.atr_period,
+        "atrTimeframe": req.atr_timeframe,
+        "volatilityMetricSource": req.volatility_metric_source,
+        "closeChangeVolatilityProxy": req.close_change_volatility_proxy,
         "adx": req.adx,
         "obvSlope": req.obv_slope,
         "vwapDistancePct": req.vwap_distance_pct,
@@ -284,7 +306,7 @@ def _build_technical_feature_payload(req: SignalRequest) -> dict[str, Any]:
         "depthBid1MaxSize": req.depth_bid1_max_size,
         "depthQueueDropPct": req.depth_queue_drop_pct,
         "depthReliable": req.depth_reliable,
-        "marketRegime": req.market_regime,
+        "symbolTrendRegime": req.symbol_trend_regime or req.market_regime,
     }
     if req.depth_reliable is False:
         fields["depthBid1Size"] = None
@@ -292,7 +314,7 @@ def _build_technical_feature_payload(req: SignalRequest) -> dict[str, Any]:
         fields["depthQueueDropPct"] = None
     result = {key: value for key, value in fields.items() if value is not None}
     if result:
-        result["schemaVersion"] = "technical-features-v1"
+        result["schemaVersion"] = "technical-features-v2"
     return result
 
 
@@ -366,7 +388,15 @@ async def with_resolved_daily_trade_count(req: SignalRequest) -> SignalRequest:
         counts.bot_count,
         counts.effective_count,
     )
-    return req.model_copy(update={"daily_trade_count": counts.effective_count})
+    return req.model_copy(
+        update={
+            # Legacy risk-engine input remains the conservative de-duplicated
+            # request count. Explicit v2 fields state what they actually count.
+            "daily_trade_count": counts.effective_count,
+            "daily_accepted_order_count": counts.symbol_accepted_order_count,
+            "daily_filled_order_count": counts.symbol_filled_order_count,
+        }
+    )
 
 
 async def with_fresh_account_sizing_context(
@@ -770,6 +800,12 @@ def snapshot_to_signal_request(
         indicatorConsensusRatio=_payload_get(payload, "indicatorConsensusRatio"),
         atr=_payload_get(payload, "atr"),
         natr=_payload_get(payload, "natr"),
+        atrPeriod=_payload_get(payload, "atrPeriod"),
+        atrTimeframe=_payload_get(payload, "atrTimeframe"),
+        volatilityMetricSource=_payload_get(payload, "volatilityMetricSource"),
+        closeChangeVolatilityProxy=_payload_get(
+            payload, "closeChangeVolatilityProxy"
+        ),
         adx=_payload_get(payload, "adx"),
         obvSlope=_payload_get(payload, "obvSlope"),
         vwapDistancePct=_payload_get(payload, "vwapDistancePct"),
@@ -808,14 +844,36 @@ def snapshot_to_signal_request(
         quoteAgeSeconds=payload.get("quoteAgeSeconds"),
         ohlcvAgeSeconds=payload.get("ohlcvAgeSeconds"),
         depthAgeSeconds=payload.get("depthAgeSeconds"),
-        quoteEventUtc=payload.get("quoteEventUtc"),
-        depthEventUtc=payload.get("depthEventUtc"),
+        lastTradeUtc=payload.get("lastTradeUtc") or payload.get("quoteEventUtc"),
+        quoteReadUtc=payload.get("quoteReadUtc"),
+        depthReadUtc=payload.get("depthReadUtc"),
         barEventUtc=payload.get("barEventUtc"),
+        quoteTimestampSource=payload.get("quoteTimestampSource"),
+        depthTimestampSource=payload.get("depthTimestampSource"),
+        depthEventTimestampAvailable=payload.get("depthEventTimestampAvailable"),
+        depthReadLatencySeconds=payload.get("depthReadLatencySeconds"),
+        barTimestampSource=payload.get("barTimestampSource"),
+        barTimeReliable=payload.get("barTimeReliable"),
+        barTimestampFallbackObservationUtc=payload.get(
+            "barTimestampFallbackObservationUtc"
+        ),
+        barTimestampFallbackObservationSource=payload.get(
+            "barTimestampFallbackObservationSource"
+        ),
         snapshotBuiltUtc=payload.get("snapshotBuiltUtc"),
-        marketRegime=_payload_get(payload, "marketRegime"),
+        symbolTrendRegime=(
+            _payload_get(payload, "symbolTrendRegime")
+            or _payload_get(payload, "marketRegime")
+        ),
         botPositionQty=payload.get("botPositionQty", 0),
         totalAccountQty=payload.get("totalAccountQty", 0),
+        accountAvailableQty=payload.get("accountAvailableQty", 0),
         lockedLongTermQty=payload.get("lockedLongTermQty", 0),
+        positionContext=(
+            payload.get("positionContext")
+            if isinstance(payload.get("positionContext"), dict)
+            else None
+        ),
         mode=mode,
     )
 
@@ -927,6 +985,7 @@ async def evaluate_symbol(
 
     # ── 4. Runtime kontroller ────────────────────────────────────────────
     sig_req, runtime_engine, kill_switch_enabled = await with_runtime_controls(sig_req)
+    sig_req = await with_resolved_daily_trade_count(sig_req)
     if force_paper and sig_req.mode != SignalMode.PAPER:
         sig_req = sig_req.model_copy(update={"mode": SignalMode.PAPER})
 
@@ -993,7 +1052,15 @@ async def evaluate_symbol(
         active_config=runtime_engine.config,
     )
     payload["agenticSteps"] = steps
-    payload["marketRegime"] = market_regime
+    payload["macroMarketRegime"] = market_regime
+    payload["macroMarketRegimeSymbol"] = settings.market_index_symbol.strip().upper()
+    payload["symbolTrendRegime"] = sig_req.symbol_trend_regime
+    sig_req = sig_req.model_copy(
+        update={
+            "macro_market_regime": market_regime,
+            "macro_market_regime_symbol": settings.market_index_symbol.strip().upper(),
+        }
+    )
     payload["runtimeMode"] = sig_req.mode.value
     payload["configHash"] = runtime_config_hash
     payload["profileCode"] = active_profile_code
@@ -1064,7 +1131,6 @@ async def evaluate_symbol(
             snapshot=snapshot,
             runtime_engine=runtime_engine,
         )
-    sig_req = await with_resolved_daily_trade_count(sig_req)
     response = runtime_engine.evaluate(sig_req, decision, market_regime=market_regime)
     await persist_sizing_audit(sig_req, runtime_engine)
     from app.services.news_risk_lock import apply_news_risk_lock
@@ -1109,18 +1175,89 @@ async def _build_position_context(req: SignalRequest) -> dict[str, Any] | None:
         logger.exception("Position context load failed symbol=%s", req.symbol)
         row = None
 
-    avg_cost = float(row.avg_price) if row is not None and row.avg_price else None
+    gateway_context = dict(req.gateway_position_context or {})
+    bot_avg_cost = await _bot_average_cost_from_fill_ledger(req.symbol)
+    if bot_avg_cost is None and row is not None and row.avg_price:
+        bot_avg_cost = Decimal(str(row.avg_price))
+
+    account_avg_raw = gateway_context.get("accountAvgCost")
+    account_avg_cost = (
+        Decimal(str(account_avg_raw)) if account_avg_raw not in (None, 0, "0") else None
+    )
+    account_net_qty = int(gateway_context.get("accountQtyNet") or req.total_account_qty)
+    cost_source = "BOT_FILL_LEDGER" if bot_avg_cost is not None else "UNAVAILABLE"
+    if (
+        bot_avg_cost is None
+        and account_avg_cost is not None
+        and req.bot_position_qty > 0
+        and req.bot_position_qty == account_net_qty
+    ):
+        bot_avg_cost = account_avg_cost
+        cost_source = "MATRIX_ACCOUNT_AVG_COST_FULL_OWNERSHIP_FALLBACK"
+
+    current_price = Decimal(str(gateway_context.get("currentPrice") or req.last_price))
     context: dict[str, Any] = {
-        "qty": req.bot_position_qty,
-        "avgCost": avg_cost,
-        "currentPrice": req.last_price,
-        "positionValueTl": round(req.bot_position_qty * req.last_price, 2),
+        **gateway_context,
+        "botQty": req.bot_position_qty,
+        "accountQtyNet": account_net_qty,
+        "accountQtyAvailable": req.account_available_qty,
+        "accountAvgCost": float(account_avg_cost) if account_avg_cost else None,
+        "botAvgCost": float(bot_avg_cost) if bot_avg_cost else None,
+        "currentPrice": float(current_price),
+        "botPositionValueTl": float(Decimal(req.bot_position_qty) * current_price),
+        "costSource": cost_source,
     }
-    if avg_cost and avg_cost > 0 and req.last_price > 0:
-        context["unrealizedPnlPct"] = round(
-            (req.last_price - avg_cost) / avg_cost * 100, 2
+    if bot_avg_cost is not None and bot_avg_cost > 0 and current_price > 0:
+        context["botUnrealizedPnlTl"] = float(
+            (current_price - bot_avg_cost) * Decimal(req.bot_position_qty)
+        )
+        context["botUnrealizedPnlPct"] = float(
+            (current_price - bot_avg_cost) / bot_avg_cost * Decimal("100")
         )
     return context
+
+
+async def _bot_average_cost_from_fill_ledger(symbol: str) -> Decimal | None:
+    """Compute bot-only average cost from monotonic, request-id unique fills."""
+    try:
+        async with async_session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(OrderLog)
+                        .where(
+                            OrderLog.symbol == symbol,
+                            OrderLog.filled_qty > 0,
+                        )
+                        .order_by(OrderLog.created_at, OrderLog.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+    except Exception:
+        logger.exception("Bot fill ledger cost load failed symbol=%s", symbol)
+        return None
+
+    qty = Decimal("0")
+    cost = Decimal("0")
+    for order in rows:
+        filled = Decimal(str(order.filled_qty or 0))
+        if filled <= 0:
+            continue
+        if str(order.action).upper() == "BUY":
+            price_raw = order.avg_price or order.rounded_limit_price or order.limit_price
+            if not price_raw:
+                continue
+            price = Decimal(str(price_raw))
+            qty += filled
+            cost += filled * price
+        elif str(order.action).upper() == "SELL" and qty > 0:
+            released = min(qty, filled)
+            average = cost / qty
+            qty -= released
+            cost -= released * average
+    return cost / qty if qty > 0 and cost > 0 else None
 
 
 def _log_evaluation(req: SignalRequest, response: SignalResponse) -> None:

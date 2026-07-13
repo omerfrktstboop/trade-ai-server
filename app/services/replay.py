@@ -119,7 +119,7 @@ async def replay_request(
         replay = RiskEngine(config).evaluate(
             request,
             dict_to_risk_decision(ai.raw_response, request),
-            request.market_regime,
+            request.macro_market_regime,
         )
         return {
             "requestId": request_id,

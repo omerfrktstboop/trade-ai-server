@@ -244,7 +244,7 @@ class RiskEngine:
                 pass  # not relevant right now but gate is here
 
         # ── 5. SELL qty clamp ────────────────────────────────────────
-        #   sellableQty = min(botPositionQty, max(0, totalAccountQty - lockedLongTermQty))
+        #   sellableQty = min(botPositionQty, max(0, accountAvailableQty - lockedLongTermQty))
         #
         #   Bot yalnızca kendi aldığı lotu satabilir (botPositionQty).
         #   Uzun vadeli kilitli lot hesap bakiye üzerinden korunur.
@@ -252,7 +252,7 @@ class RiskEngine:
         qty = decision.qty
         if action == SignalAction.SELL:
             account_free_qty = max(
-                0, request.total_account_qty - request.locked_long_term_qty
+                0, request.account_available_qty - request.locked_long_term_qty
             )
             sellable_qty = min(request.bot_position_qty, account_free_qty)
 

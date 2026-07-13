@@ -14,6 +14,7 @@ limits on top):
 import hashlib
 import json
 import math
+from datetime import datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -23,6 +24,7 @@ from app.core.auth import verify_gateway_token
 from app.db.session import async_session_factory
 from app.models.db import BotPosition, LockedPosition, WatchlistSymbol
 from app.services.admin_config import list_admin_configs
+from app.services.daily_trade_count import get_today_order_count_maps
 from app.services.trade_profile import get_active_profile
 
 router = APIRouter(tags=["Gateway"], dependencies=[Depends(verify_gateway_token)])
@@ -83,6 +85,7 @@ async def gateway_runtime_config() -> dict:
             .scalars()
             .all()
         )
+        daily_counts = await get_today_order_count_maps(session)
 
     symbols = {
         value.strip().upper()
@@ -145,6 +148,10 @@ async def gateway_runtime_config() -> dict:
         "forceSafeMode": values["forceSafeMode"] == "true",
         "lockedLongTermQty": locked_qty,
         "botOwnedQty": bot_owned_qty,
+        "dailyCounterDate": datetime.now().date().isoformat(),
+        "dailyAcceptedOrderCountsBySymbol": daily_counts.accepted_by_symbol,
+        "dailyFilledOrderCountsBySymbol": daily_counts.filled_by_symbol,
+        "dailyReservedOrderCountsBySymbol": daily_counts.reserved_or_sent_by_symbol,
         "mode": _effective_mode(
             values["botMode"],
             profile,

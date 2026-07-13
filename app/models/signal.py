@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat
 
@@ -181,6 +181,14 @@ class SignalRequest(BaseModel):
     )
     atr: Optional[float] = None
     natr: Optional[float] = None
+    atr_period: Optional[int] = Field(None, alias="atrPeriod")
+    atr_timeframe: Optional[str] = Field(None, alias="atrTimeframe")
+    volatility_metric_source: Optional[str] = Field(
+        None, alias="volatilityMetricSource"
+    )
+    close_change_volatility_proxy: Optional[float] = Field(
+        None, alias="closeChangeVolatilityProxy"
+    )
     adx: Optional[float] = None
     obv_slope: Optional[float] = Field(None, alias="obvSlope")
     vwap_distance_pct: Optional[float] = Field(None, alias="vwapDistancePct")
@@ -237,19 +245,50 @@ class SignalRequest(BaseModel):
     quote_event_utc: Optional[datetime] = Field(None, alias="quoteEventUtc")
     depth_event_utc: Optional[datetime] = Field(None, alias="depthEventUtc")
     bar_event_utc: Optional[datetime] = Field(None, alias="barEventUtc")
+    last_trade_utc: Optional[datetime] = Field(None, alias="lastTradeUtc")
+    quote_read_utc: Optional[datetime] = Field(None, alias="quoteReadUtc")
+    depth_read_utc: Optional[datetime] = Field(None, alias="depthReadUtc")
+    quote_timestamp_source: Optional[str] = Field(None, alias="quoteTimestampSource")
+    depth_timestamp_source: Optional[str] = Field(None, alias="depthTimestampSource")
+    depth_event_timestamp_available: Optional[bool] = Field(
+        None, alias="depthEventTimestampAvailable"
+    )
+    depth_read_latency_seconds: Optional[float] = Field(
+        None, alias="depthReadLatencySeconds"
+    )
+    bar_timestamp_source: Optional[str] = Field(None, alias="barTimestampSource")
+    bar_time_reliable: Optional[bool] = Field(None, alias="barTimeReliable")
+    bar_timestamp_fallback_observation_utc: Optional[datetime] = Field(
+        None, alias="barTimestampFallbackObservationUtc"
+    )
+    bar_timestamp_fallback_observation_source: Optional[str] = Field(
+        None, alias="barTimestampFallbackObservationSource"
+    )
     snapshot_built_utc: Optional[datetime] = Field(None, alias="snapshotBuiltUtc")
+    symbol_trend_regime: Optional[str] = Field(None, alias="symbolTrendRegime")
+    # Deprecated v1 alias; when supplied it has only symbol-trend semantics.
     market_regime: Optional[str] = Field(None, alias="marketRegime")
+    macro_market_regime: Optional[str] = Field(None, alias="macroMarketRegime")
+    macro_market_regime_symbol: Optional[str] = Field(
+        None, alias="macroMarketRegimeSymbol"
+    )
 
     # Position context
     bot_position_qty: int = Field(0, alias="botPositionQty")
     total_account_qty: int = Field(0, alias="totalAccountQty")
+    account_available_qty: int = Field(0, alias="accountAvailableQty")
     locked_long_term_qty: int = Field(0, alias="lockedLongTermQty")
+    gateway_position_context: dict[str, Any] | None = Field(
+        None, alias="positionContext"
+    )
     account_sizing_context: AccountSizingContext | None = Field(
         None, alias="accountSizingContext"
     )
 
     # Daily trade count (fed by caller — e.g. Matriks IQ or DB)
     daily_trade_count: int = Field(0, alias="dailyTradeCount", ge=0)
+    daily_accepted_order_count: int = Field(0, alias="dailyAcceptedOrderCount", ge=0)
+    daily_filled_order_count: int = Field(0, alias="dailyFilledOrderCount", ge=0)
 
     # Legacy field from the removed agentic protocol; retained so old
     # clients posting sessionId to /signal/evaluate still validate.

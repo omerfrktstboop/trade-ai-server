@@ -171,6 +171,36 @@ def _analyze(symbol: str, raw: dict[str, Any]) -> dict[str, Any]:
     smart_buy = sum(b["value"] for b in buyers if _is_smart_money(b["name"]))
     smart_sell = sum(s["value"] for s in sellers if _is_smart_money(s["name"]))
 
+    top_brokers = [
+        {"brokerName": b["name"], "netFlow": b["value"], "side": "BUY"}
+        for b in buyers[:3]
+    ] + [
+        {"brokerName": s["name"], "netFlow": s["value"], "side": "SELL"}
+        for s in sellers[:3]
+    ]
+    if smart_buy == 0 and smart_sell == 0:
+        return {
+            "symbol": symbol,
+            "smartMoneyAvailable": False,
+            "smartMoneyFlow": "UNKNOWN",
+            "smartMoneyClassificationSource": "INSTITUTION_NAME_MAPPING",
+            "smartMoneyUnavailableReason": "NO_INSTITUTION_NAME_MATCH",
+            "brokerFlow": "UNKNOWN",
+            "netInstitutionalFlow": round(total_buy - total_sell, 2),
+            "totalRankedBuyLot": round(total_buy, 2),
+            "totalRankedSellLot": round(total_sell, 2),
+            "topBuyers": buyers[:5],
+            "topSellers": sellers[:5],
+            "smartBuyRatio": None,
+            "smartSellRatio": None,
+            "netSmartLot": None,
+            "topBrokers": top_brokers,
+            "comment": (
+                "Institution rankings are available, but smart-money mapping "
+                "is unavailable; retrieval time is known and market as-of may be unknown."
+            ),
+        }
+
     buy_ratio = (smart_buy / total_buy) if total_buy > 0 else 0.0
     sell_ratio = (smart_sell / total_sell) if total_sell > 0 else 0.0
     # Wash-trade / iki-taraflı fon tuzağı guard'ı: akıllı paranın iki liste
@@ -179,17 +209,12 @@ def _analyze(symbol: str, raw: dict[str, Any]) -> dict[str, Any]:
 
     flow = _classify(buy_ratio, sell_ratio, net_smart_lot)
 
-    top_brokers = [
-        {"brokerName": b["name"], "netFlow": b["value"], "side": "BUY"}
-        for b in buyers[:3]
-    ] + [
-        {"brokerName": s["name"], "netFlow": s["value"], "side": "SELL"}
-        for s in sellers[:3]
-    ]
-
     return {
         "symbol": symbol,
+        "smartMoneyAvailable": True,
         "smartMoneyFlow": flow,
+        "smartMoneyClassificationSource": "INSTITUTION_NAME_MAPPING",
+        "smartMoneyUnavailableReason": None,
         # Geriye dönük uyumlu sade görünüm (eski tüketiciler/testler için).
         "brokerFlow": _legacy_flow(flow),
         "netInstitutionalFlow": round(total_buy - total_sell, 2),
@@ -307,7 +332,10 @@ def _unknown_entry(symbol: str, comment: str) -> dict[str, Any]:
     """Safe default when no real AKD data is available for a symbol."""
     return {
         "symbol": symbol,
+        "smartMoneyAvailable": False,
         "smartMoneyFlow": "UNKNOWN",
+        "smartMoneyClassificationSource": "UNAVAILABLE",
+        "smartMoneyUnavailableReason": comment,
         "brokerFlow": "UNKNOWN",
         "netInstitutionalFlow": None,
         "smartBuyRatio": None,

@@ -94,6 +94,15 @@ def normalize_snapshot_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     if normalized.get("sessionTurnoverTl") is None and normalized.get("totalVol") is not None:
         normalized["sessionTurnoverTl"] = normalized.get("totalVol")
+    if normalized.get("symbolTrendRegime") is None and normalized.get("marketRegime"):
+        normalized["symbolTrendRegime"] = normalized.get("marketRegime")
+    if normalized.get("lastTradeUtc") is None and normalized.get("quoteEventUtc"):
+        normalized["lastTradeUtc"] = normalized.get("quoteEventUtc")
+        normalized.setdefault("quoteTimestampSource", "LEGACY_QUOTE_EVENT")
+    if normalized.get("depthEventUtc") is None:
+        normalized.setdefault("depthEventTimestampAvailable", False)
+        normalized.setdefault("depthTimestampSource", "READ_TIME_ONLY")
+    normalized.setdefault("schemaVersion", "technical-features-v2")
     normalized.setdefault("marketDataContractVersion", "legacy-normalized-v1")
     return normalized
 

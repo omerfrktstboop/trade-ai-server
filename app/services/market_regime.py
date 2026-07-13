@@ -98,7 +98,11 @@ def _classify(payload: dict[str, Any]) -> str:
     ):
         return REGIME_DOWNTREND
 
-    regime = str(payload.get("marketRegime") or "").strip().upper()
+    regime = str(
+        payload.get("symbolTrendRegime")
+        or payload.get("marketRegime")  # deprecated technical-features-v1 alias
+        or ""
+    ).strip().upper()
     return regime or REGIME_UNKNOWN
 
 

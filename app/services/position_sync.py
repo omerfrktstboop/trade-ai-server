@@ -71,12 +71,26 @@ async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
                 .all()
             )
             positions: dict[str, float] = {}
+            position_costs: dict[str, float] = {}
             for order in orders:
                 symbol = order.symbol.strip().upper()
-                signed = float(order.filled_qty or 0.0) * (
-                    1 if order.action.upper() == "BUY" else -1
-                )
-                positions[symbol] = positions.get(symbol, 0.0) + signed
+                filled = float(order.filled_qty or 0.0)
+                current_qty = positions.get(symbol, 0.0)
+                current_cost = position_costs.get(symbol, 0.0)
+                if order.action.upper() == "BUY":
+                    fill_price = float(
+                        order.avg_price
+                        or order.rounded_limit_price
+                        or order.limit_price
+                        or 0.0
+                    )
+                    positions[symbol] = current_qty + filled
+                    position_costs[symbol] = current_cost + filled * fill_price
+                else:
+                    released = min(current_qty, filled)
+                    average = current_cost / current_qty if current_qty > 0 else 0.0
+                    positions[symbol] = current_qty - released
+                    position_costs[symbol] = max(0.0, current_cost - released * average)
             positions = {
                 symbol: max(0.0, qty) for symbol, qty in positions.items() if qty > 0
             }
@@ -88,9 +102,20 @@ async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
                 ).scalar_one_or_none()
 
                 if row is None:
-                    session.add(BotPosition(symbol=symbol, qty=qty))
+                    total_cost = position_costs.get(symbol, 0.0)
+                    session.add(
+                        BotPosition(
+                            symbol=symbol,
+                            qty=qty,
+                            avg_price=total_cost / qty if qty > 0 else None,
+                            total_value=total_cost,
+                        )
+                    )
                 else:
                     row.qty = qty
+                    total_cost = position_costs.get(symbol, 0.0)
+                    row.avg_price = total_cost / qty if qty > 0 else None
+                    row.total_value = total_cost
                 synced += 1
             if positions:
                 await session.execute(

@@ -21,6 +21,7 @@ from app.models.db import (
     OrderLog,
     RiskDecision,
 )
+from app.services.admin_config import CONFIG_DEFINITIONS, READ_ONLY_CONFIG_KEYS
 
 
 @pytest.fixture(autouse=True)
@@ -148,6 +149,39 @@ class TestAdminConfig:
         assert "killSwitchEnabled" in resp.text
         assert "Açıklama" in resp.text
         assert "İşlem yapılmasına izin verilen semboller" in resp.text
+
+    def test_config_page_covers_every_runtime_config_definition(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        resp = client.get("/admin/config", headers=auth_headers)
+
+        assert resp.status_code == 200
+        for key in CONFIG_DEFINITIONS:
+            assert f'data-config-key="{key}"' in resp.text
+            if key in READ_ONLY_CONFIG_KEYS:
+                assert f'name="{key}"' not in resp.text
+            else:
+                assert f'name="{key}"' in resp.text
+
+    def test_newly_exposed_safety_config_can_be_updated_from_html(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        resp = client.post(
+            "/admin/config",
+            headers=auth_headers,
+            data={
+                "tradingKillSwitchActive": "true",
+                "forceSafeMode": "true",
+                "reason": "admin coverage test",
+            },
+            follow_redirects=False,
+        )
+
+        assert resp.status_code == 303
+        config = client.get("/api/admin/config", headers=auth_headers).json()
+        values = {item["key"]: item["value"] for item in config}
+        assert values["tradingKillSwitchActive"] == "true"
+        assert values["forceSafeMode"] == "true"
 
     def test_config_page_no_longer_shows_profile_shadowed_keys(
         self, client: TestClient, auth_headers: dict[str, str]

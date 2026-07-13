@@ -41,8 +41,10 @@ from app.models.db import (
 from app.services.admin_config import (
     AdminConfigItem,
     RISKY_CONFIRMATION,
+    build_admin_config_sections,
     get_admin_config_value,
     list_admin_configs,
+    public_config_keys,
     set_admin_config_value,
     set_admin_config_values,
 )
@@ -635,6 +637,7 @@ async def admin_config_page(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
     async with async_session_factory() as session:
         configs = await _config_lookup(session)
+        config_sections = build_admin_config_sections(configs.values())
         status_ctx = await _status_strip_context(session, configs=configs)
 
     return templates.TemplateResponse(
@@ -644,6 +647,7 @@ async def admin_config_page(request: Request) -> HTMLResponse:
             "identity": identity,
             "active": "config",
             "configs": configs,
+            "config_sections": config_sections,
             "confirmation": RISKY_CONFIRMATION,
             "error": None,
             "message": None,
@@ -663,8 +667,9 @@ async def admin_config_update(request: Request) -> Any:
 
     try:
         async with async_session_factory() as session:
-            configs = await list_admin_configs(session)
-            values = {item.key: form[item.key] for item in configs if item.key in form}
+            values = {
+                key: form[key] for key in public_config_keys() if key in form
+            }
             await set_admin_config_values(
                 session,
                 values,
@@ -675,6 +680,7 @@ async def admin_config_update(request: Request) -> Any:
     except ValueError as exc:
         async with async_session_factory() as session:
             configs = await _config_lookup(session)
+            config_sections = build_admin_config_sections(configs.values())
             status_ctx = await _status_strip_context(session, configs=configs)
         return templates.TemplateResponse(
             request,
@@ -683,6 +689,7 @@ async def admin_config_update(request: Request) -> Any:
                 "identity": identity,
                 "active": "config",
                 "configs": configs,
+                "config_sections": config_sections,
                 "confirmation": RISKY_CONFIRMATION,
                 "error": str(exc),
                 "message": None,

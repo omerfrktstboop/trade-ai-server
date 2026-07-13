@@ -6,7 +6,25 @@
 {% macro num_field(field_name, label, value) %}
 <div class="form-group" style="margin-bottom:0">
   <label class="form-label">{{ label }}</label>
+  <input class="form-input" type="number" step="any" name="{{ field_name }}" value="{{ value }}">
+</div>
+{% endmacro %}
+
+{% macro text_field(field_name, label, value) %}
+<div class="form-group" style="margin-bottom:0">
+  <label class="form-label">{{ label }}</label>
   <input class="form-input" name="{{ field_name }}" value="{{ value }}">
+</div>
+{% endmacro %}
+
+{% macro risk_level_field(value) %}
+<div class="form-group" style="margin-bottom:0">
+  <label class="form-label">Risk Level</label>
+  <select class="form-select" name="risk_level">
+    {% for level in ['LOW', 'MEDIUM', 'HIGH', 'EXTREME'] %}
+    <option value="{{ level }}" {% if value == level %}selected{% endif %}>{{ level }}</option>
+    {% endfor %}
+  </select>
 </div>
 {% endmacro %}
 
@@ -51,12 +69,27 @@
 {% endmacro %}
 
 {% macro fields_grid(p) %}
+{% call field_section("Mod kapsamı") %}
+  {{ text_field('allowed_modes', 'Allowed Modes (CSV)', p.allowed_modes) }}
+{% endcall %}
 {% call field_section("Limitler") %}
   {{ num_field('max_order_value_tl', 'Max Order Value TL', p.max_order_value_tl) }}
   {{ num_field('max_qty_per_order', 'Max Qty Per Order', p.max_qty_per_order) }}
   {{ num_field('max_position_value_per_symbol', 'Max Position Value/Symbol', p.max_position_value_per_symbol) }}
   {{ num_field('max_orders_per_day', 'Max Orders/Day', p.max_orders_per_day) }}
   {{ num_field('max_orders_per_symbol_per_day', 'Max Orders/Symbol/Day', p.max_orders_per_symbol_per_day) }}
+{% endcall %}
+{% call field_section("Position sizing ve hesap riski") %}
+  {{ num_field('risk_per_trade_pct', 'Risk Per Trade %', p.risk_per_trade_pct) }}
+  {{ num_field('max_cash_utilization_pct', 'Max Cash Utilization %', p.max_cash_utilization_pct) }}
+  {{ num_field('max_account_exposure_pct', 'Max Account Exposure %', p.max_account_exposure_pct) }}
+  {{ num_field('min_order_value_tl', 'Min Order Value TL', p.min_order_value_tl) }}
+  {{ num_field('min_stop_distance_pct', 'Min Stop Distance %', p.min_stop_distance_pct) }}
+  {{ num_field('max_stop_distance_pct', 'Max Stop Distance %', p.max_stop_distance_pct) }}
+  {{ num_field('minimum_stop_slippage_pct', 'Minimum Stop Slippage %', p.minimum_stop_slippage_pct) }}
+  {{ num_field('maximum_stop_slippage_pct', 'Maximum Stop Slippage %', p.maximum_stop_slippage_pct) }}
+  {{ num_field('profile_stop_slippage_pct', 'Profile Stop Slippage %', p.profile_stop_slippage_pct) }}
+  {{ num_field('max_account_data_age_seconds', 'Max Account Data Age (sn)', p.max_account_data_age_seconds) }}
 {% endcall %}
 {% call field_section("Sinyal Eşikleri") %}
   {{ num_field('min_confidence_for_buy', 'Min Confidence BUY', p.min_confidence_for_buy) }}
@@ -67,6 +100,8 @@
   {{ num_field('min_depth_bid_ask_ratio_top10_for_buy', 'Min Depth Bid/Ask Top10', p.min_depth_bid_ask_ratio_top10_for_buy) }}
   {{ num_field('max_depth_sell_pressure_score_for_buy', 'Max Sell Pressure for BUY', p.max_depth_sell_pressure_score_for_buy) }}
   {{ num_field('near_wall_distance_pct', 'Near Ask Wall Distance %', p.near_wall_distance_pct) }}
+  {{ bool_field('block_buy_on_strong_sell_pressure', 'Block BUY on Strong Sell Pressure', p.block_buy_on_strong_sell_pressure) }}
+  {{ bool_field('block_buy_on_near_ask_wall', 'Block BUY on Near Ask Wall', p.block_buy_on_near_ask_wall) }}
   {{ bool_field('require_alpha_trend_alignment', 'Require AlphaTrend Alignment', p.require_alpha_trend_alignment) }}
   {{ bool_field('require_indicator_consensus_alignment', 'Require Indicator Consensus', p.require_indicator_consensus_alignment) }}
 {% endcall %}
@@ -172,6 +207,11 @@
     <details class="mt-24">
       <summary style="cursor:pointer;color:var(--accent);font-size:13px;font-weight:600">Düzenle</summary>
       <form method="post" action="/admin/trade-profiles/{{ p.code }}/update" class="mt-16">
+        {% call field_section("Profil bilgileri") %}
+          {{ text_field('name', 'İsim', p.name) }}
+          {{ text_field('description', 'Açıklama', p.description) }}
+          {{ risk_level_field(p.risk_level) }}
+        {% endcall %}
         {{ fields_grid(p) }}
         <div class="form-row">
           <div class="form-group" style="margin-bottom:0">

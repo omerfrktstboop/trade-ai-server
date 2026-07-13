@@ -16,6 +16,7 @@ from app.main import app
 from app.models.db import TradeProfile
 from app.services.trade_profile import (
     BUILTIN_PROFILES,
+    EDITABLE_FIELDS,
     activate_profile,
     clone_profile,
     create_profile,
@@ -396,6 +397,38 @@ class TestAdminTradeProfilesRoutes:
         assert resp.status_code == 200
         for code in ("CONSERVATIVE", "NORMAL", "AGGRESSIVE", "HIGH_RISK"):
             assert code in resp.text
+
+    def test_page_exposes_every_editable_profile_field(self, client: TestClient):
+        self._login(client)
+        resp = client.get("/admin/trade-profiles")
+
+        assert resp.status_code == 200
+        for field in EDITABLE_FIELDS:
+            assert f'name="{field}"' in resp.text
+
+    def test_newly_exposed_sizing_fields_update_from_html(self, client: TestClient):
+        self._login(client)
+        resp = client.post(
+            "/admin/trade-profiles/NORMAL/update",
+            data={
+                "risk_per_trade_pct": "0.40",
+                "max_account_data_age_seconds": "45",
+                "block_buy_on_near_ask_wall": "true",
+                "reason": "admin coverage test",
+            },
+            follow_redirects=False,
+        )
+
+        assert resp.status_code == 303
+
+        async def _get_updated():
+            async with async_session_factory() as session:
+                return await get_profile(session, "NORMAL")
+
+        profile = _run(_get_updated())
+        assert profile.risk_per_trade_pct == Decimal("0.40")
+        assert profile.max_account_data_age_seconds == Decimal("45")
+        assert profile.block_buy_on_near_ask_wall is True
 
     def test_create_profile(self, client: TestClient):
         self._login(client)

@@ -3,57 +3,86 @@
 {% block page_title %}Config{% endblock %}
 {% block content %}
 
-{% macro config_row(item) %}
-<tr>
-  <td><code class="mono">{{ item.key }}</code></td>
-  <td class="config-value-cell">
-    {% set current_value = form_values[item.key] if item.key in form_values else item.value %}
-    {% if item.value_type == "bool" %}
-      <select class="form-select config-select-control" name="{{ item.key }}">
-        <option value="true" {% if current_value == "true" %}selected{% endif %}>true</option>
-        <option value="false" {% if current_value == "false" %}selected{% endif %}>false</option>
-      </select>
-    {% elif item.value_type == "mode" %}
-      <select class="form-select config-select-control" name="{{ item.key }}">
-        {% for mode in ["PAPER", "MANUAL", "LIVE", "DEMO_LIVE", "REAL_LIVE"] %}
-        <option value="{{ mode }}" {% if current_value == mode %}selected{% endif %}>{{ mode }}</option>
-        {% endfor %}
-      </select>
-    {% else %}
-      <input class="form-input config-value-control" name="{{ item.key }}" value="{{ form_values[item.key] if item.key in form_values else item.display_value }}">
-    {% endif %}
-  </td>
-  <td class="text-muted text-sm">{{ item.description }}</td>
-  <td><span class="badge badge-neutral">{{ item.source }}</span></td>
-</tr>
+{% macro config_control(item) %}
+  {% set current_value = form_values[item.key] if item.key in form_values else item.value %}
+  {% if not item.is_editable %}
+    <input class="form-input config-value-control" value="{{ item.display_value }}" disabled aria-disabled="true">
+    <div class="form-hint">Kod seviyesinde kalıcı güvenlik kilidi</div>
+  {% elif item.value_type == "bool" %}
+    <select class="form-select config-select-control" name="{{ item.key }}">
+      <option value="true" {% if current_value == "true" %}selected{% endif %}>true</option>
+      <option value="false" {% if current_value == "false" %}selected{% endif %}>false</option>
+    </select>
+  {% elif item.value_type == "mode" %}
+    <select class="form-select config-select-control" name="{{ item.key }}">
+      {% for mode in ["PAPER", "MANUAL", "LIVE", "DEMO_LIVE", "REAL_LIVE"] %}
+      <option value="{{ mode }}" {% if current_value == mode %}selected{% endif %}>{{ mode }}</option>
+      {% endfor %}
+    </select>
+  {% elif item.value_type == "reservation_handling" %}
+    <select class="form-select config-select-control" name="{{ item.key }}">
+      {% for policy in ["UNKNOWN", "BROKER_ALREADY_DEDUCTED", "BACKEND_DEDUCTED"] %}
+      <option value="{{ policy }}" {% if current_value == policy %}selected{% endif %}>{{ policy }}</option>
+      {% endfor %}
+    </select>
+  {% elif item.value_type == "int" %}
+    <input class="form-input config-value-control" type="number" min="0" step="1"
+           name="{{ item.key }}" value="{{ current_value }}" required>
+  {% elif item.value_type == "decimal" %}
+    <input class="form-input config-value-control" type="number" min="0" step="any"
+           name="{{ item.key }}" value="{{ current_value }}" required>
+  {% elif item.value_type == "time" %}
+    <input class="form-input config-value-control" type="time"
+           name="{{ item.key }}" value="{{ current_value }}" required>
+  {% else %}
+    <input class="form-input config-value-control" name="{{ item.key }}"
+           value="{{ current_value }}" required>
+  {% endif %}
 {% endmacro %}
 
-{% macro config_section(title, keys, hint) %}
+{% macro config_section(section) %}
 <div class="card mb-24">
-  <div class="section-title mb-16">{{ title }}</div>
+  <div class="section-title mb-8">{{ section.title }}</div>
+  <p class="text-muted text-sm mb-16">{{ section.description }}</p>
   <form method="post" action="/admin/config">
     <div class="table-container mb-16">
       <table>
-        <thead><tr><th>Anahtar</th><th>Değer</th><th>Açıklama</th><th>Kaynak</th></tr></thead>
+        <thead>
+          <tr><th>Anahtar</th><th>Değer</th><th>Açıklama</th><th>Kaynak</th></tr>
+        </thead>
         <tbody>
-          {% for key in keys %}{{ config_row(configs[key]) }}{% endfor %}
+          {% for item in section.items %}
+          <tr data-config-key="{{ item.key }}">
+            <td>
+              <code class="mono">{{ item.key }}</code>
+              {% if item.requires_confirmation %}
+              <div><span class="badge badge-wait">risk onayı</span></div>
+              {% endif %}
+            </td>
+            <td class="config-value-cell">{{ config_control(item) }}</td>
+            <td class="text-muted text-sm">{{ item.description }}</td>
+            <td><span class="badge badge-neutral">{{ item.source }}</span></td>
+          </tr>
+          {% endfor %}
         </tbody>
       </table>
     </div>
+    {% if section.has_editable_items %}
     <div class="form-row">
       <div class="form-group" style="margin-bottom:0">
         <label class="form-label">Değişiklik nedeni</label>
-        <input class="form-input" name="reason" placeholder="Bu ayar neden değişiyor?" value="{{ reason or '' }}">
+        <input class="form-input" name="reason" placeholder="Bu ayar neden değişiyor?" value="{{ reason or '' }}" required>
       </div>
-      {% if hint %}
+      {% if section.requires_confirmation %}
       <div class="form-group" style="margin-bottom:0">
         <label class="form-label">Risk onayı</label>
         <input class="form-input" name="confirmation" placeholder="{{ confirmation }}">
-        <div class="form-hint">{{ hint }}</div>
+        <div class="form-hint">Riski artıran veya güvenlik kapısını açan değişikliklerde {{ confirmation }} yazın.</div>
       </div>
       {% endif %}
-      <button class="btn btn-primary" type="submit" style="align-self:end">💾 Kaydet</button>
+      <button class="btn btn-primary" type="submit" style="align-self:end">Kaydet</button>
     </div>
+    {% endif %}
   </form>
 </div>
 {% endmacro %}
@@ -62,35 +91,17 @@
 {% if message %}<div class="alert alert-success">✅ {{ message }}</div>{% endif %}
 
 <div class="card mb-24" style="border-color:var(--accent)">
-  <div class="section-title mb-16" style="color:var(--accent)">🎚️ Risk limitleri artık Trade Profiles'ta</div>
+  <div class="section-title mb-16" style="color:var(--accent)">Tüm çalışma zamanı ayarları</div>
   <p class="text-muted text-sm">
-    Emir limitleri (TL/adet/gün), AI güven eşikleri, sinyal filtreleri ve tarama aralığı artık
-    tek tek bu sayfadan değil, <a href="/admin/trade-profiles" class="log-link">Trade Profiles</a>
-    sayfasındaki aktif profilden yönetiliyor. Aşağıdaki ayarlar profil dışı kalan, sistem geneli anahtarlardır.
+    Sunucunun DB destekli çalışma zamanı ayarlarının tamamı aşağıda yer alır. Profil bazlı risk ve davranış
+    ayarları ayrıca <a href="/admin/trade-profiles" class="log-link">Trade Profiles</a> ekranından yönetilir.
+    API tokenları, veritabanı bağlantısı ve gateway URL gibi secret veya yalnız başlangıçta okunan ENV değerleri
+    güvenlik ve restart gereksinimi nedeniyle bu ekranda tutulmaz.
   </p>
 </div>
 
-{{ config_section("Sistem Anahtarları", ["tradingMode", "killSwitchEnabled"],
-  "tradingMode'u LIVE/DEMO_LIVE/REAL_LIVE yapmak veya kill switch'i kapatmak için zorunlu") }}
-
-{{ config_section("Risk Sınırları", ["allowedSymbols", "lockedLongTermSymbols", "disableTradingAfter", "timezone"],
-  None) }}
-
-{{ config_section("Matriks Bot Bağlantısı", ["botMode", "botEnableDemoOrders", "botEnableRealOrders", "botRealLiveModeAllowed", "botRealLiveArmed",
-  "botRequireDemoAccount", "botDemoAccountConfirmed", "botHttpTimeoutSeconds"],
-  "botMode'u DEMO_LIVE/REAL_LIVE yapmak, real emirleri açmak veya demo hesabı onaylamak için zorunlu") }}
-
-{{ config_section("Account Sizing", ["sizingAllowMarginBuying", "accountReservationHandling"],
-  "Margin remains disabled by default; change UNKNOWN only after target broker reservation semantics are verified") }}
-
-<div class="card" style="border-color:rgba(248,81,73,0.25)">
-  <div class="section-title mb-16" style="color:var(--danger)">🔒 MARKET Emirleri — Kalıcı Kilit</div>
-  <p class="text-muted text-sm">
-    <code class="mono">botAllowMarketOrders</code> sistem genelinde her zaman <strong>false</strong>'tur ve
-    değiştirilemez — hem yazma tarafında <code class="mono">true</code> reddedilir hem de Matriks bot config'i
-    bu değerden bağımsız olarak her zaman MARKET emirlerini kapalı gönderir. Bu bir görüntüleme ayarı değil,
-    sabit bir güvenlik kilididir.
-  </p>
-</div>
+{% for section in config_sections %}
+  {{ config_section(section) }}
+{% endfor %}
 
 {% endblock %}

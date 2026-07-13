@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -29,6 +30,13 @@ class ConfigDefinition:
     default: str
     description: str
     is_sensitive: bool = False
+
+
+@dataclass(frozen=True)
+class ConfigSectionDefinition:
+    title: str
+    description: str
+    keys: tuple[str, ...]
 
 
 def _settings_default_mode() -> str:
@@ -239,10 +247,13 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
 RISKY_CONFIG_KEYS = {
     "tradingMode",
     "killSwitchEnabled",
+    "tradingKillSwitchActive",
+    "forceSafeMode",
     "botMode",
     "botEnableRealOrders",
     "botRealLiveModeAllowed",
     "botRealLiveArmed",
+    "botRequireDemoAccount",
     "botDemoAccountConfirmed",
     "sizingRiskPerTradePct",
     "sizingMaxCashUtilizationPct",
@@ -265,6 +276,96 @@ RISKY_CONFIG_KEYS = {
 }
 
 
+READ_ONLY_CONFIG_KEYS = frozenset({"botAllowMarketOrders"})
+
+
+CONFIG_SECTION_DEFINITIONS = (
+    ConfigSectionDefinition(
+        title="İşlem modu ve güvenlik kapıları",
+        description=(
+            "Sistem modu, değerlendirme kill switch'i ve emir dispatch güvenlik "
+            "kapıları. Güvenliği gevşeten değişiklikler CONFIRM onayı ister."
+        ),
+        keys=(
+            "tradingMode",
+            "killSwitchEnabled",
+            "tradingKillSwitchActive",
+            "forceSafeMode",
+        ),
+    ),
+    ConfigSectionDefinition(
+        title="Sembol yetkileri ve işlem zamanı",
+        description=(
+            "Genel izleme listesi, BUY ve SELL_EXIT izinleri, uzun vadeli "
+            "kilitler ve seans kesim ayarları."
+        ),
+        keys=(
+            "allowedSymbols",
+            "buyAllowedSymbols",
+            "sellExitAllowedSymbols",
+            "lockedLongTermSymbols",
+            "disableTradingAfter",
+            "timezone",
+        ),
+    ),
+    ConfigSectionDefinition(
+        title="Matriks gateway ve emir izinleri",
+        description=(
+            "Gateway çalışma modu, demo/gerçek emir kilitleri, hesap onayı ve "
+            "HTTP timeout ayarları. MARKET emri kod seviyesinde salt okunurdur."
+        ),
+        keys=(
+            "botMode",
+            "botEnableDemoOrders",
+            "botEnableRealOrders",
+            "botRealLiveModeAllowed",
+            "botRealLiveArmed",
+            "botRequireDemoAccount",
+            "botDemoAccountConfirmed",
+            "botHttpTimeoutSeconds",
+            "botAllowMarketOrders",
+        ),
+    ),
+    ConfigSectionDefinition(
+        title="Deterministik position sizing sınırları",
+        description=(
+            "Environment ve aktif Trade Profile ile birlikte çözümlenen sistem "
+            "geneli lot, nakit, maruziyet, stop, slippage ve günlük limitler."
+        ),
+        keys=(
+            "sizingRiskPerTradePct",
+            "sizingMaxCashUtilizationPct",
+            "sizingMaxAccountExposurePct",
+            "sizingMaxPositionValuePerSymbol",
+            "sizingMaxOrderValueTl",
+            "sizingMaxQtyPerOrder",
+            "sizingMinOrderValueTl",
+            "sizingMinStopDistancePct",
+            "sizingMaxStopDistancePct",
+            "sizingMinimumStopSlippagePct",
+            "sizingMaximumStopSlippagePct",
+            "sizingProfileStopSlippagePct",
+            "sizingMaxAccountDataAgeSeconds",
+            "sizingMinimumBuyConfidence",
+            "sizingMinimumSellConfidence",
+            "sizingDailyOrderLimit",
+            "sizingPerSymbolDailyOrderLimit",
+        ),
+    ),
+    ConfigSectionDefinition(
+        title="Hesap ve nakit rezervasyonu",
+        description=(
+            "Margin izni ve broker buying-power rezervasyon semantiği. Hedef "
+            "broker alanları doğrulanmadan UNKNOWN değiştirilmemelidir."
+        ),
+        keys=(
+            "sizingAllowMarginBuying",
+            "accountReservationHandling",
+        ),
+    ),
+)
+
+
 @dataclass(frozen=True)
 class AdminConfigItem:
     key: str
@@ -284,6 +385,72 @@ class AdminConfigItem:
     @property
     def requires_confirmation(self) -> bool:
         return self.key in RISKY_CONFIG_KEYS
+
+    @property
+    def is_editable(self) -> bool:
+        return self.key not in READ_ONLY_CONFIG_KEYS
+
+
+@dataclass(frozen=True)
+class AdminConfigSection:
+    title: str
+    description: str
+    items: tuple[AdminConfigItem, ...]
+
+    @property
+    def requires_confirmation(self) -> bool:
+        return any(item.requires_confirmation for item in self.items)
+
+    @property
+    def has_editable_items(self) -> bool:
+        return any(item.is_editable for item in self.items)
+
+
+def build_admin_config_sections(
+    items: Iterable[AdminConfigItem],
+) -> list[AdminConfigSection]:
+    """Group every public runtime config for the HTML admin panel.
+
+    The final catch-all section is intentional: a newly introduced
+    ``CONFIG_DEFINITIONS`` key remains visible even if its preferred section
+    has not been assigned yet.
+    """
+
+    by_key = {item.key: item for item in items}
+    assigned: set[str] = set()
+    sections: list[AdminConfigSection] = []
+
+    for definition in CONFIG_SECTION_DEFINITIONS:
+        section_items: list[AdminConfigItem] = []
+        for key in definition.keys:
+            if key in assigned:
+                raise RuntimeError(f"Admin config key appears in two sections: {key}")
+            item = by_key.get(key)
+            if item is not None:
+                assigned.add(key)
+                section_items.append(item)
+        if section_items:
+            sections.append(
+                AdminConfigSection(
+                    title=definition.title,
+                    description=definition.description,
+                    items=tuple(section_items),
+                )
+            )
+
+    remaining = tuple(item for key, item in by_key.items() if key not in assigned)
+    if remaining:
+        sections.append(
+            AdminConfigSection(
+                title="Diğer çalışma zamanı ayarları",
+                description=(
+                    "Henüz özel bir ekran bölümüne atanmamış çalışma zamanı "
+                    "ayarları. Bu bölüm yeni anahtarların panelden kaybolmasını önler."
+                ),
+                items=remaining,
+            )
+        )
+    return sections
 
 
 def public_config_keys() -> list[str]:
@@ -612,7 +779,7 @@ def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
             }
             and old_value != new_value
         )
-    if key == "killSwitchEnabled":
+    if key in {"killSwitchEnabled", "tradingKillSwitchActive", "forceSafeMode"}:
         return _parse_bool(old_value) is True and _parse_bool(new_value) is False
     if key == "botMode":
         return (
@@ -631,6 +798,8 @@ def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
         "sizingAllowMarginBuying",
     }:
         return _parse_bool(new_value) is True and old_value != new_value
+    if key == "botRequireDemoAccount":
+        return _parse_bool(old_value) is True and _parse_bool(new_value) is False
     if key == "accountReservationHandling":
         return old_value == "UNKNOWN" and new_value != "UNKNOWN"
     increase_is_risky = {

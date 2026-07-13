@@ -145,7 +145,7 @@ namespace Matriks.Lean.Algotrader
         private ConcurrentDictionary<string, decimal> _accountNetQtyBySymbol = new ConcurrentDictionary<string, decimal>();
         private ConcurrentDictionary<string, decimal> _accountAvailableQtyBySymbol = new ConcurrentDictionary<string, decimal>();
         private readonly ConcurrentDictionary<string, List<decimal>> _closeHistoryBySymbol = new ConcurrentDictionary<string, List<decimal>>();
-        private readonly ConcurrentDictionary<string, DateTime> _lastCloseBarUtcBySymbol = new ConcurrentDictionary<string, DateTime>();
+        private readonly ConcurrentDictionary<string, string> _lastCloseBarKeyBySymbol = new ConcurrentDictionary<string, string>();
         private readonly ConcurrentDictionary<string, DateTime> _lastMarketDataEventUtcBySymbol = new ConcurrentDictionary<string, DateTime>();
         private readonly ConcurrentDictionary<string, MarketQuoteSnapshot> _lastValidQuoteBySymbol = new ConcurrentDictionary<string, MarketQuoteSnapshot>();
         private readonly ConcurrentDictionary<string, OhlcvSnapshot> _lastOhlcvBySymbol = new ConcurrentDictionary<string, OhlcvSnapshot>();
@@ -2931,7 +2931,18 @@ namespace Matriks.Lean.Algotrader
                     if (!depthReliable)
                     {
                         depthQueueDropPct = 0m;
-                        LogMarketDataWarning(symbol, "DEPTH", "Depth unavailable or zero; depthReliable=false");
+                        // A valid book can still be marked unreliable solely because
+                        // its last event is older than the order-time freshness limit.
+                        // That state remains fail-closed but is not a malformed-depth
+                        // warning. Empty, zero-sized and crossed books still warn.
+                        bool depthUnavailableOrInvalid = !depthAnalysis.Available
+                            || depthAnalysis.BestBid <= 0m
+                            || depthAnalysis.BestAsk <= 0m
+                            || depthAnalysis.BidSizeTop1 <= 0m
+                            || depthAnalysis.AskSizeTop1 <= 0m
+                            || depthAnalysis.BestBid >= depthAnalysis.BestAsk;
+                        if (depthUnavailableOrInvalid)
+                            LogMarketDataWarning(symbol, "DEPTH", "Depth unavailable or invalid; depthReliable=false");
                     }
 
                     depthSummary = "bestBid=" + bestBid
@@ -3464,10 +3475,16 @@ namespace Matriks.Lean.Algotrader
                 DateTime barTimestamp;
                 bool hasBarTimestamp = TryResolveBarTimestamp(barData.BarData, out barTimestamp);
                 if (!hasBarTimestamp)
-                {
-                    LogMarketDataWarning(symbol, "BAR_TIME", "Bar timestamp unavailable; close history not updated");
                     barTimestamp = DateTime.Now;
-                }
+
+                string barKey = hasBarTimestamp
+                    ? "TIME:" + barTimestamp.Ticks
+                    : barData.BarDataIndex >= 0
+                        ? "INDEX:" + barTimestamp.ToString("yyyyMMdd") + ":" + barData.BarDataIndex
+                        : null;
+                if (barKey == null)
+                    LogMarketDataWarning(symbol, "BAR_TIME", "Bar timestamp and bar index unavailable; close history not updated");
+
                 var snapshot = new OhlcvSnapshot
                 {
                     Open = open,
@@ -3476,12 +3493,12 @@ namespace Matriks.Lean.Algotrader
                     Close = close,
                     Volume = volume,
                     Reliable = open > 0m && high > 0m && low > 0m && close > 0m,
-                    Source = "BAR",
+                    Source = hasBarTimestamp ? "BAR" : "BAR_CALLBACK_TIME_FALLBACK",
                     UpdatedAt = barTimestamp
                 };
                 _lastOhlcvBySymbol[symbol] = snapshot;
-                if (hasBarTimestamp)
-                    UpdateCloseHistory(symbol, close, barTimestamp);
+                if (barKey != null)
+                    UpdateCloseHistory(symbol, close, barKey);
             }
             catch (Exception ex)
             {
@@ -3531,26 +3548,25 @@ namespace Matriks.Lean.Algotrader
 
         // ── Close history (thread-safe) ──────────────────────────────
 
-        private void UpdateCloseHistory(string symbol, decimal lastPrice, DateTime barTimestamp)
+        private void UpdateCloseHistory(string symbol, decimal lastPrice, string barKey)
         {
-            if (lastPrice <= 0)
+            if (lastPrice <= 0 || string.IsNullOrWhiteSpace(barKey))
                 return;
 
             symbol = NormalizeSymbol(symbol);
 
             lock (_closeLock)
             {
-                DateTime previous;
-                DateTime timestampUtc = barTimestamp.ToUniversalTime();
+                string previous;
                 var list = _closeHistoryBySymbol.GetOrAdd(symbol, _ => new List<decimal>());
-                if (_lastCloseBarUtcBySymbol.TryGetValue(symbol, out previous)
-                    && previous == timestampUtc)
+                if (_lastCloseBarKeyBySymbol.TryGetValue(symbol, out previous)
+                    && string.Equals(previous, barKey, StringComparison.Ordinal))
                 {
                     if (list.Count > 0)
                         list[list.Count - 1] = lastPrice;
                     return;
                 }
-                _lastCloseBarUtcBySymbol[symbol] = timestampUtc;
+                _lastCloseBarKeyBySymbol[symbol] = barKey;
                 list.Add(lastPrice);
                 if (list.Count > MaxCloseHistory)
                     list.RemoveAt(0);
@@ -4584,20 +4600,32 @@ namespace Matriks.Lean.Algotrader
         {
             timestamp = DateTime.MinValue;
             if (bar == null) return false;
-            string[] propertyNames = { "DateTime", "BarTime", "StartTime", "Time", "Timestamp" };
+            string[] propertyNames = { "DTime", "DateTime", "BarTime", "StartTime", "Time", "Timestamp" };
             Type type = bar.GetType();
             foreach (string name in propertyNames)
             {
-                PropertyInfo property = type.GetProperty(name, BindingFlags.Instance | BindingFlags.Public);
-                if (property == null) continue;
-                object value = property.GetValue(bar, null);
+                object value = null;
+                PropertyInfo property = type.GetProperty(
+                    name,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+                if (property != null)
+                    value = property.GetValue(bar, null);
+                else
+                {
+                    FieldInfo field = type.GetField(
+                        name,
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+                    if (field != null)
+                        value = field.GetValue(bar);
+                }
+                if (value == null) continue;
                 if (value is DateTime)
                 {
                     timestamp = (DateTime)value;
                     return timestamp != DateTime.MinValue;
                 }
                 DateTime parsed;
-                if (value != null && DateTime.TryParse(Convert.ToString(value), out parsed))
+                if (DateTime.TryParse(Convert.ToString(value), out parsed))
                 {
                     timestamp = parsed;
                     return timestamp != DateTime.MinValue;

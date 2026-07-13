@@ -704,6 +704,32 @@ async def admin_config_update(request: Request) -> Any:
     return RedirectResponse("/admin/config", status_code=status.HTTP_303_SEE_OTHER)
 
 
+async def _gateway_positions_context() -> dict[str, Any]:
+    try:
+        payload = await gateway_client.get_positions()
+        positions = payload.get("positions")
+        if not isinstance(positions, list):
+            positions = []
+        return {
+            "gateway_positions": positions,
+            "gateway_positions_meta": {
+                "positions_loaded": payload.get("positionsLoaded"),
+                "snapshot_complete": payload.get("snapshotCompleteFlag"),
+                "snapshot_non_empty": payload.get("snapshotNonEmpty"),
+                "snapshot_age_seconds": payload.get("snapshotAgeSeconds"),
+                "snapshot_generation": payload.get("snapshotGeneration"),
+                "confidence": payload.get("confidence"),
+            },
+            "gateway_positions_error": None,
+        }
+    except (GatewayUnavailable, GatewayError, ValueError, TypeError) as exc:
+        return {
+            "gateway_positions": [],
+            "gateway_positions_meta": {},
+            "gateway_positions_error": str(exc),
+        }
+
+
 @admin_router.get("/positions", response_class=HTMLResponse)
 async def admin_positions(request: Request) -> HTMLResponse:
     identity = await require_admin(request)
@@ -718,6 +744,7 @@ async def admin_positions(request: Request) -> HTMLResponse:
         status_ctx = await _status_strip_context(session)
 
     allowed_symbols = _split_csv_symbols(allowed_raw)
+    gateway_ctx = await _gateway_positions_context()
 
     return templates.TemplateResponse(
         request,
@@ -731,6 +758,7 @@ async def admin_positions(request: Request) -> HTMLResponse:
             "confirmation": RISKY_CONFIRMATION,
             "error": None,
             "message": None,
+            **gateway_ctx,
             **status_ctx,
         },
     )
@@ -748,6 +776,7 @@ async def _positions_page_error(
         )
         allowed_raw = await get_admin_config_value(session, "allowedSymbols")
         status_ctx = await _status_strip_context(session)
+    gateway_ctx = await _gateway_positions_context()
 
     return templates.TemplateResponse(
         request,
@@ -761,6 +790,7 @@ async def _positions_page_error(
             "confirmation": RISKY_CONFIRMATION,
             "error": error,
             "message": None,
+            **gateway_ctx,
             **status_ctx,
         },
         status_code=status.HTTP_400_BAD_REQUEST,

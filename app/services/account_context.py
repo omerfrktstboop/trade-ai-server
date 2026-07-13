@@ -156,13 +156,19 @@ class DefaultMatriksAccountNormalizer(BaseAccountNormalizer):
     provider_names = frozenset({"MATRIKS_IQ", "MATRIKSIQ", "MATRIKS"})
     normalization_policy = "MATRIKS_EXPLICIT_ORDERABLE_CASH_V1"
     field_aliases = {
-        "account_equity_tl": ("TotalEquity", "AccountEquity", "Equity"),
+        "account_equity_tl": (
+            "TotalEquity",
+            "AccountEquity",
+            "Equity",
+            "Overall",
+        ),
         "settled_cash_tl": ("SettledCash", "CashBalance"),
         "broker_reported_buying_power_tl": (
             "OrderableCash",
             "AvailableBuyingPower",
             "AvailableBalanceForBuyOrders",
             "PurchasingPower",
+            "AvailableMargin",
         ),
         "withdrawable_cash_tl": ("WithdrawableCash", "WithdrawableBalance"),
         "unsettled_receivables_tl": (

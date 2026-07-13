@@ -822,7 +822,22 @@ namespace Matriks.Lean.Algotrader
                             EnsurePortfolioSymbolSubscribed(symbol);
                     }
                     IndicatorPeriod = indicatorPeriod;
-                    AllowedSymbols = symbols;
+                    // Config reload must not remove market-data subscriptions
+                    // discovered from the real account portfolio. They remain
+                    // data-only unless explicitly present in BUY/SELL allow-lists.
+                    string[] portfolioSymbols = _accountNetQtyBySymbol
+                        .Where(x => x.Value != 0m)
+                        .Select(x => NormalizeSymbol(x.Key))
+                        .Concat(_accountAvailableQtyBySymbol
+                            .Where(x => x.Value != 0m)
+                            .Select(x => NormalizeSymbol(x.Key)))
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    AllowedSymbols = symbols
+                        .Concat(portfolioSymbols)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
                     LockedLongTermQty = lockedLongTermQty;
                     BotOwnedQty = botOwnedQty;
                     RuntimeMode = runtimeMode;
@@ -838,12 +853,18 @@ namespace Matriks.Lean.Algotrader
                     // field was validated. Order handlers read this snapshot
                     // once, so config reloads cannot mix versions.
                     _activeConfig = new GatewayConfigSnapshot(runtimeMode, enableDemoOrders, enableRealOrders, realLiveModeAllowed, realLiveArmed, requireDemoAccount, demoAccountConfirmed, tradingKillSwitchActive, forceSafeMode, buyAllowedSymbols, sellExitAllowedSymbols, configVersion, activeProfileCode);
+                    bool accountVerificationPolicyChanged =
+                        RequireDemoAccount != requireDemoAccount
+                        || DemoAccountConfirmed != demoAccountConfirmed;
                     RequireDemoAccount = requireDemoAccount;
                     DemoAccountConfirmed = demoAccountConfirmed;
                     // A server-side confirmation/account policy change must
                     // never inherit a previous five-second verification.
-                    _demoAccountVerified = false;
-                    _lastAccountVerificationUtc = DateTime.MinValue;
+                    if (accountVerificationPolicyChanged)
+                    {
+                        _demoAccountVerified = false;
+                        _lastAccountVerificationUtc = DateTime.MinValue;
+                    }
                     MaxOrderValueTl = maxOrderValueTl;
                     MaxQtyPerOrder = maxQtyPerOrder;
                     MaxOrdersPerDay = maxOrdersPerDay;
@@ -926,6 +947,12 @@ namespace Matriks.Lean.Algotrader
 
         private async Task HandleHealthAsync(NetworkStream stream)
         {
+            // Readiness must be able to observe a fresh demo-account check even
+            // before the first order attempt. This is the same compile-safe
+            // GetTradeUser verification used immediately before /order.
+            if (RuntimeMode == "DEMO_LIVE" && RequireDemoAccount)
+                VerifyDemoAccountFresh();
+
             var quoteAgeSeconds = new Dictionary<string, double?>();
             var depthAgeSeconds = new Dictionary<string, double?>();
             foreach (string symbolRaw in AllowedSymbols)
@@ -1699,14 +1726,22 @@ namespace Matriks.Lean.Algotrader
             try
             {
                 object user = GetTradeUser();
+                Dictionary<string, object> account = BuildTradeUserAccountPayload(user);
+                decimal overall;
+                decimal availableMargin;
+                bool accountDataReliable = user != null
+                    && TryGetFiniteDecimal(account, "Overall", out overall)
+                    && overall > 0m
+                    && TryGetFiniteDecimal(account, "AvailableMargin", out availableMargin)
+                    && availableMargin >= 0m;
                 await WriteJsonAsync(stream, 200, new
                 {
                     ok = true,
                     available = user != null,
                     sourceProvider = "MATRIKS_IQ",
                     receivedAtUtc = DateTime.UtcNow.ToString("o"),
-                    accountDataReliable = user != null,
-                    account = ReflectToDict(user)
+                    accountDataReliable = accountDataReliable,
+                    account = account
                 });
             }
             catch (Exception ex)
@@ -2789,6 +2824,110 @@ namespace Matriks.Lean.Algotrader
                 result.Analysis.DepthReliable = false;
             }
             return result;
+        }
+
+        private static Dictionary<string, object> BuildTradeUserAccountPayload(object user)
+        {
+            var result = ReflectToDict(user);
+            var marketAccounts = new List<Dictionary<string, object>>();
+            Dictionary<string, object> selected = null;
+            Dictionary<string, object> first = null;
+            object accountsValue = ReadPublicMember(user, "Accounts");
+            var accounts = accountsValue as System.Collections.IEnumerable;
+            if (accounts != null && !(accountsValue is string))
+            {
+                int index = 0;
+                foreach (object item in accounts)
+                {
+                    if (item == null || index >= 20)
+                        break;
+                    var entry = new Dictionary<string, object>
+                    {
+                        { "Index", index },
+                        { "ExchangeID", ReadPublicMember(item, "ExchangeID") },
+                        { "Overall", ReadPublicMember(item, "Overall") },
+                        { "AvailableMargin", ReadPublicMember(item, "AvailableMargin") }
+                    };
+                    marketAccounts.Add(entry);
+                    if (first == null)
+                        first = entry;
+                    string exchange = Convert.ToString(entry["ExchangeID"]) ?? string.Empty;
+                    if (selected == null && IsBistAccountExchange(exchange))
+                        selected = entry;
+                    index++;
+                }
+            }
+
+            // Matriks' official account example defines Accounts[0] as BIST and
+            // Accounts[1] as VIOP. Prefer the explicit exchange label and use
+            // that documented first-entry rule only when the label is unavailable.
+            string selectionPolicy = "BIST_EXCHANGE_LABEL";
+            if (selected == null)
+            {
+                selected = first;
+                selectionPolicy = "DOCUMENTED_BIST_FIRST_ACCOUNT";
+            }
+            result["Accounts"] = marketAccounts;
+            result["AccountSelectionPolicy"] = selectionPolicy;
+            if (selected != null)
+            {
+                result["ExchangeID"] = selected["ExchangeID"];
+                result["Overall"] = selected["Overall"];
+                result["AvailableMargin"] = selected["AvailableMargin"];
+            }
+            return result;
+        }
+
+        private static object ReadPublicMember(object obj, string name)
+        {
+            if (obj == null || string.IsNullOrWhiteSpace(name))
+                return null;
+            try
+            {
+                Type type = obj.GetType();
+                PropertyInfo property = type.GetProperty(
+                    name,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+                if (property != null && property.GetIndexParameters().Length == 0)
+                    return property.GetValue(obj, null);
+                FieldInfo field = type.GetField(
+                    name,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+                return field == null ? null : field.GetValue(obj);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool IsBistAccountExchange(string exchange)
+        {
+            string value = (exchange ?? string.Empty).Trim().ToUpperInvariant();
+            return value.Contains("BIST")
+                || value.Contains("BORSAISTANBUL")
+                || value == "PAY"
+                || value == "STOCK";
+        }
+
+        private static bool TryGetFiniteDecimal(
+            Dictionary<string, object> values,
+            string key,
+            out decimal parsed)
+        {
+            parsed = 0m;
+            object raw;
+            if (values == null || !values.TryGetValue(key, out raw) || raw == null)
+                return false;
+            try
+            {
+                parsed = Convert.ToDecimal(raw);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static DepthAnalysisSnapshot AnalyzeDepth(List<DepthLevelSnapshot> bids, List<DepthLevelSnapshot> asks)

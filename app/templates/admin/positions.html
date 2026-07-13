@@ -5,6 +5,44 @@
 
 {% include "admin/_auto_refresh.html" %}
 
+<div class="mb-24">
+  <div class="flex-between mb-16">
+    <h2 class="section-title">Matriks Hesap Pozisyonları</h2>
+    <span class="text-sm text-muted">
+      {{ gateway_positions|length }} pozisyon
+      {% if gateway_positions_meta.confidence %} / güven={{ gateway_positions_meta.confidence }}{% endif %}
+      {% if gateway_positions_meta and gateway_positions_meta.snapshot_age_seconds is not none %} / yaş={{ gateway_positions_meta.snapshot_age_seconds }} sn{% endif %}
+    </span>
+  </div>
+  <p class="text-muted text-sm mb-16">
+    Hesaptaki toplam miktar ile bot-owned miktar ayrı gösterilir. Bot-owned=0 olan
+    manuel/harici pozisyonlar otomatik SELL için kullanılmaz.
+  </p>
+  {% if gateway_positions_error %}
+  <div class="alert alert-danger">Matriks pozisyonları okunamadı: {{ gateway_positions_error }}</div>
+  {% endif %}
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Sembol</th><th>Hesap Net</th><th>Kullanılabilir</th><th>Kilitli</th><th>Bot-owned</th><th>Bot Satılabilir</th><th>Kaynak</th></tr></thead>
+      <tbody>
+        {% for row in gateway_positions %}
+        <tr>
+          <td><strong>{{ row.symbol }}</strong></td>
+          <td class="mono">{{ row.accountNetQty }}</td>
+          <td class="mono">{{ row.accountAvailableQty }}</td>
+          <td class="mono">{{ row.lockedLongTermQty }}</td>
+          <td class="mono">{{ row.botOwnedQty }}</td>
+          <td class="mono">{{ row.botSellableQty }}</td>
+          <td><span class="badge badge-info">{{ row.source or 'SNAPSHOT' }}</span></td>
+        </tr>
+        {% else %}
+        <tr class="empty-row"><td colspan="7">Matriks hesabında görünen pozisyon yok</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
 {% if error %}<div class="alert alert-danger">⚠️ {{ error }}</div>{% endif %}
 {% if message %}<div class="alert alert-success">✅ {{ message }}</div>{% endif %}
 

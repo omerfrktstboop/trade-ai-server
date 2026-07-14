@@ -122,6 +122,10 @@ class TestPromotion:
         promoted = await apply_research_result("GARAN", _result(), policy=_policy())
         assert promoted is False
         assert await list_trade_eligible_symbols() == []
+        async with async_session_factory() as session:
+            row = (await session.execute(select(ResearchCandidate).where(ResearchCandidate.symbol == "GARAN"))).scalar_one()
+        assert row.status == "QUALIFIED"
+        assert row.consecutive_pass_count == 1
 
     async def test_two_spaced_passes_promote(self):
         await _seed_candidate()
@@ -132,8 +136,24 @@ class TestPromotion:
         )
         assert promoted is True
         assert await list_trade_eligible_symbols() == ["GARAN"]
+        async with async_session_factory() as session:
+            watchlist = (await session.execute(select(TradeWatchlistSymbol).where(TradeWatchlistSymbol.symbol == "GARAN"))).scalar_one()
+        assert watchlist.is_active is True
 
-    async def test_low_research_score_rejected(self):
+    async def test_second_pass_before_minimum_interval_does_not_promote(self):
+        await _seed_candidate()
+        first = datetime(2026, 7, 14, 7, 0, tzinfo=UTC)
+        await apply_research_result("GARAN", _result(), policy=_policy(), now=first)
+        assert not await apply_research_result(
+            "GARAN", _result(), policy=_policy(), now=first + timedelta(minutes=9)
+        )
+        assert await list_trade_eligible_symbols() == []
+        async with async_session_factory() as session:
+            row = (await session.execute(select(ResearchCandidate).where(ResearchCandidate.symbol == "GARAN"))).scalar_one()
+        assert row.consecutive_pass_count == 1
+        assert row.rejection_reason == "PROMOTION_PASSES_NOT_TIME_SPACED"
+
+    async def test_low_research_score_stays_researched_and_resets_passes(self):
         await _seed_candidate()
         assert not await apply_research_result(
             "GARAN", _result(research_score=60), policy=_policy()
@@ -144,7 +164,9 @@ class TestPromotion:
                     select(ResearchCandidate).where(ResearchCandidate.symbol == "GARAN")
                 )
             ).scalar_one()
-        assert row.status == "REJECTED"
+        assert row.status == "RESEARCHED"
+        assert row.consecutive_pass_count == 0
+        assert row.rejection_reason == "PROMOTION_RESEARCH_SCORE_BELOW_MINIMUM"
 
     async def test_high_confidence_high_risk_rejected(self):
         await _seed_candidate()
@@ -217,6 +239,7 @@ class TestResearchBudget:
             nonlocal active, max_active
             assert kwargs["evaluation_purpose"] == "RESEARCH_DISCOVERY"
             assert kwargs["force_paper"] is True
+            assert kwargs["mode"] is SignalMode.PAPER
             active += 1
             max_active = max(max_active, active)
             calls.append(symbol)
@@ -232,8 +255,9 @@ class TestResearchBudget:
 
 class _ResearchProvider:
     async def decide(self, payload: dict[str, Any]) -> dict[str, Any]:
+        assert payload["schemaVersion"] == "ai-decision-context-v1"
         assert payload["evaluationPurpose"] == "RESEARCH_DISCOVERY"
-        assert payload["allowOrder"] is False
+        assert "allowOrder" not in payload
         return {
             "action": "BUY",
             "confidence": 90,

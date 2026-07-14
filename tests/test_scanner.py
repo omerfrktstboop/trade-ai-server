@@ -294,19 +294,39 @@ class TestScannerGates:
         assert result == []
         assert evaluated_symbols == []
 
-    async def test_discovery_runs_after_trading_cutoff(
+    async def test_market_data_pipeline_runs_after_trading_cutoff(
         self, evaluated_symbols, runtime_stubs, monkeypatch
     ):
-        """Market-data discovery must not inherit the order cutoff gate."""
+        """Cutoff blocks trade/order/portfolio paths, not discovery research."""
         runtime_stubs["config"] = _cfg(
             disable_trading_after="00:00", timezone="Etc/GMT-14"
         )
         discovery_calls: list[bool] = []
+        research_calls: list[set[str]] = []
+        refresh_calls: list[bool] = []
+        timeout_calls: list[bool] = []
+        portfolio_calls: list[set[str]] = []
 
         async def fake_discovery(_self) -> None:
             discovery_calls.append(True)
 
+        async def fake_research(_self, declined_symbols: set[str]) -> None:
+            research_calls.append(declined_symbols)
+
+        async def fake_refresh(_self) -> None:
+            refresh_calls.append(True)
+
+        async def fake_timeout(_self) -> None:
+            timeout_calls.append(True)
+
+        async def fake_portfolio(_self, overrides: set[str]) -> None:
+            portfolio_calls.append(overrides)
+
         monkeypatch.setattr(SymbolScanner, "_run_discovery", fake_discovery)
+        monkeypatch.setattr(SymbolScanner, "_run_research", fake_research)
+        monkeypatch.setattr(SymbolScanner, "_refresh_pipeline_status", fake_refresh)
+        monkeypatch.setattr(SymbolScanner, "_run_order_timeout_check", fake_timeout)
+        monkeypatch.setattr(SymbolScanner, "_run_portfolio_scan", fake_portfolio)
         scanner = SymbolScanner(gateway=make_gateway_client(FakeGateway()))
 
         result = await scanner.tick()
@@ -314,6 +334,10 @@ class TestScannerGates:
         assert result == []
         assert evaluated_symbols == []
         assert discovery_calls == [True]
+        assert research_calls == [set()]
+        assert refresh_calls == [True]
+        assert timeout_calls == []
+        assert portfolio_calls == []
 
     async def test_gateway_unavailable_skips_cycle(
         self, evaluated_symbols, runtime_stubs
@@ -342,6 +366,8 @@ class TestScannerGates:
         discovery_calls: list[bool] = []
         research_calls: list[set[str]] = []
         refresh_calls: list[bool] = []
+        timeout_calls: list[bool] = []
+        caplog.set_level("INFO", logger=scanner_module.__name__)
 
         async def fake_discovery(_self) -> None:
             discovery_calls.append(True)
@@ -352,9 +378,17 @@ class TestScannerGates:
         async def fake_refresh(_self) -> None:
             refresh_calls.append(True)
 
+        async def fake_timeout(_self) -> None:
+            timeout_calls.append(True)
+
+        async def fake_gateway_notification(_message: str) -> None:
+            return None
+
         monkeypatch.setattr(SymbolScanner, "_run_discovery", fake_discovery)
         monkeypatch.setattr(SymbolScanner, "_run_research", fake_research)
         monkeypatch.setattr(SymbolScanner, "_refresh_pipeline_status", fake_refresh)
+        monkeypatch.setattr(SymbolScanner, "_run_order_timeout_check", fake_timeout)
+        monkeypatch.setattr(scanner_module, "notify_gateway_event", fake_gateway_notification)
         fake = FakeGateway()
         fake.positions_loaded = False
         scanner = SymbolScanner(gateway=make_gateway_client(fake))
@@ -366,6 +400,7 @@ class TestScannerGates:
         assert discovery_calls == [True]
         assert research_calls == [set()]
         assert refresh_calls == [True]
+        assert timeout_calls == []
         assert "TRADING_SKIPPED_POSITIONS_NOT_LOADED" in caplog.text
 
     async def test_evaluation_error_does_not_stop_other_symbols(

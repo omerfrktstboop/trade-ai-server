@@ -198,10 +198,19 @@ class SymbolScanner:
                 pass
 
     async def tick(self) -> list[str]:
+        """Run one scanner tick and refresh research-pipeline status on every exit."""
+        try:
+            return await self._tick()
+        finally:
+            # Status is operational visibility, not a trading capability. Keep it
+            # current even when a kill switch, gateway failure, cutoff, or account
+            # readiness gate stops the trade-facing part of this tick.
+            await self._refresh_pipeline_status()
+
+    async def _tick(self) -> list[str]:
         trading_started = monotonic()
         self._last_tick_at = datetime.now(timezone.utc)
         self._last_evaluated_symbols = []
-        await self._run_order_timeout_check()
         """Tek tarama turu. Değerlendirilen sembollerin listesini döndürür (test için)."""
         # ── Runtime config (kill switch, cutoff, semboller, interval) ──────
         kill_switch = False
@@ -245,6 +254,9 @@ class SymbolScanner:
         # kalır. Discovery kendi movers/snapshot tazelik kontrollerini yapar
         # ve gateway tur ortasında düşerse hatayı yutup bu turu atlar.
         await self._run_discovery()
+        # Research discovery is forced PAPER market-data work, so it must run
+        # before account/trading gates and can never enter trade/order paths.
+        await self._run_research(runtime_cfg._declined_set())
 
         # Aşağıdaki kapılar trade değerlendirmesi/portföy akışına aittir;
         # discovery'nin hazır olma koşullarının parçası değildir.
@@ -266,10 +278,11 @@ class SymbolScanner:
             # Research also evaluates in PAPER mode, so keep it available
             # while the account position snapshot is warming up; do not enter
             # normal trade evaluation or the portfolio/order path.
-            await self._run_research(runtime_cfg._declined_set())
-            await self._refresh_pipeline_status()
             return []
 
+        # Stale-order cancellation is an order-path operation and must honor
+        # the same cutoff and positionsLoaded gates as normal trading.
+        await self._run_order_timeout_check()
         # ── Pozisyonları gateway'den tazele ────────────────────────────────
         # Admin panelinin Positions sayfası ve acil "tümünü sat" akışı
         # bot_positions'tan okuyor; eski push endpoint'i kaldırıldığı için
@@ -345,9 +358,7 @@ class SymbolScanner:
         # Discovery yukarıda trade readiness kapılarından bağımsız çalıştı.
         # Gateway tur ortasında düştüyse research/portföy tekrar denenmez.
         if not gateway_down_mid_cycle:
-            await self._run_research(runtime_cfg._declined_set())
             await self._run_portfolio_scan(pending_overrides)
-            await self._refresh_pipeline_status()
 
         self._last_evaluated_symbols = list(evaluated)
         logger.info(

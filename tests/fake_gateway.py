@@ -135,6 +135,30 @@ class FakeGateway:
             },
         }
         self.request_log: list[httpx.Request] = []
+        self.capabilities_payload: dict[str, Any] = {
+            "ok": True,
+            "capabilities": {
+                "marketRankings": {
+                    "nativeMarketWide": False,
+                    "source": "SUBSCRIBED_UNIVERSE_FALLBACK",
+                    "universe": "CONFIGURED_SUBSCRIBED_EQUITY_ONLY",
+                    "weeklyGainers": {
+                        "available": True,
+                        "source": "SUBSCRIBED_UNIVERSE_FALLBACK",
+                        "referencePeriod": "SEVEN_SESSIONS",
+                        "calendarWeekEquivalent": False,
+                    },
+                    "turnoverLeaders": {
+                        "available": True,
+                        "source": "SUBSCRIBED_UNIVERSE_FALLBACK",
+                    },
+                    "relativeVolumeLeaders": {
+                        "available": False,
+                        "source": "UNAVAILABLE",
+                    },
+                }
+            },
+        }
         # sembol → snapshot payload override'ları
         self.snapshot_overrides: dict[str, dict[str, Any]] = {}
         self.positions: list[dict[str, Any]] = [
@@ -193,6 +217,8 @@ class FakeGateway:
                 },
             )
 
+        if path == "/capabilities":
+            return self._json(200, self.capabilities_payload)
         if path == "/snapshot":
             symbol = (request.url.params.get("symbol") or "").upper()
             if not symbol:

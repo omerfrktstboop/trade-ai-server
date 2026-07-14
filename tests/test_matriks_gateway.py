@@ -60,6 +60,34 @@ class TestHealth:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+class TestMarketRankingCapabilities:
+    async def test_ranking_capabilities_report_scoped_fallback(self):
+        fake = FakeGateway()
+        client = make_client(fake)
+
+        capabilities = await client.get_market_ranking_capabilities()
+
+        assert capabilities["nativeMarketWide"] is False
+        assert capabilities["universe"] == "CONFIGURED_SUBSCRIBED_EQUITY_ONLY"
+        assert capabilities["weeklyGainers"]["source"] == "SUBSCRIBED_UNIVERSE_FALLBACK"
+        assert capabilities["weeklyGainers"]["referencePeriod"] == "SEVEN_SESSIONS"
+        assert capabilities["weeklyGainers"]["calendarWeekEquivalent"] is False
+        assert capabilities["relativeVolumeLeaders"]["available"] is False
+        await client.close()
+
+    async def test_missing_contract_is_fail_closed(self):
+        fake = FakeGateway()
+        fake.capabilities_payload = {"ok": True, "capabilities": {}}
+        client = make_client(fake)
+
+        capabilities = await client.get_market_ranking_capabilities()
+
+        assert capabilities["nativeMarketWide"] is False
+        assert capabilities["source"] == "UNAVAILABLE"
+        assert capabilities["weeklyGainers"]["available"] is False
+        assert capabilities["turnoverLeaders"]["available"] is False
+        assert capabilities["relativeVolumeLeaders"]["available"] is False
+        await client.close()
 # Auth
 # ═══════════════════════════════════════════════════════════════════════════════
 

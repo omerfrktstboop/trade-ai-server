@@ -102,6 +102,34 @@ class MatriksGatewayClient:
         """Return the data surfaces supported by the running gateway."""
         return await self._get("/capabilities")
 
+    async def get_market_ranking_capabilities(self) -> dict[str, Any]:
+        """Return explicit market-ranking support without guessing a Matriks API.
+
+        A gateway that predates the capability contract is treated as having no
+        usable ranking surface. Callers must not infer market-wide rankings
+        from a bare ``/movers`` response.
+        """
+        response = await self.get_capabilities()
+        capabilities = response.get("capabilities")
+        rankings = capabilities.get("marketRankings") if isinstance(capabilities, dict) else None
+        required_rankings = (
+            "weeklyGainers",
+            "turnoverLeaders",
+            "relativeVolumeLeaders",
+        )
+        if isinstance(rankings, dict) and all(
+            isinstance(rankings.get(name), dict) for name in required_rankings
+        ):
+            return rankings
+        return {
+            "nativeMarketWide": False,
+            "source": "UNAVAILABLE",
+            "reason": "Gateway does not publish the market-ranking capability contract.",
+            "weeklyGainers": {"available": False, "source": "UNAVAILABLE"},
+            "turnoverLeaders": {"available": False, "source": "UNAVAILABLE"},
+            "relativeVolumeLeaders": {"available": False, "source": "UNAVAILABLE"},
+        }
+
     async def get_depth(self, symbol: str, levels: int = 25) -> dict[str, Any]:
         """Return up to 25 bid/ask levels plus aggregate imbalance metrics."""
         return await self._get(
@@ -185,10 +213,12 @@ class MatriksGatewayClient:
         return await self._get("/mkk")
 
     async def get_movers(self, limit: int = 20) -> dict[str, Any]:
-        """GET /movers — kayıtlı evren üzerinden günlük yükselen/düşen/hacimliler.
+        """GET /movers — configured subscribed equity universe only.
 
-        Dönen dict: ``items`` (sembol başına lastPrice/changePct/volume) +
-        ``gainers``/``losers``/``volumeLeaders`` sıralı sembol listeleri.
+        The gateway uses documented per-symbol ``GetMarketData`` fields. Its
+        ``weeklyGainers`` and ``volumeLeaders`` are explicit local fallbacks,
+        not native BIST-wide rankings. Relative-volume leaders are omitted
+        unless a future capability contract says otherwise.
         """
         return await self._get("/movers", params={"limit": str(max(1, min(50, limit)))})
 

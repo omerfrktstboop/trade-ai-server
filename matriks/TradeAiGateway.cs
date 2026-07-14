@@ -1371,6 +1371,45 @@ namespace Matriks.Lean.Algotrader
                     marketDepth = true, maxDepthLevels = 25, news = true,
                     institutionDistribution = true,
                     institutionDistributionRequiresLicense = true,
+                    marketRankings = new
+                    {
+                        // Matriks documents per-symbol surface data, not a
+                        // market-wide ranking call. Do not substitute a
+                        // speculative method name here.
+                        nativeMarketWide = false,
+                        source = "SUBSCRIBED_UNIVERSE_FALLBACK",
+                        universe = "CONFIGURED_SUBSCRIBED_EQUITY_ONLY",
+                        nativeMarketWideReason = "No documented Matriks IQ AlgoTrader market-wide ranking method was verified.",
+                        verifiedMethods = new[]
+                        {
+                            "AddSymbolMarketData(string)",
+                            "GetMarketData(string, SymbolUpdateField)",
+                            "SymbolUpdateField.WeekClose",
+                            "SymbolUpdateField.TotalVol"
+                        },
+                        weeklyGainers = new
+                        {
+                            available = true,
+                            source = "SUBSCRIBED_UNIVERSE_FALLBACK",
+                            calculation = "(Last - WeekClose) / WeekClose * 100",
+                            requiresWeekClose = true,
+                            referencePeriod = "SEVEN_SESSIONS",
+                            calendarWeekEquivalent = false,
+                            note = "WeekClose is Matriks' seven-session reference, not a native calendar-week market ranking."
+                        },
+                        turnoverLeaders = new
+                        {
+                            available = true,
+                            source = "SUBSCRIBED_UNIVERSE_FALLBACK",
+                            field = "SymbolUpdateField.TotalVol"
+                        },
+                        relativeVolumeLeaders = new
+                        {
+                            available = false,
+                            source = "UNAVAILABLE",
+                            reason = "No documented market-wide relative-volume ranking method or historical baseline field was verified."
+                        }
+                    },
                     mkkCustody = false,
                     mkkReason = "No documented AlgoTrader C# access method"
                 }
@@ -2197,6 +2236,10 @@ namespace Matriks.Lean.Algotrader
                     double changePct = refPrice > 0m
                         ? (double)((quote.Last - refPrice) / refPrice * 100m)
                         : 0.0;
+                    decimal weekClose = SafeMarketData(symbol, SymbolUpdateField.WeekClose);
+                    object weeklyChangePct = weekClose > 0m
+                        ? (object)Math.Round((double)((quote.Last - weekClose) / weekClose * 100m), 2)
+                        : null;
 
                     items.Add(new Dictionary<string, object>
                     {
@@ -2204,6 +2247,9 @@ namespace Matriks.Lean.Algotrader
                         { "lastPrice", ToDouble(quote.Last) },
                         { "refPrice", ToDouble(refPrice) },
                         { "changePct", Math.Round(changePct, 2) },
+                        { "weekClose", weekClose > 0m ? (object)ToDouble(weekClose) : null },
+                        { "weeklyChangePct", weeklyChangePct },
+                        { "weeklyMomentumAvailable", weeklyChangePct != null },
                         // Movers historically calls this field volume and the
                         // discovery service treats it as TL turnover. Keep the
                         // alias, but publish the semantic fields explicitly.
@@ -2221,6 +2267,10 @@ namespace Matriks.Lean.Algotrader
                 var losers = items
                     .OrderBy(x => (double)x["changePct"])
                     .Take(limit).Select(x => (string)x["symbol"]).ToList();
+                var weeklyGainers = items
+                    .Where(x => x["weeklyChangePct"] != null)
+                    .OrderByDescending(x => (double)x["weeklyChangePct"])
+                    .Take(limit).Select(x => (string)x["symbol"]).ToList();
                 var volumeLeaders = items
                     .OrderByDescending(x => (double)x["volume"])
                     .Take(limit).Select(x => (string)x["symbol"]).ToList();
@@ -2233,8 +2283,36 @@ namespace Matriks.Lean.Algotrader
                     universeSize = items.Count,
                     items = items,
                     gainers = gainers,
+                    weeklyGainers = weeklyGainers,
                     losers = losers,
-                    volumeLeaders = volumeLeaders
+                    volumeLeaders = volumeLeaders,
+                    rankingCapabilities = new
+                    {
+                        nativeMarketWide = false,
+                        source = "SUBSCRIBED_UNIVERSE_FALLBACK",
+                        universe = "CONFIGURED_SUBSCRIBED_EQUITY_ONLY",
+                        weeklyGainers = new
+                        {
+                            available = weeklyGainers.Count > 0,
+                            source = "SUBSCRIBED_UNIVERSE_FALLBACK",
+                            calculation = "(Last - WeekClose) / WeekClose * 100",
+                            referencePeriod = "SEVEN_SESSIONS",
+                            calendarWeekEquivalent = false
+                        },
+                        turnoverLeaders = new
+                        {
+                            available = true,
+                            source = "SUBSCRIBED_UNIVERSE_FALLBACK",
+                            field = "SymbolUpdateField.TotalVol",
+                            semantic = "CUMULATIVE_SESSION_TURNOVER_TL"
+                        },
+                        relativeVolumeLeaders = new
+                        {
+                            available = false,
+                            source = "UNAVAILABLE",
+                            reason = "No documented native relative-volume ranking method or baseline is available."
+                        }
+                    }
                 });
             }
             catch (Exception ex)

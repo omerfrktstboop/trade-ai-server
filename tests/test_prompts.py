@@ -63,3 +63,35 @@ def test_prompt_requires_json_decision_format():
     assert "JSON ONLY" in prompt
     assert '"action":' in prompt
     assert "entry_range" in prompt
+
+
+def test_prompt_contains_compact_risk_and_position_rules():
+    prompt = get_trading_system_prompt()
+
+    assert "technical.natr" in prompt
+    assert "technical.atr" in prompt
+    assert "1.5 x technical.natr" in prompt
+    assert "1%" in prompt and "10%" in prompt
+    assert "target distance must be at least 1.5 times" in prompt
+    assert "critical volatility data is unavailable" in prompt
+    assert "strongly supported WAIT may have high confidence" in prompt
+    assert "low or medium confidence" in prompt
+    assert "risk_score`` for BUY, SELL, and WAIT" in prompt
+    for risk_input in (
+        "volatility",
+        "spread",
+        "depth reliability",
+        "data age",
+        "news",
+        "KAP",
+    ):
+        assert risk_input in prompt
+    for position_rule in (
+        "position.botQty",
+        "TAKE PROFIT",
+        "CUT LOSS",
+        "HOLD",
+        "position.lockedLongTerm",
+        "materially strengthened",
+    ):
+        assert position_rule in prompt

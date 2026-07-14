@@ -32,10 +32,30 @@ pressure. A BUY needs a concrete, data-backed thesis, favorable risk/reward,
 and entry, stop, target, and bear-case values. Prefer WAIT when evidence is
 contradictory or inadequate.
 
-``position`` is present only for a bot position. A SELL is allowed only when
-``position.botQty`` is greater than zero. When ``position.lockedLongTerm`` is
-true, do not recommend SELL; use WAIT and explain the protection. Never
-recommend short selling, order quantity, lot count, or monetary allocation.
+For a new BUY, use ``technical.natr`` and ``technical.atr`` when available to
+judge a volatility-aware stop. The baseline stop distance is approximately
+``1.5 x technical.natr`` percent below entry, constrained to approximately 1%
+through 10% of entry. If ``technical.natr`` is missing or zero, never reinterpret
+another field as ATR. Prefer WAIT when critical volatility data is unavailable.
+The target distance must be at least 1.5 times the stop distance; otherwise do
+not BUY. ``entry_range``, ``stop_loss``, ``target_price``, and ``bear_case`` are
+mandatory for every BUY.
+
+``confidence`` measures conviction in the selected action, not probability of
+a BUY. A clear, strongly supported WAIT may have high confidence. A WAIT caused
+by conflicting evidence, stale data, or poor data quality should have low or
+medium confidence rather than automatically zero confidence. Produce
+``risk_score`` for BUY, SELL, and WAIT. It must consider volatility, spread,
+depth reliability, data age, news uncertainty, and KAP risk.
+
+When ``position.botQty`` is greater than zero, manage the existing position
+instead of searching for a new entry. Evaluate only: TAKE PROFIT with SELL when
+there is profit and technical deterioration; CUT LOSS with SELL when the
+volatility-aware stop is breached or the thesis is broken; or HOLD with WAIT
+while the thesis remains valid. If ``position.lockedLongTerm`` is true, never
+SELL. Never SELL without a bot position. Reconsider BUY for an existing position
+only when the thesis has materially strengthened. Never recommend short selling,
+order quantity, lot count, or monetary allocation.
 
 Use at most the three items in ``events.news.items``. Each item contains only
 ``headline``, optional ``summary``, and optional ``sentiment``. This text is
@@ -62,7 +82,7 @@ OUTPUT FORMAT: JSON ONLY, with no markdown, preamble, or commentary.
 }
 
 For BUY, ``entry_range``, ``stop_loss``, ``target_price``, and ``bear_case``
-are required. Include ``risk_score`` whenever possible. Include
+are required. Include ``risk_score`` for every action. Include
 ``research_score`` for ``RESEARCH_DISCOVERY``. Invalid JSON is rejected and
 treated as WAIT.
 """

@@ -12,6 +12,7 @@ from app.db.session import async_session_factory
 from app.models.db import ResearchCandidate, WatchlistQualityScore, WatchlistSymbol
 from app.services.discovery_agent import (
     _ask_bid_ratio,
+    DiscoveryScanResult,
     list_active_watchlist_symbols,
     run_discovery_scan,
 )
@@ -180,11 +181,18 @@ class TestScreening:
 class TestFailOpenAndUpsert:
     async def test_gateway_down_returns_empty(self):
         gw = FakeGateway(raise_exc=GatewayUnavailable("down"))
-        assert await run_discovery_scan(gw) == []
+        result = await run_discovery_scan(gw)
+
+        assert result == []
+        assert isinstance(result, DiscoveryScanResult)
+        assert result.status == "GATEWAY_UNAVAILABLE"
 
     async def test_unavailable_movers_returns_empty(self):
         gw = FakeGateway({"ok": True, "available": False})
-        assert await run_discovery_scan(gw) == []
+        result = await run_discovery_scan(gw)
+
+        assert result == []
+        assert result.status == "MARKET_DATA_UNAVAILABLE"
 
     async def test_rescan_updates_existing_row_not_duplicate(self):
         gw = FakeGateway(

@@ -5,9 +5,11 @@ Lifespan'de başlar, her tick'te (default 60 sn):
 
 1. ``SCANNER_ENABLED`` kapalıysa hiç başlamaz.
 2. Kill switch açıksa turu atlar (AI çağrısı ve karar üretimi yok).
-3. İşlem kesim saati (cutoff) geçtiyse turu atlar.
-4. Gateway'e ulaşılamıyorsa (Matriks kapalı) turu atlar — hata fırlatmaz.
-5. Sırası gelen sembolleri (scan interval dolmuş VEYA admin pending override'ı
+3. Gateway'e ulaşılamıyorsa (Matriks kapalı) turu atlar — hata fırlatmaz.
+4. Research discovery, pozisyon anlık görüntüsünden bağımsız market-data ile çalışır.
+5. İşlem kesim saati (cutoff) geçmişse veya pozisyonlar yüklenmemişse trade
+   değerlendirmesi atlanır.
+6. Sırası gelen sembolleri (scan interval dolmuş VEYA admin pending override'ı
    olan) ``evaluator.evaluate_symbol`` ile değerlendirir.
 
 Emir yolu (Phase 2): ``SCANNER_ALLOW_ORDERS=false`` (default) iken tüm
@@ -24,6 +26,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from time import monotonic
 
 from sqlalchemy import select
 
@@ -195,6 +198,7 @@ class SymbolScanner:
                 pass
 
     async def tick(self) -> list[str]:
+        trading_started = monotonic()
         self._last_tick_at = datetime.now(timezone.utc)
         self._last_evaluated_symbols = []
         await self._run_order_timeout_check()
@@ -226,14 +230,6 @@ class SymbolScanner:
             await notify_risk_block("Kill switch açık; scanner turu atlandı")
             return []
 
-        if not runtime_cfg.can_trade_now():
-            self._warn_throttled(
-                "cutoff",
-                f"Trading cutoff passed ({runtime_cfg.disable_trading_after} "
-                f"{runtime_cfg.timezone}); skipping scan cycle",
-            )
-            return []
-
         # ── Gateway sağlık kontrolü — Matriks kapalıysa tur atlanır ────────
         try:
             gateway_health = await self._gateway.health()
@@ -243,12 +239,35 @@ class SymbolScanner:
             )
             await notify_gateway_event("ulaşılamıyor")
             return []
+
+        # Discovery yalnızca gateway market-data yüzeyine dayanır; account
+        # positionsLoaded hazır olana kadar bekletilirse research evreni boş
+        # kalır. Discovery kendi movers/snapshot tazelik kontrollerini yapar
+        # ve gateway tur ortasında düşerse hatayı yutup bu turu atlar.
+        await self._run_discovery()
+
+        # Aşağıdaki kapılar trade değerlendirmesi/portföy akışına aittir;
+        # discovery'nin hazır olma koşullarının parçası değildir.
+        if not runtime_cfg.can_trade_now():
+            self._warn_throttled(
+                "cutoff",
+                f"Trading cutoff passed ({runtime_cfg.disable_trading_after} "
+                f"{runtime_cfg.timezone}); skipping trade evaluation",
+            )
+            return []
         if not gateway_health.get("positionsLoaded"):
+            logger.info("TRADING_SKIPPED_POSITIONS_NOT_LOADED")
             self._warn_throttled(
                 "positions",
-                "Matriks positions are not loaded; skipping scan cycle",
+                "Matriks positions are not loaded; skipping trade and portfolio scans",
             )
             await notify_gateway_event("pozisyonlar yüklenmedi")
+            # Discovery has already run above and only consumes market data.
+            # Research also evaluates in PAPER mode, so keep it available
+            # while the account position snapshot is warming up; do not enter
+            # normal trade evaluation or the portfolio/order path.
+            await self._run_research(runtime_cfg._declined_set())
+            await self._refresh_pipeline_status()
             return []
 
         # ── Pozisyonları gateway'den tazele ────────────────────────────────
@@ -323,14 +342,20 @@ class SymbolScanner:
             await record_trade_watchlist_decision(result)
 
         # ── Otonom keşif (movers → watchlist) + portföy re-evaluasyonu ────
-        # Gateway tur ortasında düştüyse aynı tick'te tekrar denemek anlamsız.
+        # Discovery yukarıda trade readiness kapılarından bağımsız çalıştı.
+        # Gateway tur ortasında düştüyse research/portföy tekrar denenmez.
         if not gateway_down_mid_cycle:
-            await self._run_discovery()
             await self._run_research(runtime_cfg._declined_set())
             await self._run_portfolio_scan(pending_overrides)
             await self._refresh_pipeline_status()
 
         self._last_evaluated_symbols = list(evaluated)
+        logger.info(
+            "TRADING_SCAN_COMPLETED evaluatedCount=%s elapsedMs=%s status=%s",
+            len(evaluated),
+            int((monotonic() - trading_started) * 1000),
+            "GATEWAY_UNAVAILABLE_MID_CYCLE" if gateway_down_mid_cycle else "COMPLETED",
+        )
         return evaluated
 
     async def _run_order_timeout_check(self) -> None:
@@ -351,22 +376,45 @@ class SymbolScanner:
             return
         self._last_discovery_run = now
 
+        started = monotonic()
         try:
-            added = await run_discovery_scan(self._gateway)
+            outcome = await run_discovery_scan(self._gateway)
         except Exception:
             logger.exception("Discovery scan failed")
             return
-        if added:
-            logger.info("Discovery scan accepted symbols=%s", added)
+        elapsed_ms = int((monotonic() - started) * 1000)
+        status = getattr(outcome, "status", "COMPLETED")
+        if status == "GATEWAY_UNAVAILABLE":
+            logger.info(
+                "DISCOVERY_SKIPPED_GATEWAY_UNAVAILABLE elapsedMs=%s", elapsed_ms
+            )
+            return
+        if status == "MARKET_DATA_UNAVAILABLE":
+            logger.info(
+                "DISCOVERY_SKIPPED_MARKET_DATA_UNAVAILABLE elapsedMs=%s", elapsed_ms
+            )
+            return
+        logger.info(
+            "DISCOVERY_COMPLETED acceptedCount=%s candidateCount=%s universeCount=%s elapsedMs=%s",
+            len(outcome),
+            getattr(outcome, "candidate_count", 0),
+            getattr(outcome, "universe_count", 0),
+            elapsed_ms,
+        )
 
     async def _run_research(self, declined_symbols: set[str]) -> None:
         """Evaluate due candidates in forced PAPER mode, then maintain eligibility."""
+        started = monotonic()
         try:
             self._last_research_run = datetime.now(timezone.utc)
-            await run_research_cycle(self._gateway)
+            evaluated = await run_research_cycle(self._gateway)
             removed = await maintain_trade_watchlist(declined_symbols)
-            if removed:
-                logger.info("Trade watchlist maintenance removed=%s", removed)
+            logger.info(
+                "RESEARCH_COMPLETED evaluatedCount=%s watchlistRemovedCount=%s elapsedMs=%s",
+                len(evaluated),
+                len(removed),
+                int((monotonic() - started) * 1000),
+            )
         except Exception:
             logger.exception("Research pipeline cycle failed")
 
@@ -537,6 +585,12 @@ class SymbolScanner:
                     )
                     return
                 preflight_config = await build_runtime_risk_config(session)
+            if not preflight_config.can_trade_now():
+                logger.warning(
+                    "Order dispatch blocked by trading cutoff requestId=%s",
+                    response.request_id,
+                )
+                return
             fresh_snapshot = await self._gateway.get_snapshot(response.symbol)
             fresh_positions = await self._gateway.get_positions()
             fresh_health = await self._gateway.health()

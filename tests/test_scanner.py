@@ -21,6 +21,7 @@ from app.models.signal import (
     SignalResponse,
 )
 from app.services import scanner as scanner_module
+from app.services.discovery_agent import DiscoveryScanResult
 from app.services.evaluator import EvaluationResult
 from app.services.matriks_gateway import GatewayUnavailable, MatriksGatewayClient
 from app.services.scanner import SymbolScanner
@@ -124,6 +125,15 @@ def runtime_stubs(monkeypatch):
     async def fake_trade_symbols() -> list[str]:
         return state["trade_symbols"]
 
+    async def no_discovery(_self) -> None:
+        return None
+
+    async def no_research(_self, _declined_symbols: set[str]) -> None:
+        return None
+
+    async def no_refresh(_self) -> None:
+        return None
+
     monkeypatch.setattr(scanner_module, "is_kill_switch_enabled", fake_kill_switch)
     monkeypatch.setattr(
         scanner_module, "build_runtime_risk_config", fake_runtime_config
@@ -131,6 +141,9 @@ def runtime_stubs(monkeypatch):
     monkeypatch.setattr(scanner_module, "get_active_profile", fake_profile)
     monkeypatch.setattr(scanner_module, "list_pending_override_symbols", fake_overrides)
     monkeypatch.setattr(scanner_module, "list_trade_eligible_symbols", fake_trade_symbols)
+    monkeypatch.setattr(SymbolScanner, "_run_discovery", no_discovery)
+    monkeypatch.setattr(SymbolScanner, "_run_research", no_research)
+    monkeypatch.setattr(SymbolScanner, "_refresh_pipeline_status", no_refresh)
     return state
 
 
@@ -141,7 +154,7 @@ def runtime_stubs(monkeypatch):
 
 class TestScannerTick:
     async def test_due_symbols_evaluated_in_paper(
-        self, evaluated_symbols, runtime_stubs
+        self, evaluated_symbols, runtime_stubs, caplog
     ):
         fake = FakeGateway()
         scanner = SymbolScanner(gateway=make_gateway_client(fake))
@@ -150,6 +163,7 @@ class TestScannerTick:
 
         assert result == ["THYAO", "AKBNK"]
         assert evaluated_symbols == ["THYAO", "AKBNK"]
+        assert "TRADING_SCAN_COMPLETED evaluatedCount=2" in caplog.text
 
     async def test_second_tick_within_interval_skips_symbols(
         self, evaluated_symbols, runtime_stubs
@@ -212,6 +226,45 @@ class TestScannerTick:
         assert calls == [SignalMode.DEMO_LIVE, SignalMode.DEMO_LIVE]
 
 
+class TestScannerLifecycleLogs:
+    async def test_discovery_gateway_status_is_logged(self, monkeypatch, caplog):
+        class _Policy:
+            discovery_interval_minutes = 1
+
+        scanner = SymbolScanner(gateway=make_gateway_client(FakeGateway()))
+
+        async def fake_policy() -> _Policy:
+            return _Policy()
+
+        async def unavailable_discovery(_gateway):
+            return DiscoveryScanResult(status="GATEWAY_UNAVAILABLE")
+
+        monkeypatch.setattr(scanner_module, "load_research_policy", fake_policy)
+        monkeypatch.setattr(scanner_module, "run_discovery_scan", unavailable_discovery)
+        caplog.set_level("INFO", logger=scanner_module.__name__)
+
+        await scanner._run_discovery()
+
+        assert "DISCOVERY_SKIPPED_GATEWAY_UNAVAILABLE" in caplog.text
+
+    async def test_research_completion_is_logged(self, monkeypatch, caplog):
+        scanner = SymbolScanner(gateway=make_gateway_client(FakeGateway()))
+
+        async def fake_research(_gateway):
+            return ["GARAN"]
+
+        async def fake_maintenance(_declined_symbols: set[str]):
+            return ["AKBNK"]
+
+        monkeypatch.setattr(scanner_module, "run_research_cycle", fake_research)
+        monkeypatch.setattr(scanner_module, "maintain_trade_watchlist", fake_maintenance)
+        caplog.set_level("INFO", logger=scanner_module.__name__)
+
+        await scanner._run_research(set())
+
+        assert "RESEARCH_COMPLETED evaluatedCount=1 watchlistRemovedCount=1" in caplog.text
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Güvenlik kapıları
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -241,6 +294,27 @@ class TestScannerGates:
         assert result == []
         assert evaluated_symbols == []
 
+    async def test_discovery_runs_after_trading_cutoff(
+        self, evaluated_symbols, runtime_stubs, monkeypatch
+    ):
+        """Market-data discovery must not inherit the order cutoff gate."""
+        runtime_stubs["config"] = _cfg(
+            disable_trading_after="00:00", timezone="Etc/GMT-14"
+        )
+        discovery_calls: list[bool] = []
+
+        async def fake_discovery(_self) -> None:
+            discovery_calls.append(True)
+
+        monkeypatch.setattr(SymbolScanner, "_run_discovery", fake_discovery)
+        scanner = SymbolScanner(gateway=make_gateway_client(FakeGateway()))
+
+        result = await scanner.tick()
+
+        assert result == []
+        assert evaluated_symbols == []
+        assert discovery_calls == [True]
+
     async def test_gateway_unavailable_skips_cycle(
         self, evaluated_symbols, runtime_stubs
     ):
@@ -260,6 +334,39 @@ class TestScannerGates:
 
         assert result == []
         assert evaluated_symbols == []
+
+    async def test_discovery_runs_when_positions_are_not_loaded(
+        self, evaluated_symbols, runtime_stubs, monkeypatch, caplog
+    ):
+        """Research path needs snapshots, but must not reach order-capable scans."""
+        discovery_calls: list[bool] = []
+        research_calls: list[set[str]] = []
+        refresh_calls: list[bool] = []
+
+        async def fake_discovery(_self) -> None:
+            discovery_calls.append(True)
+
+        async def fake_research(_self, declined_symbols: set[str]) -> None:
+            research_calls.append(declined_symbols)
+
+        async def fake_refresh(_self) -> None:
+            refresh_calls.append(True)
+
+        monkeypatch.setattr(SymbolScanner, "_run_discovery", fake_discovery)
+        monkeypatch.setattr(SymbolScanner, "_run_research", fake_research)
+        monkeypatch.setattr(SymbolScanner, "_refresh_pipeline_status", fake_refresh)
+        fake = FakeGateway()
+        fake.positions_loaded = False
+        scanner = SymbolScanner(gateway=make_gateway_client(fake))
+
+        result = await scanner.tick()
+
+        assert result == []
+        assert evaluated_symbols == []
+        assert discovery_calls == [True]
+        assert research_calls == [set()]
+        assert refresh_calls == [True]
+        assert "TRADING_SKIPPED_POSITIONS_NOT_LOADED" in caplog.text
 
     async def test_evaluation_error_does_not_stop_other_symbols(
         self, runtime_stubs, monkeypatch

@@ -35,6 +35,23 @@ from app.services.watchlist_quality import calculate_quality
 logger = logging.getLogger(__name__)
 
 
+class DiscoveryScanResult(list[str]):
+    """Accepted symbols plus a completion status for scanner observability."""
+
+    def __init__(
+        self,
+        symbols: list[str] | None = None,
+        *,
+        status: str,
+        universe_count: int = 0,
+        candidate_count: int = 0,
+    ) -> None:
+        super().__init__(symbols or [])
+        self.status = status
+        self.universe_count = universe_count
+        self.candidate_count = candidate_count
+
+
 @dataclass(frozen=True)
 class DiscoveryPolicy:
     minimum_trend_score: float = 60.0
@@ -66,7 +83,7 @@ async def load_discovery_policy() -> DiscoveryPolicy:
 
 async def run_discovery_scan(
     gateway: MatriksGatewayClient | None = None,
-) -> list[str]:
+) -> DiscoveryScanResult:
     """Screen movers and upsert research candidates; never trade symbols."""
     gw = gateway or gateway_client
     policy = await load_discovery_policy()
@@ -74,9 +91,9 @@ async def run_discovery_scan(
         movers = await gw.get_movers(limit=50)
     except (GatewayUnavailable, GatewayError) as exc:
         logger.debug("Movers unavailable: %s", exc)
-        return []
+        return DiscoveryScanResult(status="GATEWAY_UNAVAILABLE")
     if not movers.get("available"):
-        return []
+        return DiscoveryScanResult(status="MARKET_DATA_UNAVAILABLE")
 
     items = {
         str(item.get("symbol") or "").strip().upper(): item
@@ -134,7 +151,12 @@ async def run_discovery_scan(
         len(sources),
         len(accepted),
     )
-    return [symbol for symbol, *_ in accepted]
+    return DiscoveryScanResult(
+        [symbol for symbol, *_ in accepted],
+        status="COMPLETED",
+        universe_count=int(movers.get("universeSize") or len(items)),
+        candidate_count=len(sources),
+    )
 
 
 async def _screen(

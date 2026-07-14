@@ -11,8 +11,8 @@ from typing import Any
 
 import pytest
 
-from app.models.signal import SignalAction, SignalMode
-from app.services.evaluator import evaluate_symbol
+from app.models.signal import SignalAction, SignalMode, SignalRequest
+from app.services.evaluator import build_ai_decision_context, evaluate_symbol
 from app.services.matriks_gateway import GatewayError, MatriksGatewayClient
 from tests.fake_gateway import FakeGateway
 
@@ -32,6 +32,51 @@ class StubProvider:
 def make_gateway_client(fake: FakeGateway) -> MatriksGatewayClient:
     return MatriksGatewayClient(
         base_url="http://fake-gateway", token=fake.token, transport=fake.transport
+    )
+
+
+def test_compact_news_uses_summary_then_content_and_drops_raw_fields():
+    request = SignalRequest(
+        requestId="compact-news",
+        symbol="THYAO",
+        timeframe="Min5",
+        lastPrice=100,
+        open=99,
+        high=101,
+        low=98,
+        volume=0,
+    )
+    news = {
+        "THYAO": {
+            "latestNews": [
+                {
+                    "title": "A" * 600,
+                    "summary": "curated summary",
+                    "content": "ignored content",
+                    "url": "https://example.invalid/1",
+                    "source": "source",
+                    "publishedAt": "2026-07-14T10:00:00Z",
+                    "sentiment": "POSITIVE",
+                },
+                {"title": "Content fallback", "content": "B" * 1200},
+                {"title": "No summary"},
+                {"title": "Fourth item", "content": "not sent"},
+            ]
+        }
+    }
+
+    payload = build_ai_decision_context(request, news_context=news)
+    items = payload["events"]["news"]["items"]
+
+    assert len(items) == 3
+    assert len(items[0]["headline"]) == 500
+    assert items[0]["summary"] == "curated summary"
+    assert len(items[1]["summary"]) == 1000
+    assert "summary" not in items[2]
+    assert all(
+        key not in item
+        for item in items
+        for key in ("url", "source", "publishedAt", "content")
     )
 
 

@@ -290,7 +290,7 @@ def build_ai_decision_context(
         headline = str(item.get("title") or "").strip()
         if not headline:
             continue
-        summary = item.get("summary")
+        summary = item.get("summary") or item.get("content")
         news_items.append(
             {
                 "headline": headline[:500],

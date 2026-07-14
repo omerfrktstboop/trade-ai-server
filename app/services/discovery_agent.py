@@ -46,22 +46,26 @@ class DiscoveryScanResult(list[str]):
         universe_count: int = 0,
         candidate_count: int = 0,
         ranking_source: str = "NONE",
+        ranking_scope: str = "UNAVAILABLE",
         weekly_gainer_count: int = 0,
         turnover_leader_count: int = 0,
         relative_volume_leader_count: int = 0,
         filtered_count: int = 0,
         rejection_reason_counts: dict[str, int] | None = None,
+        unavailable_signals: dict[str, str] | None = None,
     ) -> None:
         super().__init__(symbols or [])
         self.status = status
         self.universe_count = universe_count
         self.candidate_count = candidate_count
         self.ranking_source = ranking_source
+        self.ranking_scope = ranking_scope
         self.weekly_gainer_count = weekly_gainer_count
         self.turnover_leader_count = turnover_leader_count
         self.relative_volume_leader_count = relative_volume_leader_count
         self.filtered_count = filtered_count
         self.rejection_reason_counts = rejection_reason_counts or {}
+        self.unavailable_signals = unavailable_signals or {}
 
 @dataclass(frozen=True)
 class DiscoveryPolicy:
@@ -103,6 +107,10 @@ async def run_discovery_scan(
     gw = gateway or gateway_client
     policy = await load_discovery_policy()
     try:
+        capability_contract = await gw.get_market_ranking_capabilities()
+    except (AttributeError, GatewayUnavailable, GatewayError):
+        capability_contract = {}
+    try:
         movers = await gw.get_movers(limit=50)
     except (GatewayUnavailable, GatewayError) as exc:
         logger.debug("Movers unavailable: %s", exc)
@@ -115,13 +123,19 @@ async def run_discovery_scan(
         for item in movers.get("items") or []
         if item.get("symbol")
     }
-    capabilities = movers.get("rankingCapabilities")
-    capability_contract = capabilities if isinstance(capabilities, dict) else {}
+    if not capability_contract:
+        capabilities = movers.get("rankingCapabilities")
+        capability_contract = capabilities if isinstance(capabilities, dict) else {}
     weekly_available = _ranking_available(capability_contract, "weeklyGainers")
     turnover_available = _ranking_available(capability_contract, "turnoverLeaders")
     relative_volume_available = _ranking_available(
         capability_contract, "relativeVolumeLeaders"
     )
+    unavailable_signals: dict[str, str] = {}
+    if not weekly_available:
+        unavailable_signals["WEEKLY_MOMENTUM"] = "WEEKLY_CLOSE_UNAVAILABLE"
+    if not relative_volume_available:
+        unavailable_signals["RELATIVE_VOLUME"] = "RELATIVE_VOLUME_BASELINE_UNAVAILABLE"
 
     # The gateway only ranks the deliberately small, configured subscription
     # universe. Never infer a BIST-wide or relative-volume ranking when the
@@ -208,11 +222,19 @@ async def run_discovery_scan(
         await _upsert_candidates(accepted, policy)
     await _expire_stale_candidates()
 
-    ranking_source = "+".join(source for source, _ in ranking_lists) or "DERIVED_MOMENTUM"
+    ranking_source = "+".join(source for source, _ in ranking_lists) or "UNAVAILABLE"
+    ranking_scope = (
+        "NATIVE_MARKET_WIDE"
+        if capability_contract.get("nativeMarketWide") is True
+        else "CONFIGURED_UNIVERSE_FALLBACK"
+        if capability_contract and ranking_lists
+        else "UNAVAILABLE"
+    )
     logger.info(
         "DISCOVERY_RANKING_COMPLETED universeCount=%s mergedCandidateCount=%s "
         "acceptedCount=%s filteredCount=%s rankingSource=%s weeklyGainerCount=%s "
-        "turnoverLeaderCount=%s relativeVolumeLeaderCount=%s rejectionReasonCounts=%s",
+        "turnoverLeaderCount=%s relativeVolumeLeaderCount=%s enrichmentCount=%s "
+        "rankingScope=%s unavailableSignals=%s rejectionReasonCounts=%s",
         movers.get("universeSize", len(items)),
         len(sources),
         len(accepted),
@@ -221,6 +243,9 @@ async def run_discovery_scan(
         ranking_input_counts["WEEKLY_GAINER"],
         ranking_input_counts["TURNOVER_LEADER"],
         ranking_input_counts["RELATIVE_VOLUME"],
+        len(ranked_symbols),
+        ranking_scope,
+        unavailable_signals,
         rejection_reason_counts,
     )
     return DiscoveryScanResult(
@@ -229,11 +254,13 @@ async def run_discovery_scan(
         universe_count=int(movers.get("universeSize") or len(items)),
         candidate_count=len(sources),
         ranking_source=ranking_source,
+        ranking_scope=ranking_scope,
         weekly_gainer_count=ranking_input_counts["WEEKLY_GAINER"],
         turnover_leader_count=ranking_input_counts["TURNOVER_LEADER"],
         relative_volume_leader_count=ranking_input_counts["RELATIVE_VOLUME"],
         filtered_count=sum(rejection_reason_counts.values()),
         rejection_reason_counts=rejection_reason_counts,
+        unavailable_signals=unavailable_signals,
     )
 
 async def _screen(

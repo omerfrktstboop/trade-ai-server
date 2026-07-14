@@ -113,6 +113,8 @@ class SymbolScanner:
             "lastRankingAt": None,
             "rankingStatus": "NOT_RUN",
             "rankingSource": "NONE",
+            "rankingScope": "UNAVAILABLE",
+            "unavailableSignals": {},
             "weeklyGainerCount": 0,
             "turnoverLeaderCount": 0,
             "relativeVolumeLeaderCount": 0,
@@ -413,6 +415,8 @@ class SymbolScanner:
             "lastRankingAt": self._last_discovery_run.isoformat(),
             "rankingStatus": status,
             "rankingSource": getattr(outcome, "ranking_source", "NONE"),
+            "rankingScope": getattr(outcome, "ranking_scope", "UNAVAILABLE"),
+            "unavailableSignals": dict(getattr(outcome, "unavailable_signals", {})),
             "weeklyGainerCount": getattr(outcome, "weekly_gainer_count", 0),
             "turnoverLeaderCount": getattr(outcome, "turnover_leader_count", 0),
             "relativeVolumeLeaderCount": getattr(

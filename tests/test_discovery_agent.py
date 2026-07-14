@@ -41,6 +41,9 @@ class FakeGateway:
             raise self._raise
         return self._movers
 
+    async def get_market_ranking_capabilities(self):
+        return (self._movers or {}).get("rankingCapabilities", {})
+
     async def get_depth(self, symbol: str, levels: int = 25):
         depth = self._depth.get(symbol.upper())
         if depth is None:

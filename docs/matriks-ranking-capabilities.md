@@ -36,3 +36,12 @@ must consult it before treating a movers list as usable. Its current state is:
 fields never become fabricated zeroes or leaders. This read-only discovery
 metadata never changes `buyAllowedSymbols`, places orders, or expands market
 data subscriptions.
+
+When native weekly or relative-volume data is unavailable, the server may use
+`GET /bars` only for a bounded shortlist from `scanUniverseSymbols`. The bars
+endpoint exposes the gateway's existing period-qualified in-memory OHLCV cache;
+it does not call or claim a native market-wide history API. Weekly momentum and
+relative volume require reliable, closed daily bars. Relative volume requires
+20 positive baseline volumes and never uses session turnover as bar volume.
+Requests are concurrency-limited and TTL-cached before snapshot/depth
+enrichment. Missing or intraday history keeps the signal unavailable.

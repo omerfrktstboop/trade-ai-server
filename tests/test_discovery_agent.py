@@ -9,9 +9,16 @@ from sqlalchemy import select
 
 from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
-from app.models.db import ResearchCandidate, WatchlistQualityScore, WatchlistSymbol
+from app.models.db import (
+    ResearchCandidate,
+    SystemConfig,
+    WatchlistQualityScore,
+    WatchlistSymbol,
+)
 from app.services.discovery_agent import (
+    _HISTORICAL_BARS_CACHE,
     _ask_bid_ratio,
+    _historical_bar_metrics,
     DiscoveryScanResult,
     list_active_watchlist_symbols,
     run_discovery_scan,
@@ -23,18 +30,36 @@ from app.services.matriks_gateway import GatewayUnavailable
 def _reset_db():
     asyncio.run(drop_all())
     asyncio.run(init_db())
+    asyncio.run(_set_scan_universe())
+    _HISTORICAL_BARS_CACHE.clear()
     yield
     asyncio.run(drop_all())
     asyncio.run(init_db())
 
 
+async def _set_scan_universe(symbols: str | None = None) -> None:
+    symbols = symbols or "GARAN,SOKE,XYZ,TINY,WALL,NODEPTH,BIG"
+    async with async_session_factory() as session:
+        row = (
+            await session.execute(
+                select(SystemConfig).where(SystemConfig.key == "scanUniverseSymbols")
+            )
+        ).scalar_one()
+        row.value = symbols
+        await session.commit()
+
+
 class FakeGateway:
     """get_movers + get_depth sunan sahte gateway."""
 
-    def __init__(self, movers=None, depth_by_symbol=None, raise_exc=None):
+    def __init__(
+        self, movers=None, depth_by_symbol=None, bars_by_symbol=None, raise_exc=None
+    ):
         self._movers = movers
         self._depth = depth_by_symbol or {}
+        self._bars = bars_by_symbol or {}
         self._raise = raise_exc
+        self.bar_calls: list[str] = []
 
     async def get_movers(self, limit: int = 20):
         if self._raise is not None:
@@ -43,6 +68,10 @@ class FakeGateway:
 
     async def get_market_ranking_capabilities(self):
         return (self._movers or {}).get("rankingCapabilities", {})
+
+    async def get_bars(self, symbol: str, count: int = 50):
+        self.bar_calls.append(symbol.upper())
+        return self._bars.get(symbol.upper(), {"available": False})
 
     async def get_depth(self, symbol: str, levels: int = 25):
         depth = self._depth.get(symbol.upper())
@@ -68,6 +97,31 @@ def _item(symbol, change_pct, volume):
         "lastPrice": 100.0,
         "changePct": change_pct,
         "volume": volume,
+        "sessionTurnoverTl": volume,
+        "volumeSemantic": "CUMULATIVE_SESSION_TURNOVER_TL",
+    }
+
+
+def _daily_bars(*, latest_volume: float = 200.0, count: int = 21):
+    bars = [
+        {
+            "open": 90 + index,
+            "high": 91 + index,
+            "low": 89 + index,
+            "close": 90 + index,
+            "volume": 100.0,
+            "reliable": True,
+            "closed": True,
+        }
+        for index in range(count)
+    ]
+    if bars:
+        bars[-1]["volume"] = latest_volume
+    return {
+        "available": True,
+        "period": "Day",
+        "actualBarPeriod": "Day",
+        "bars": bars,
     }
 
 
@@ -212,6 +266,66 @@ class TestFailOpenAndUpsert:
             rows = (await session.execute(select(WatchlistSymbol))).scalars().all()
         assert len(rows) == 1
         assert rows[0].change_pct == 5.1
+
+
+class TestHistoricalBarsFallback:
+    async def test_only_configured_universe_is_ranked(self):
+        await _set_scan_universe("GARAN")
+        gw = FakeGateway(
+            _movers(
+                [_item("GARAN", 3.0, 500_000_000), _item("SOKE", 4.0, 600_000_000)],
+                gainers=["SOKE", "GARAN"],
+            ),
+            bars_by_symbol={"GARAN": _daily_bars()},
+        )
+
+        result = await run_discovery_scan(gw)
+
+        assert result.universe_count == 1
+        assert gw.bar_calls == ["GARAN"]
+
+    async def test_daily_bars_supply_weekly_and_relative_volume_rankings(self):
+        movers = _movers(
+            [_item("GARAN", 3.0, 500_000_000)], gainers=["GARAN"]
+        )
+        movers["rankingCapabilities"] = {
+            "nativeMarketWide": False,
+            "weeklyGainers": {"available": False},
+            "turnoverLeaders": {"available": False},
+            "relativeVolumeLeaders": {"available": False},
+        }
+        gw = FakeGateway(movers, bars_by_symbol={"GARAN": _daily_bars()})
+
+        result = await run_discovery_scan(gw)
+
+        assert result.ranking_scope == "HISTORICAL_BARS_FALLBACK"
+        assert result.historical_bar_requested_count == 1
+        assert result.historical_bar_success_count == 1
+        assert result.weekly_gainer_count == 1
+        assert result.relative_volume_leader_count == 1
+        assert result.unavailable_signals == {}
+
+    async def test_insufficient_volume_baseline_never_invents_relative_volume(self):
+        weekly, relative_volume, reasons = _historical_bar_metrics(
+            _daily_bars(count=6)
+        )
+
+        assert weekly is not None
+        assert relative_volume is None
+        assert reasons["RELATIVE_VOLUME"] == (
+            "HISTORICAL_RELATIVE_VOLUME_BASELINE_INSUFFICIENT"
+        )
+
+    async def test_historical_bars_are_reused_within_ttl(self):
+        movers = _movers(
+            [_item("GARAN", 3.0, 500_000_000)], gainers=["GARAN"]
+        )
+        gw = FakeGateway(movers, bars_by_symbol={"GARAN": _daily_bars()})
+
+        await run_discovery_scan(gw)
+        await run_discovery_scan(gw)
+
+        assert gw.bar_calls == ["GARAN"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

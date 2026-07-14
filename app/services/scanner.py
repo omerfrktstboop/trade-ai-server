@@ -118,6 +118,9 @@ class SymbolScanner:
             "weeklyGainerCount": 0,
             "turnoverLeaderCount": 0,
             "relativeVolumeLeaderCount": 0,
+            "historicalBarRequestedCount": 0,
+            "historicalBarSuccessCount": 0,
+            "enrichedSymbolCount": 0,
             "mergedCandidateCount": 0,
             "filteredCandidateCount": 0,
             "acceptedCandidateCount": 0,
@@ -423,6 +426,13 @@ class SymbolScanner:
             "relativeVolumeLeaderCount": getattr(
                 outcome, "relative_volume_leader_count", 0
             ),
+            "historicalBarRequestedCount": getattr(
+                outcome, "historical_bar_requested_count", 0
+            ),
+            "historicalBarSuccessCount": getattr(
+                outcome, "historical_bar_success_count", 0
+            ),
+            "enrichedSymbolCount": getattr(outcome, "enrichment_count", 0),
             "mergedCandidateCount": getattr(outcome, "candidate_count", 0),
             "filteredCandidateCount": getattr(outcome, "filtered_count", 0),
             "acceptedCandidateCount": len(outcome),

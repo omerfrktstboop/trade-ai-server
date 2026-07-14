@@ -9,9 +9,11 @@ does not consume them.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any
 
 from sqlalchemy import select, update
@@ -34,6 +36,9 @@ from app.services.watchlist_quality import calculate_quality
 
 logger = logging.getLogger(__name__)
 
+_HISTORICAL_BARS_CACHE: dict[tuple[int, str], tuple[float, dict[str, Any]]] = {}
+_MIN_RELATIVE_VOLUME_BASELINE_BARS = 20
+
 
 class DiscoveryScanResult(list[str]):
     """Accepted symbols plus a completion status for scanner observability."""
@@ -50,6 +55,9 @@ class DiscoveryScanResult(list[str]):
         weekly_gainer_count: int = 0,
         turnover_leader_count: int = 0,
         relative_volume_leader_count: int = 0,
+        historical_bar_requested_count: int = 0,
+        historical_bar_success_count: int = 0,
+        enrichment_count: int = 0,
         filtered_count: int = 0,
         rejection_reason_counts: dict[str, int] | None = None,
         unavailable_signals: dict[str, str] | None = None,
@@ -63,6 +71,9 @@ class DiscoveryScanResult(list[str]):
         self.weekly_gainer_count = weekly_gainer_count
         self.turnover_leader_count = turnover_leader_count
         self.relative_volume_leader_count = relative_volume_leader_count
+        self.historical_bar_requested_count = historical_bar_requested_count
+        self.historical_bar_success_count = historical_bar_success_count
+        self.enrichment_count = enrichment_count
         self.filtered_count = filtered_count
         self.rejection_reason_counts = rejection_reason_counts or {}
         self.unavailable_signals = unavailable_signals or {}
@@ -78,6 +89,9 @@ class DiscoveryPolicy:
     maximum_weekly_change_pct: float = 18.0
     candidate_ttl_hours: int = 24
     max_candidates: int = 10
+    scan_universe_symbols: frozenset[str] = frozenset()
+    historical_bars_ttl_seconds: int = 300
+    max_concurrent_bar_requests: int = 2
 
 
 @dataclass(frozen=True)
@@ -97,6 +111,17 @@ async def load_discovery_policy() -> DiscoveryPolicy:
         maximum_spread_pct=float(values["discoveryMaximumSpreadPct"]),
         candidate_ttl_hours=max(1, int(values["researchCandidateTtlHours"])),
         max_candidates=max(1, int(values["maxResearchCandidatesPerCycle"])),
+        scan_universe_symbols=frozenset(
+            symbol.strip().upper()
+            for symbol in values["scanUniverseSymbols"].split(",")
+            if symbol.strip()
+        ),
+        historical_bars_ttl_seconds=max(
+            60, int(values["discoveryIntervalMinutes"]) * 60
+        ),
+        max_concurrent_bar_requests=min(
+            4, max(1, int(values["maxConcurrentResearchEvaluations"]))
+        ),
     )
 
 
@@ -122,12 +147,14 @@ async def run_discovery_scan(
         str(item.get("symbol") or "").strip().upper(): item
         for item in movers.get("items") or []
         if item.get("symbol")
+        and str(item.get("symbol") or "").strip().upper()
+        in policy.scan_universe_symbols
     }
     if not capability_contract:
         capabilities = movers.get("rankingCapabilities")
         capability_contract = capabilities if isinstance(capabilities, dict) else {}
     weekly_available = _ranking_available(capability_contract, "weeklyGainers")
-    turnover_available = _ranking_available(capability_contract, "turnoverLeaders")
+    turnover_available = _turnover_ranking_available(capability_contract)
     relative_volume_available = _ranking_available(
         capability_contract, "relativeVolumeLeaders"
     )
@@ -142,13 +169,11 @@ async def run_discovery_scan(
     # capability contract does not publish one.
     sources: dict[str, set[str]] = {}
     ranking_lists: list[tuple[str, str]] = []
-    if weekly_available or (not capability_contract and movers.get("weeklyGainers")):
+    if weekly_available:
         ranking_lists.append(("WEEKLY_GAINER", "weeklyGainers"))
-    elif not capability_contract:
-        # Older gateways have no capability block; keep this explicit legacy
-        # daily-movers fallback separate from weekly momentum.
+    else:
         ranking_lists.append(("DAILY_MOMENTUM_FALLBACK", "gainers"))
-    if turnover_available or (not capability_contract and movers.get("volumeLeaders")):
+    if turnover_available:
         ranking_lists.append(("TURNOVER_LEADER", "volumeLeaders"))
     if relative_volume_available:
         ranking_lists.append(("RELATIVE_VOLUME", "relativeVolumeLeaders"))
@@ -179,6 +204,71 @@ async def run_discovery_scan(
             sources.setdefault(symbol, set()).add("RELATIVE_VOLUME")
         if item.get("breakout20Bar") is True:
             sources.setdefault(symbol, set()).add("BREAKOUT_20_BAR")
+
+    historical_requested_count = 0
+    historical_success_count = 0
+    historical_used = False
+    historical_relative_volume_available = False
+    if not weekly_available or not relative_volume_available:
+        historical_symbols = _historical_shortlist(items, policy.max_candidates)
+        (
+            historical_payloads,
+            historical_requested_count,
+            historical_success_count,
+        ) = await _fetch_historical_bars(gw, historical_symbols, policy)
+        weekly_metric_count = 0
+        relative_volume_metric_count = 0
+        historical_reasons: dict[str, str] = {}
+        for symbol in historical_symbols:
+            payload = historical_payloads.get(symbol)
+            if payload is None:
+                historical_reasons.setdefault(
+                    "WEEKLY_MOMENTUM", "HISTORICAL_BARS_UNAVAILABLE"
+                )
+                historical_reasons.setdefault(
+                    "RELATIVE_VOLUME", "HISTORICAL_BARS_UNAVAILABLE"
+                )
+                continue
+            weekly_change, relative_volume, reasons = _historical_bar_metrics(payload)
+            if not weekly_available and weekly_change is not None:
+                weekly_metric_count += 1
+                items[symbol]["weeklyChangePct"] = weekly_change
+                if weekly_change > 0:
+                    sources.setdefault(symbol, set()).add("WEEKLY_GAINER")
+            elif "WEEKLY_MOMENTUM" in reasons:
+                historical_reasons["WEEKLY_MOMENTUM"] = reasons["WEEKLY_MOMENTUM"]
+            if not relative_volume_available and relative_volume is not None:
+                relative_volume_metric_count += 1
+                items[symbol]["relativeVolume"] = relative_volume
+                if relative_volume >= 1.5:
+                    sources.setdefault(symbol, set()).add("RELATIVE_VOLUME")
+            elif "RELATIVE_VOLUME" in reasons:
+                historical_reasons["RELATIVE_VOLUME"] = reasons["RELATIVE_VOLUME"]
+
+        if not weekly_available and weekly_metric_count:
+            ranking_input_counts["WEEKLY_GAINER"] = sum(
+                "WEEKLY_GAINER" in symbol_sources
+                for symbol_sources in sources.values()
+            )
+            unavailable_signals.pop("WEEKLY_MOMENTUM", None)
+            historical_used = True
+        elif not weekly_available:
+            unavailable_signals["WEEKLY_MOMENTUM"] = historical_reasons.get(
+                "WEEKLY_MOMENTUM", "HISTORICAL_WEEKLY_BASELINE_INSUFFICIENT"
+            )
+        if not relative_volume_available and relative_volume_metric_count:
+            ranking_input_counts["RELATIVE_VOLUME"] = sum(
+                "RELATIVE_VOLUME" in symbol_sources
+                for symbol_sources in sources.values()
+            )
+            unavailable_signals.pop("RELATIVE_VOLUME", None)
+            historical_relative_volume_available = True
+            historical_used = True
+        elif not relative_volume_available:
+            unavailable_signals["RELATIVE_VOLUME"] = historical_reasons.get(
+                "RELATIVE_VOLUME",
+                "HISTORICAL_RELATIVE_VOLUME_BASELINE_INSUFFICIENT",
+            )
     accepted: list[
         tuple[str, list[str], dict[str, Any], DiscoveryVerdict, dict[str, Any]]
     ] = []
@@ -204,7 +294,11 @@ async def run_discovery_scan(
             continue
         expanded_sources = sorted(
             candidate_sources | _derived_sources(
-                verdict, allow_relative_volume=relative_volume_available
+                verdict,
+                allow_relative_volume=(
+                    relative_volume_available
+                    or historical_relative_volume_available
+                ),
             )
         )
         quality = calculate_quality(item, verdict.wall_ratio)
@@ -222,20 +316,30 @@ async def run_discovery_scan(
         await _upsert_candidates(accepted, policy)
     await _expire_stale_candidates()
 
-    ranking_source = "+".join(source for source, _ in ranking_lists) or "UNAVAILABLE"
+    ranking_sources = [
+        source
+        for source, _ in ranking_lists
+        if any(source in symbol_sources for symbol_sources in sources.values())
+    ]
+    if historical_used:
+        ranking_sources.append("HISTORICAL_BARS_FALLBACK")
+    ranking_source = "+".join(ranking_sources) or "UNAVAILABLE"
     ranking_scope = (
         "NATIVE_MARKET_WIDE"
         if capability_contract.get("nativeMarketWide") is True
+        else "HISTORICAL_BARS_FALLBACK"
+        if historical_used
         else "CONFIGURED_UNIVERSE_FALLBACK"
-        if capability_contract and ranking_lists
+        if sources
         else "UNAVAILABLE"
     )
     logger.info(
         "DISCOVERY_RANKING_COMPLETED universeCount=%s mergedCandidateCount=%s "
         "acceptedCount=%s filteredCount=%s rankingSource=%s weeklyGainerCount=%s "
-        "turnoverLeaderCount=%s relativeVolumeLeaderCount=%s enrichmentCount=%s "
-        "rankingScope=%s unavailableSignals=%s rejectionReasonCounts=%s",
-        movers.get("universeSize", len(items)),
+        "turnoverLeaderCount=%s relativeVolumeLeaderCount=%s historicalBarRequestedCount=%s "
+        "historicalBarSuccessCount=%s enrichmentCount=%s rankingScope=%s "
+        "unavailableSignals=%s rejectionReasonCounts=%s",
+        len(items),
         len(sources),
         len(accepted),
         sum(rejection_reason_counts.values()),
@@ -243,6 +347,8 @@ async def run_discovery_scan(
         ranking_input_counts["WEEKLY_GAINER"],
         ranking_input_counts["TURNOVER_LEADER"],
         ranking_input_counts["RELATIVE_VOLUME"],
+        historical_requested_count,
+        historical_success_count,
         len(ranked_symbols),
         ranking_scope,
         unavailable_signals,
@@ -251,13 +357,16 @@ async def run_discovery_scan(
     return DiscoveryScanResult(
         [symbol for symbol, *_ in accepted],
         status="COMPLETED",
-        universe_count=int(movers.get("universeSize") or len(items)),
+        universe_count=len(items),
         candidate_count=len(sources),
         ranking_source=ranking_source,
         ranking_scope=ranking_scope,
         weekly_gainer_count=ranking_input_counts["WEEKLY_GAINER"],
         turnover_leader_count=ranking_input_counts["TURNOVER_LEADER"],
         relative_volume_leader_count=ranking_input_counts["RELATIVE_VOLUME"],
+        historical_bar_requested_count=historical_requested_count,
+        historical_bar_success_count=historical_success_count,
+        enrichment_count=len(ranked_symbols),
         filtered_count=sum(rejection_reason_counts.values()),
         rejection_reason_counts=rejection_reason_counts,
         unavailable_signals=unavailable_signals,
@@ -405,9 +514,130 @@ def calculate_trend_pre_score(
         "rsiOverbought": rsi is not None and rsi > 75,
     }
     return max(0.0, min(100.0, round(score, 2))), components
+
+
 def _ranking_available(capabilities: dict[str, Any], name: str) -> bool:
     ranking = capabilities.get(name)
     return isinstance(ranking, dict) and ranking.get("available") is True
+
+
+def _turnover_ranking_available(capabilities: dict[str, Any]) -> bool:
+    ranking = capabilities.get("turnoverLeaders")
+    return bool(
+        isinstance(ranking, dict)
+        and ranking.get("available") is True
+        and ranking.get("semantic") == "CUMULATIVE_SESSION_TURNOVER_TL"
+    )
+
+
+def _historical_shortlist(
+    items: dict[str, dict[str, Any]], limit: int
+) -> list[str]:
+    """Select a bounded configured-universe list before requesting bars."""
+    return sorted(
+        items,
+        key=lambda symbol: (
+            _volume_tl(items[symbol]),
+            _to_float(items[symbol].get("changePct")) or 0.0,
+            symbol,
+        ),
+        reverse=True,
+    )[:limit]
+
+
+async def _fetch_historical_bars(
+    gateway: MatriksGatewayClient,
+    symbols: list[str],
+    policy: DiscoveryPolicy,
+) -> tuple[dict[str, dict[str, Any]], int, int]:
+    """Fetch bounded bar history with per-gateway TTL caching."""
+    now = monotonic()
+    payloads: dict[str, dict[str, Any]] = {}
+    misses: list[str] = []
+    for symbol in symbols:
+        cached = _HISTORICAL_BARS_CACHE.get((id(gateway), symbol))
+        if cached and now - cached[0] <= policy.historical_bars_ttl_seconds:
+            payloads[symbol] = cached[1]
+        else:
+            misses.append(symbol)
+
+    semaphore = asyncio.Semaphore(policy.max_concurrent_bar_requests)
+
+    async def fetch(symbol: str) -> tuple[str, dict[str, Any] | None]:
+        try:
+            async with semaphore:
+                response = await gateway.get_bars(symbol, count=50)
+        except (AttributeError, GatewayUnavailable, GatewayError):
+            return symbol, None
+        if not response.get("available") or not isinstance(response.get("bars"), list):
+            return symbol, None
+        return symbol, response
+
+    if misses:
+        for symbol, response in await asyncio.gather(*(fetch(symbol) for symbol in misses)):
+            if response is None:
+                continue
+            payloads[symbol] = response
+            _HISTORICAL_BARS_CACHE[(id(gateway), symbol)] = (now, response)
+    return payloads, len(misses), len(payloads)
+
+
+def _historical_bar_metrics(
+    payload: dict[str, Any],
+) -> tuple[float | None, float | None, dict[str, str]]:
+    """Derive weekly momentum and relative volume from reliable daily bars."""
+    period = str(payload.get("actualBarPeriod") or payload.get("period") or "")
+    normalized_period = period.strip().upper().replace("_", "")
+    if normalized_period not in {"DAY", "DAILY", "D1", "1D"}:
+        reason = "HISTORICAL_BARS_PERIOD_NOT_DAILY"
+        return None, None, {
+            "WEEKLY_MOMENTUM": reason,
+            "RELATIVE_VOLUME": reason,
+        }
+
+    bars = [
+        bar
+        for bar in payload.get("bars") or []
+        if isinstance(bar, dict)
+        and bar.get("reliable") is True
+        and bar.get("closed") is True
+        and (_to_float(bar.get("close")) or 0) > 0
+    ]
+    reasons: dict[str, str] = {}
+    weekly_change: float | None = None
+    relative_volume: float | None = None
+
+    if len(bars) >= 6:
+        latest_close = _to_float(bars[-1].get("close"))
+        prior_week_close = _to_float(bars[-6].get("close"))
+        if latest_close is not None and prior_week_close and prior_week_close > 0:
+            weekly_change = round(
+                (latest_close - prior_week_close) / prior_week_close * 100, 4
+            )
+    if weekly_change is None:
+        reasons["WEEKLY_MOMENTUM"] = "HISTORICAL_WEEKLY_BASELINE_INSUFFICIENT"
+
+    if len(bars) >= _MIN_RELATIVE_VOLUME_BASELINE_BARS + 1:
+        latest_volume = _to_float(bars[-1].get("volume"))
+        baseline = [
+            _to_float(bar.get("volume"))
+            for bar in bars[-(_MIN_RELATIVE_VOLUME_BASELINE_BARS + 1) : -1]
+        ]
+        if (
+            latest_volume is not None
+            and latest_volume > 0
+            and all(volume is not None and volume > 0 for volume in baseline)
+        ):
+            average_volume = sum(volume for volume in baseline if volume is not None) / len(
+                baseline
+            )
+            if average_volume > 0:
+                relative_volume = round(latest_volume / average_volume, 4)
+    if relative_volume is None:
+        reasons["RELATIVE_VOLUME"] = (
+            "HISTORICAL_RELATIVE_VOLUME_BASELINE_INSUFFICIENT"
+        )
+    return weekly_change, relative_volume, reasons
 
 
 def _limited_ranked_symbols(
@@ -624,9 +854,9 @@ def _ask_bid_ratio(depth: dict[str, Any]) -> float | None:
 
 
 def _volume_tl(item: dict[str, Any]) -> float:
-    return _first_float(
-        item.get("volumeTl"), item.get("sessionTurnoverTl"), item.get("volume")
-    ) or 0.0
+    if item.get("volumeSemantic") != "CUMULATIVE_SESSION_TURNOVER_TL":
+        return 0.0
+    return _to_float(item.get("sessionTurnoverTl")) or 0.0
 
 
 def _first_float(*values: Any) -> float | None:

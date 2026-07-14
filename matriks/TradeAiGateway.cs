@@ -1815,7 +1815,7 @@ namespace Matriks.Lean.Algotrader
             // Güncel bar, OnDataUpdate'te doldurduğumuz OHLCV cache'inden okunur
             // (GetBarData() return tipine bağımlı değil — compile-safe).
             object currentBar = null;
-            OhlcvSnapshot ohlc;
+            OhlcvSnapshot ohlc = new OhlcvSnapshot();
             if (_lastOhlcvBySymbol.TryGetValue(symbol, out ohlc))
             {
                 currentBar = new
@@ -1829,25 +1829,45 @@ namespace Matriks.Lean.Algotrader
                 };
             }
 
-            List<double> closeHistory = new List<double>();
-            List<decimal> history;
-            if (_closeHistoryBySymbol.TryGetValue(symbol, out history) && history != null)
+            string actualPeriod = ohlc.ActualBarPeriod;
+            if (string.IsNullOrWhiteSpace(actualPeriod))
+                actualPeriod = NormalizePeriodName(IndicatorPeriod.ToString());
+            string seriesKey = BuildSeriesKey(symbol, actualPeriod);
+            var bars = new List<object>();
+            var closeHistory = new List<double>();
+            List<OhlcvBarPoint> history;
+            if (_ohlcvHistoryBySeries.TryGetValue(seriesKey, out history) && history != null)
             {
                 lock (_closeLock)
                 {
                     int start = Math.Max(0, history.Count - count);
                     for (int i = start; i < history.Count; i++)
-                        closeHistory.Add(ToDouble(history[i]));
+                    {
+                        OhlcvBarPoint point = history[i];
+                        bars.Add(new
+                        {
+                            open = ToDouble(point.Open),
+                            high = ToDouble(point.High),
+                            low = ToDouble(point.Low),
+                            close = ToDouble(point.Close),
+                            volume = ToDouble(point.Volume),
+                            reliable = point.Reliable,
+                            closed = point.Closed
+                        });
+                        closeHistory.Add(ToDouble(point.Close));
+                    }
                 }
             }
 
             await WriteJsonAsync(stream, 200, new
             {
                 ok = true,
-                available = currentBar != null || closeHistory.Count > 0,
+                available = currentBar != null || bars.Count > 0,
                 symbol = symbol,
-                period = IndicatorPeriod.ToString(),
+                period = actualPeriod,
+                actualBarPeriod = actualPeriod,
                 currentBar = currentBar,
+                bars = bars,
                 closeHistory = closeHistory
             });
         }
@@ -4303,7 +4323,16 @@ namespace Matriks.Lean.Algotrader
                 string previous;
                 var list = _closeHistoryBySymbol.GetOrAdd(seriesKey, _ => new List<decimal>());
                 var ohlcv = _ohlcvHistoryBySeries.GetOrAdd(seriesKey, _ => new List<OhlcvBarPoint>());
-                var point = new OhlcvBarPoint { High = bar.High, Low = bar.Low, Close = bar.Close };
+                var point = new OhlcvBarPoint
+                {
+                    Open = bar.Open,
+                    High = bar.High,
+                    Low = bar.Low,
+                    Close = bar.Close,
+                    Volume = bar.Volume,
+                    Reliable = bar.Reliable,
+                    Closed = bar.BarClosed
+                };
                 if (_lastCloseBarKeyBySymbol.TryGetValue(seriesKey, out previous)
                     && string.Equals(previous, barKey, StringComparison.Ordinal))
                 {
@@ -5168,9 +5197,13 @@ namespace Matriks.Lean.Algotrader
 
         private struct OhlcvBarPoint
         {
+            public decimal Open { get; set; }
             public decimal High { get; set; }
             public decimal Low { get; set; }
             public decimal Close { get; set; }
+            public decimal Volume { get; set; }
+            public bool Reliable { get; set; }
+            public bool Closed { get; set; }
         }
 
         private struct VolatilitySnapshot

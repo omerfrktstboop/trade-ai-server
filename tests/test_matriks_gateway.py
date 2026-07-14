@@ -6,6 +6,8 @@ gerektirmez.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 
@@ -23,6 +25,19 @@ def make_client(fake: FakeGateway, token: str | None = None) -> MatriksGatewayCl
         token=fake.token if token is None else token,
         transport=fake.transport,
     )
+
+
+def test_gateway_bars_contract_uses_period_series_and_reliable_ohlcv():
+    source = (
+        Path(__file__).resolve().parents[1] / "matriks" / "TradeAiGateway.cs"
+    ).read_text(encoding="utf-8")
+
+    assert "string seriesKey = BuildSeriesKey(symbol, actualPeriod);" in source
+    assert "_ohlcvHistoryBySeries.TryGetValue(seriesKey" in source
+    assert "actualBarPeriod = actualPeriod" in source
+    assert "volume = ToDouble(point.Volume)" in source
+    assert "reliable = point.Reliable" in source
+    assert "closed = point.Closed" in source
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

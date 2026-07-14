@@ -168,6 +168,17 @@ class RiskEngine:
                 f"dispatch blocked",
             )
 
+        # A manual allow-list controls the outer trade universe, but it never
+        # replaces the dynamic research promotion gate.  BUY requires an
+        # active DB-backed Trade Watchlist row; SELL exits stay available.
+        if decision.action == SignalAction.BUY and not request.trade_eligible:
+            return self._research_only(
+                request,
+                decision,
+                "Research-only: symbol is not in the active Trade Watchlist "
+                "— BUY dispatch blocked",
+            )
+
         # ── 2. Normalise action ──────────────────────────────────────
         action = decision.action
         if not isinstance(action, SignalAction):

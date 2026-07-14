@@ -24,3 +24,8 @@ from app.models.db.account_normalization_audit import (  # noqa: F401
     AccountNormalizationAudit,
 )
 from app.models.db.account_reservation_scope import AccountReservationScope  # noqa: F401
+from app.models.db.research_candidate import (  # noqa: F401
+    ResearchCandidate,
+    ResearchCandidateEvent,
+)
+from app.models.db.trade_watchlist_symbol import TradeWatchlistSymbol  # noqa: F401

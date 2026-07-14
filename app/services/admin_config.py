@@ -48,14 +48,15 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "allowedSymbols",
         "string",
         risk_config.allowed_symbols,
-        "İşlem yapılmasına izin verilen semboller. Virgülle ayrılmış liste kullanın.",
+        "Manuel BUY beyaz listesi. Boşsa bu manuel filtre kalkar; aktif Trade "
+        "Watchlist zorunluluğu devam eder.",
     ),
     "declineSymbols": ConfigDefinition(
         "declineSymbols",
         "string",
         risk_config.decline_symbols,
-        "Kara liste: buraya eklenen semboller allowedSymbols boş (hepsine izin) "
-        "olsa bile ASLA alınmaz. Mevcut pozisyondan çıkış (SELL) engellenmez.",
+        "Kara liste: buradaki sembollere yeni BUY asla verilmez; mevcut "
+        "pozisyondan güvenli SELL çıkışı engellenmez.",
     ),
     "lockedLongTermSymbols": ConfigDefinition(
         "lockedLongTermSymbols",
@@ -121,7 +122,7 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "buyAllowedSymbols",
         "string",
         risk_config.allowed_symbols,
-        "Yeni BUY emirlerine izinli semboller.",
+        "Gateway için ek manuel BUY filtresi; Trade Watchlist yetkisi yerine geçmez.",
     ),
     "sellExitAllowedSymbols": ConfigDefinition(
         "sellExitAllowedSymbols",
@@ -267,6 +268,90 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "60",
         "Ayni sembol/alan uyarilari arasindaki minimum sure.",
     ),
+    "scanUniverseSymbols": ConfigDefinition(
+        "scanUniverseSymbols",
+        "string",
+        settings.discovery_symbols,
+        "Arastirma icin taranan genis BIST pay evreni; emir izni vermez.",
+    ),
+    "discoveryIntervalMinutes": ConfigDefinition(
+        "discoveryIntervalMinutes",
+        "int",
+        str(settings.discovery_interval_minutes),
+        "Kural tabanli piyasa kesif turlari arasindaki dakika.",
+    ),
+    "maxResearchCandidatesPerCycle": ConfigDefinition(
+        "maxResearchCandidatesPerCycle",
+        "int",
+        str(settings.max_research_candidates_per_cycle),
+        "Bir turda AI arastirmasina alinabilecek en fazla aday.",
+    ),
+    "maxConcurrentResearchEvaluations": ConfigDefinition(
+        "maxConcurrentResearchEvaluations",
+        "int",
+        str(settings.max_concurrent_research_evaluations),
+        "Eszamanli en fazla AI arastirma degerlendirmesi.",
+    ),
+    "candidateCooldownMinutes": ConfigDefinition(
+        "candidateCooldownMinutes",
+        "int",
+        str(settings.candidate_cooldown_minutes),
+        "Ayni adayin AI degerlendirmeleri arasindaki minimum sure.",
+    ),
+    "maxTradeWatchlistSize": ConfigDefinition(
+        "maxTradeWatchlistSize",
+        "int",
+        str(settings.max_trade_watchlist_size),
+        "Otomatik BUY degerlendirmesine acik en fazla sembol sayisi.",
+    ),
+    "minimumTrendPreScore": ConfigDefinition(
+        "minimumTrendPreScore", "decimal", "60", "Research Candidate on eleme puani."
+    ),
+    "minimumResearchScore": ConfigDefinition(
+        "minimumResearchScore", "decimal", "75", "Trade Watchlist AI arastirma puani."
+    ),
+    "researchMinimumConfidence": ConfigDefinition(
+        "researchMinimumConfidence", "decimal", "75", "Promotion minimum AI guveni."
+    ),
+    "researchMaximumRiskScore": ConfigDefinition(
+        "researchMaximumRiskScore", "decimal", "35", "Promotion maksimum AI risk puani."
+    ),
+    "promotionConsecutivePasses": ConfigDefinition(
+        "promotionConsecutivePasses",
+        "int",
+        str(settings.promotion_consecutive_passes),
+        "Trade Watchlist icin gereken ardisik basarili arastirma sayisi.",
+    ),
+    "promotionMinIntervalMinutes": ConfigDefinition(
+        "promotionMinIntervalMinutes",
+        "int",
+        str(settings.promotion_min_interval_minutes),
+        "Promotion basarilari arasindaki minimum dakika.",
+    ),
+    "researchCandidateTtlHours": ConfigDefinition(
+        "researchCandidateTtlHours",
+        "int",
+        str(settings.research_candidate_ttl_hours),
+        "Yenilenmeyen arastirma adayinin gecerlilik suresi.",
+    ),
+    "tradeWatchlistTtlHours": ConfigDefinition(
+        "tradeWatchlistTtlHours",
+        "int",
+        str(settings.trade_watchlist_ttl_hours),
+        "Son basarili kontrolden sonra BUY yetkisinin gecerlilik suresi.",
+    ),
+    "discoveryMinimumVolumeTl": ConfigDefinition(
+        "discoveryMinimumVolumeTl",
+        "decimal",
+        str(settings.discovery_min_volume_tl),
+        "Discovery ve promotion icin minimum seans TL hacmi.",
+    ),
+    "discoveryMaximumSpreadPct": ConfigDefinition(
+        "discoveryMaximumSpreadPct",
+        "decimal",
+        "0.50",
+        "Aday icin maksimum spread yuzdesi.",
+    ),
 }
 
 RISKY_CONFIG_KEYS = {
@@ -298,15 +383,25 @@ RISKY_CONFIG_KEYS = {
     "sizingPerSymbolDailyOrderLimit",
     "sizingAllowMarginBuying",
     "accountReservationHandling",
+    "maxTradeWatchlistSize",
+    "minimumTrendPreScore",
+    "minimumResearchScore",
+    "researchMinimumConfidence",
+    "researchMaximumRiskScore",
+    "promotionConsecutivePasses",
+    "promotionMinIntervalMinutes",
+    "tradeWatchlistTtlHours",
+    "discoveryMinimumVolumeTl",
+    "discoveryMaximumSpreadPct",
 }
 
 
 READ_ONLY_CONFIG_KEYS = frozenset({"botAllowMarketOrders"})
 
-# Symbol allow/deny lists may be submitted empty. An empty allowedSymbols /
-# buyAllowedSymbols / sellExitAllowedSymbols means "trade the whole scanned
-# universe"; an empty declineSymbols / lockedLongTermSymbols simply means no
-# blacklist. These must not carry the HTML ``required`` attribute.
+# Symbol allow/deny lists may be submitted empty.  Empty manual BUY lists lift
+# only that manual filter: automated BUY still requires an active DB-backed
+# trade-watchlist row.  Empty SELL/decline/locked lists mean no extra filter.
+# These fields must not carry the HTML ``required`` attribute.
 EMPTY_ALLOWED_CONFIG_KEYS = frozenset(
     {
         "allowedSymbols",
@@ -314,6 +409,7 @@ EMPTY_ALLOWED_CONFIG_KEYS = frozenset(
         "sellExitAllowedSymbols",
         "declineSymbols",
         "lockedLongTermSymbols",
+        "scanUniverseSymbols",
     }
 )
 
@@ -376,6 +472,32 @@ CONFIG_SECTION_DEFINITIONS = (
             "marketDataDiagnosticsEnabled",
             "marketDataDiagnosticSampleRatePct",
             "marketDataWarningRateLimitSeconds",
+        ),
+    ),
+    ConfigSectionDefinition(
+        title="Kesif, arastirma ve islem listesi",
+        description=(
+            "Genis data-only tarama evreni, AI arastirma butcesi ve Trade "
+            "Watchlist promotion/sona erme esikleri. Research Candidate olmak "
+            "tek basina emir yetkisi vermez."
+        ),
+        keys=(
+            "scanUniverseSymbols",
+            "discoveryIntervalMinutes",
+            "maxResearchCandidatesPerCycle",
+            "maxConcurrentResearchEvaluations",
+            "candidateCooldownMinutes",
+            "maxTradeWatchlistSize",
+            "minimumTrendPreScore",
+            "minimumResearchScore",
+            "researchMinimumConfidence",
+            "researchMaximumRiskScore",
+            "promotionConsecutivePasses",
+            "promotionMinIntervalMinutes",
+            "researchCandidateTtlHours",
+            "tradeWatchlistTtlHours",
+            "discoveryMinimumVolumeTl",
+            "discoveryMaximumSpreadPct",
         ),
     ),
     ConfigSectionDefinition(
@@ -816,6 +938,7 @@ def _serialize_value(key: str, raw_value: Any, value_type: str) -> str:
         "buyAllowedSymbols",
         "sellExitAllowedSymbols",
         "lockedLongTermSymbols",
+        "scanUniverseSymbols",
     }:
         return ",".join(
             symbol.strip().upper() for symbol in value.split(",") if symbol.strip()

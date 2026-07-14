@@ -41,6 +41,8 @@ async def test_dry_run_does_not_call_create_all(monkeypatch, tmp_path):
     assert "manual_approval_requests" in tables
     assert "position_management_decisions" in tables
     assert "watchlist_quality_scores" in tables
+    assert "research_candidates" in tables
+    assert "trade_watchlist_symbols" in tables
     create_all.assert_not_called()
 
 
@@ -67,6 +69,9 @@ async def test_yes_creates_schema_seeds_profiles_and_is_idempotent(tmp_path):
             "ai_lessons_learned",
             "trade_profiles",
             "watchlist_symbols",
+            "research_candidates",
+            "research_candidate_events",
+            "trade_watchlist_symbols",
         ):
             result = await connection.execute(
                 text(
@@ -82,6 +87,8 @@ async def test_yes_creates_schema_seeds_profiles_and_is_idempotent(tmp_path):
     assert "manual_approval_requests" in Base.metadata.tables
     assert "position_management_decisions" in Base.metadata.tables
     assert "watchlist_quality_scores" in Base.metadata.tables
+    assert "research_candidates" in Base.metadata.tables
+    assert "trade_watchlist_symbols" in Base.metadata.tables
     await engine.dispose()
 
 

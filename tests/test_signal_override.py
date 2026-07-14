@@ -232,6 +232,7 @@ def _override_gateway() -> MatriksGatewayClient:
         "volume": 1000.0,
         "botPositionQty": 500.0,
         "totalAccountQty": 500.0,
+        "accountAvailableQty": 500,
         "lockedLongTermQty": 0.0,
     }
     return MatriksGatewayClient(

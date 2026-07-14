@@ -33,9 +33,12 @@ def _make_request(
         low=98.0,
         volume=1000.0,
         rsi=55.0,
+        tradeEligible=True,
         mode=mode,
     )
     defaults.update(kwargs)
+    if "totalAccountQty" in kwargs and "accountAvailableQty" not in kwargs:
+        defaults["accountAvailableQty"] = kwargs["totalAccountQty"]
     return SignalRequest(**defaults)
 
 
@@ -129,6 +132,16 @@ class TestEmptyAllowListAllowsAll:
         assert resp.allow_order is False
         assert "not in the allowed order list" in resp.reason
 
+    def test_empty_allowed_symbols_does_not_promote_research_candidate(self):
+        engine = RiskEngine(_cfg(allowed_symbols=""))
+        req = _make_request(
+            symbol="GARAN", mode=SignalMode.LIVE, tradeEligible=False
+        )
+        resp = engine.evaluate(req, _make_buy_decision())
+        assert resp.allow_order is False
+        assert resp.qty == 0
+        assert "not in the active Trade Watchlist" in resp.reason
+
 
 class TestDeclineSymbols:
     """declineSymbols kara listesi: BUY yasak, çıkış (SELL) serbest."""
@@ -175,7 +188,11 @@ class TestLockedLongTerm:
             _cfg(allowed_symbols="ASELS,THYAO", allow_sell_long_term=True)
         )
         req = _make_request(
-            symbol="ASELS", totalAccountQty=20, botPositionQty=10, mode=SignalMode.LIVE
+            symbol="ASELS",
+            totalAccountQty=20,
+            accountAvailableQty=20,
+            botPositionQty=10,
+            mode=SignalMode.LIVE,
         )
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
         resp = engine.evaluate(req, dec)

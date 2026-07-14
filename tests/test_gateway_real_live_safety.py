@@ -53,13 +53,16 @@ def test_position_snapshot_is_published_by_reference_swap():
     assert "new ConcurrentDictionary<string, decimal>(netSnapshot)" in load
 
 
-def test_bar_history_requires_a_real_bar_timestamp():
+def test_bar_history_uses_official_time_then_index_fallback():
     update = _method(
         "private void UpdateOhlcvSnapshotFromBarData",
         "private string ResolveBarEventSymbol",
     )
-    assert "TryResolveBarTimestamp" in update
-    assert "if (hasBarTimestamp)" in update
+    assert "barData.BarData.Dtime" in update
+    assert "barData.LastTickTime" in update
+    assert "TryGetLastUpdateForSymbol" in update
+    assert 'barKey = "INDEX:" + barData.BarDataIndex' in update
+    assert "if (barKey != null)" in update
 
 
 def test_duplicate_order_returns_cached_result():

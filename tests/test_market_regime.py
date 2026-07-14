@@ -128,6 +128,7 @@ def _req(mode=SignalMode.DEMO_LIVE) -> SignalRequest:
         low=98.0,
         volume=1000.0,
         rsi=35.0,
+        tradeEligible=True,
         mode=mode,
     )
 
@@ -156,7 +157,11 @@ class TestMacroFilterInRiskEngine:
     def test_downtrend_does_not_block_sell(self):
         engine = RiskEngine(_cfg(min_confidence_for_sell=50.0))
         req = _req().model_copy(
-            update={"bot_position_qty": 10.0, "total_account_qty": 10.0}
+            update={
+                "bot_position_qty": 10.0,
+                "total_account_qty": 10.0,
+                "account_available_qty": 10,
+            }
         )
         sell = RiskDecision(
             action=SignalAction.SELL, confidence=80.0, qty=5.0, reason="exit"

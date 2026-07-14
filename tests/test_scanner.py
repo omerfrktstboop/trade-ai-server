@@ -26,7 +26,7 @@ from app.services.matriks_gateway import GatewayUnavailable, MatriksGatewayClien
 from app.services.scanner import SymbolScanner
 from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
-from app.models.db import OrderCashReservation, SystemConfig
+from app.models.db import OrderCashReservation, SystemConfig, TradeWatchlistSymbol
 from sqlalchemy import select
 from tests.fake_gateway import FakeGateway
 
@@ -101,6 +101,7 @@ def runtime_stubs(monkeypatch):
         "config": _cfg(),
         "scan_interval": 30,
         "overrides": [],
+        "trade_symbols": ["THYAO", "AKBNK"],
     }
 
     async def fake_kill_switch(_session) -> bool:
@@ -120,12 +121,16 @@ def runtime_stubs(monkeypatch):
     async def fake_overrides(_session) -> list[str]:
         return state["overrides"]
 
+    async def fake_trade_symbols() -> list[str]:
+        return state["trade_symbols"]
+
     monkeypatch.setattr(scanner_module, "is_kill_switch_enabled", fake_kill_switch)
     monkeypatch.setattr(
         scanner_module, "build_runtime_risk_config", fake_runtime_config
     )
     monkeypatch.setattr(scanner_module, "get_active_profile", fake_profile)
     monkeypatch.setattr(scanner_module, "list_pending_override_symbols", fake_overrides)
+    monkeypatch.setattr(scanner_module, "list_trade_eligible_symbols", fake_trade_symbols)
     return state
 
 
@@ -321,6 +326,14 @@ class TestOrderPath:
                         description="test account policy",
                     )
                 )
+                session.add(
+                    TradeWatchlistSymbol(
+                        symbol="THYAO",
+                        is_active=True,
+                        source="MANUAL_OVERRIDE",
+                        manual_override=True,
+                    )
+                )
                 await session.commit()
 
         asyncio.run(seed_account_policy())
@@ -363,6 +376,16 @@ class TestOrderPath:
                 "Limit order SENT_PENDING; final status will be reported by OnOrderUpdate",
             )
         ]
+
+    async def test_research_candidate_outside_trade_watchlist_cannot_send_buy(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+        fake = FakeGateway(symbols=["THYAO", "GARAN"])
+
+        await self.make_scanner(fake)._maybe_send_order(make_result(symbol="GARAN"))
+
+        assert fake.orders == []
 
     async def test_order_time_sizing_can_only_reduce_qty(self, monkeypatch):
         monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)

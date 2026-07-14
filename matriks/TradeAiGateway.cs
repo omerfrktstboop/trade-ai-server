@@ -2320,8 +2320,11 @@ namespace Matriks.Lean.Algotrader
                 rejection = "index symbols are data-only and cannot receive orders: " + symbol;
             else if (side == "BUY" && orderConfig.DeclineSymbols.Contains(symbol))
                 rejection = "BUY symbol is on the decline blacklist: " + symbol;
-            else if (side == "BUY" && orderConfig.BuyAllowedSymbols.Length > 0 && !orderConfig.BuyAllowedSymbols.Contains(symbol))
-                rejection = "BUY symbol not allowed: " + symbol;
+            // BUY eligibility is an explicit, server-generated trade
+            // watchlist. An empty list means no BUY is authorized; it must
+            // never degrade to an allow-all wildcard for direct /order calls.
+            else if (side == "BUY" && !orderConfig.BuyAllowedSymbols.Contains(symbol))
+                rejection = "BUY symbol is not in the active trade watchlist: " + symbol;
             else if (side == "SELL" && orderConfig.SellExitAllowedSymbols.Length > 0 && !orderConfig.SellExitAllowedSymbols.Contains(symbol))
                 rejection = "SELL_EXIT symbol not allowed: " + symbol;
             else if (!TryConvertOrderQuantity(qty, out finalQty, out quantityError))

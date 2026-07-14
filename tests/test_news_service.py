@@ -370,5 +370,5 @@ class TestNewsInPayload:
         assert payload["indicatorConsensus"] == "BUY"
         assert payload["natr"] == 2.4
         assert payload["depthQueueDropPct"] == 12.0
-        assert payload["technicalFeatures"]["schemaVersion"] == "technical-features-v1"
+        assert payload["technicalFeatures"]["schemaVersion"] == "technical-features-v2"
         assert payload["technicalFeatures"]["indicatorBuyCount"] == 4

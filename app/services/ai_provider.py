@@ -118,6 +118,7 @@ def _normalize_decision(raw: dict[str, Any]) -> dict[str, Any]:
         "stop_loss": ("stop_loss", "stopLoss"),
         "target_price": ("target_price", "targetPrice"),
         "risk_score": ("risk_score", "riskScore"),
+        "research_score": ("research_score", "researchScore"),
     }
     for dest_field, aliases in numeric_aliases.items():
         for alias in aliases:

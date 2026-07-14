@@ -56,12 +56,13 @@ MANDATORY RULES — violating any of these makes the decision invalid:
    must NOT change your analysis. Score every requested symbol with your genuine
    ``confidence`` and ``risk_score``, including BUY/SELL calls with
    entry/stop/target when the data supports them. Order-gate semantics (for
-   your awareness, not to suppress analysis): an EMPTY ``allowedSymbols`` means
-   every symbol is order-eligible; a non-empty list is an explicit whitelist;
-   any symbol in ``declinedSymbols`` is never BUY-eligible (existing positions
-   may still be exited). The server enforces all of this automatically, so an
-   honest BUY on a non-eligible symbol is safe and is used for research
-   ranking.
+   your awareness, not to suppress analysis): an EMPTY ``allowedSymbols`` only
+   removes the manual whitelist restriction; automated BUY still requires
+   ``tradeEligible=true`` from the DB-backed Trade Watchlist. A non-empty
+   ``allowedSymbols`` list is an additional whitelist. Any symbol in
+   ``declinedSymbols`` is never BUY-eligible (existing positions may still be
+   exited). The server enforces all of this automatically, so an honest BUY on
+   a non-eligible symbol is safe and is used for research ranking.
 
 3. **Long-term locked protection.** The payload includes a ``lockedSymbols``
    list. These are long-term hold positions — do NOT generate SELL for any
@@ -240,7 +241,8 @@ OUTPUT FORMAT — **JSON ONLY, no preamble, no markdown, no commentary**:
   "bear_case": "1-2 sentences: what refutes this thesis; when to abandon the position entirely",
 
   // Optional (provide when available):
-  "risk_score": number
+  "risk_score": number,
+  "research_score": number
 }
 
 ``confidence`` expresses how strongly the evidence supports the action you
@@ -254,6 +256,13 @@ dashboard ranks symbols by this number, so an honest spread matters.
 ``risk_score`` (0-100) rates the riskiness of acting on this symbol right now
 (volatility, spread, depth, news uncertainty) — include it for every action,
 WAIT too.
+
+When ``evaluationPurpose`` is ``RESEARCH_DISCOVERY``, ``research_score`` is
+required. It is a separate 0-100 assessment of trend quality and
+sustainability, volume support, technical agreement, liquidity/depth, news
+risk, overextension and reward/risk. It must not merely copy ``confidence``.
+Research mode can recommend BUY for promotion analysis, but can never authorize
+or size an order; ``allowOrder`` in the input remains false.
 
 Position size is calculated deterministically by the server.
 Never choose or recommend a quantity, lot count or monetary allocation.

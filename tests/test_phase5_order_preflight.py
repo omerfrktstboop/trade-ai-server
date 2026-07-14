@@ -112,7 +112,8 @@ def test_gateway_has_independent_freshness_and_finite_guards():
     assert "double.IsNaN(order.Qty)" in source
     assert "MaxQuoteAgeSecondsForOrder" in source
     assert "crossed order book" in source
-    history = source.split("private void UpdateCloseHistory", 1)[1].split(
+    history = source.split("private void UpdateBarHistory", 1)[1].split(
         "private List<decimal> GetCloseHistory", 1
     )[0]
-    assert "list[list.Count - 1] = lastPrice" in history
+    assert "list[list.Count - 1] = bar.Close" in history
+    assert "string.Equals(previous, barKey" in history

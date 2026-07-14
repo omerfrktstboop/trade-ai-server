@@ -284,6 +284,8 @@ class SignalRequest(BaseModel):
     account_sizing_context: AccountSizingContext | None = Field(
         None, alias="accountSizingContext"
     )
+    trade_eligible: bool = Field(False, alias="tradeEligible")
+    evaluation_purpose: str = Field("TRADING", alias="evaluationPurpose")
 
     # Daily trade count (fed by caller — e.g. Matriks IQ or DB)
     daily_trade_count: int = Field(0, alias="dailyTradeCount", ge=0)

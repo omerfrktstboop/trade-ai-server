@@ -33,6 +33,7 @@ from app.services.evaluator import (
     persist_sizing_audit,
     with_resolved_daily_trade_count,
     with_runtime_controls,
+    with_trade_eligibility,
 )
 from app.services.fundamentals_service import get_fundamentals_context
 from app.services.news_service import get_news_context
@@ -56,6 +57,10 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
     6. Persist to ``market_snapshots``, ``ai_decisions``, ``risk_decisions``.
     """
     body, runtime_engine, kill_switch_enabled = await with_runtime_controls(body)
+    # ``tradeEligible`` is server-authoritative.  Never trust the value sent by
+    # a caller of this diagnostic endpoint; resolve the active, non-expired DB
+    # watchlist row exactly as the in-process scanner does.
+    body = await with_trade_eligibility(body)
     if kill_switch_enabled:
         response = kill_switch_response(body)
         raw = {

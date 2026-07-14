@@ -32,8 +32,9 @@ from app.models.db import (
     MarketSnapshot,
     ManualApprovalRequest,
     PositionManagementDecision,
-    WatchlistSymbol,
-    WatchlistQualityScore,
+    ResearchCandidate,
+    ResearchCandidateEvent,
+    TradeWatchlistSymbol,
     OrderLog,
     RiskDecision,
     TradeProfile,
@@ -83,6 +84,7 @@ from app.services.trade_profile import (
     list_profiles,
     update_profile,
 )
+from app.services.research_pipeline import add_manual_trade_symbol
 
 admin_router = APIRouter(tags=["Admin"])
 admin_api_router = APIRouter(tags=["Admin API"])
@@ -447,9 +449,9 @@ async def admin_watchlist(request: Request) -> HTMLResponse:
         rows = list(
             (
                 await session.execute(
-                    select(WatchlistSymbol, WatchlistQualityScore).outerjoin(
-                        WatchlistQualityScore,
-                        WatchlistQualityScore.symbol == WatchlistSymbol.symbol,
+                    select(TradeWatchlistSymbol, ResearchCandidate).outerjoin(
+                        ResearchCandidate,
+                        ResearchCandidate.symbol == TradeWatchlistSymbol.symbol,
                     )
                 )
             ).all()
@@ -892,6 +894,12 @@ async def admin_add_to_watchlist(request: Request) -> RedirectResponse:
                 changed_by=identity,
                 reason=f"Added {symbol} to watchlist from Positions page",
             )
+            await add_manual_trade_symbol(
+                session,
+                symbol,
+                reason=f"Explicit admin override by {identity} from Positions page",
+            )
+            await session.commit()
 
         await _notify_gateway_config_reload()
 
@@ -1280,34 +1288,67 @@ def _research_rank_rows(decisions: list[Any]) -> list[dict[str, Any]]:
 
 @admin_router.get("/research", response_class=HTMLResponse)
 async def admin_research(request: Request) -> HTMLResponse:
-    """Rank the watchlist's most recent evaluations by asymmetric
-    opportunity. Makes NO new AI calls — it reads what the bot's normal
-    scan cycle already produced."""
+    """Show discovery candidates, research scores, promotion state and timeline."""
     identity = await require_admin(request)
+    selected_filter = str(request.query_params.get("filter") or "all").lower()
+    now = datetime.now(UTC)
     async with async_session_factory() as session:
-        decisions = await _latest(session, RiskDecision, 500)
-        allowed_raw = await get_admin_config_value(session, "allowedSymbols")
+        candidates = (
+            (
+                await session.execute(
+                    select(ResearchCandidate).order_by(
+                        ResearchCandidate.last_detected_at.desc()
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        events = (
+            (
+                await session.execute(
+                    select(ResearchCandidateEvent)
+                    .order_by(ResearchCandidateEvent.created_at.desc())
+                    .limit(1000)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        active_trade_rows = (
+            (
+                await session.execute(
+                    select(TradeWatchlistSymbol).where(
+                        TradeWatchlistSymbol.is_active.is_(True),
+                        (TradeWatchlistSymbol.expires_at.is_(None))
+                        | (TradeWatchlistSymbol.expires_at >= now),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        trade_by_symbol = {row.symbol: row for row in active_trade_rows}
+        trade_symbols = set(trade_by_symbol)
         status_ctx = await _status_strip_context(session)
 
-    # decisions are created_at DESC — first hit per symbol is its latest.
-    latest_by_symbol: dict[str, Any] = {}
-    for d in decisions:
-        symbol = d.symbol.strip().upper()
-        if symbol not in latest_by_symbol:
-            latest_by_symbol[symbol] = d
+    def visible(row: ResearchCandidate) -> bool:
+        if selected_filter == "pending":
+            return row.status in {"DETECTED", "RESEARCH_PENDING"}
+        if selected_filter == "near":
+            return 60 <= float(row.ai_research_score or 0) < 75
+        if selected_filter == "promoted":
+            return row.status == "PROMOTED" or row.symbol in trade_symbols
+        if selected_filter == "rejected":
+            return row.status == "REJECTED"
+        if selected_filter == "expired":
+            return row.status == "EXPIRED"
+        return True
 
-    cutoff = datetime.now(UTC) - RESEARCH_FRESH_WINDOW
-    fresh = []
-    for d in latest_by_symbol.values():
-        created = d.created_at
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=UTC)
-        if created >= cutoff:
-            fresh.append(d)
-
-    ranked = _research_rank_rows(fresh)
-    ranked_symbols = {row["symbol"] for row in ranked}
-    missing_symbols = sorted(_split_csv_symbols(allowed_raw) - ranked_symbols)
+    rows = [row for row in candidates if visible(row)]
+    events_by_symbol: dict[str, list[ResearchCandidateEvent]] = {}
+    for event in events:
+        events_by_symbol.setdefault(event.symbol, []).append(event)
 
     return templates.TemplateResponse(
         request,
@@ -1315,9 +1356,11 @@ async def admin_research(request: Request) -> HTMLResponse:
         {
             "identity": identity,
             "active": "research",
-            "ranked": ranked,
-            "missing_symbols": missing_symbols,
-            "window_hours": int(RESEARCH_FRESH_WINDOW.total_seconds() // 3600),
+            "rows": rows,
+            "events_by_symbol": events_by_symbol,
+            "trade_symbols": trade_symbols,
+            "trade_by_symbol": trade_by_symbol,
+            "selected_filter": selected_filter,
             **status_ctx,
         },
     )

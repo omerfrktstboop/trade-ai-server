@@ -44,6 +44,7 @@ from app.models.db import OrderLog
 from app.models.db import MarketSnapshot
 from app.models.db import PositionSizingAudit
 from app.models.db import RiskDecision as RiskDecisionModel
+from app.models.db import TradeWatchlistSymbol
 from app.models.signal import (
     EntryRange,
     OrderType,
@@ -141,6 +142,9 @@ class EvaluationResult:
     decision_created_utc: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+    evaluation_purpose: str = "TRADING"
+    research_score: float | None = None
+    raw_action: SignalAction | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -212,6 +216,8 @@ def build_payload(
         "totalAccountQty": req.total_account_qty,
         "accountAvailableQty": req.account_available_qty,
         "lockedLongTermQty": req.locked_long_term_qty,
+        "tradeEligible": req.trade_eligible,
+        "evaluationPurpose": req.evaluation_purpose,
         "lastTradeUtc": req.last_trade_utc,
         "quoteReadUtc": req.quote_read_utc,
         "depthReadUtc": req.depth_read_utc,
@@ -398,6 +404,31 @@ async def with_resolved_daily_trade_count(req: SignalRequest) -> SignalRequest:
             "daily_filled_order_count": counts.symbol_filled_order_count,
         }
     )
+
+
+async def with_trade_eligibility(req: SignalRequest) -> SignalRequest:
+    """Resolve the DB-backed BUY gate; any DB problem remains fail-closed."""
+    try:
+        async with async_session_factory() as session:
+            now = datetime.now(timezone.utc)
+            eligible = (
+                await session.execute(
+                    select(TradeWatchlistSymbol.id).where(
+                        TradeWatchlistSymbol.symbol == req.symbol.strip().upper(),
+                        TradeWatchlistSymbol.is_active.is_(True),
+                        (TradeWatchlistSymbol.expires_at.is_(None))
+                        | (TradeWatchlistSymbol.expires_at >= now),
+                    )
+                )
+            ).scalar_one_or_none()
+    except Exception:
+        logger.exception(
+            "Trade eligibility unavailable; BUY remains blocked request_id=%s symbol=%s",
+            req.request_id,
+            req.symbol,
+        )
+        eligible = None
+    return req.model_copy(update={"trade_eligible": eligible is not None})
 
 
 async def with_fresh_account_sizing_context(
@@ -919,6 +950,8 @@ async def evaluate_symbol(
     mode: SignalMode = SignalMode.PAPER,
     force_paper: bool = False,
     request_id: str | None = None,
+    evaluation_purpose: str = "TRADING",
+    research_context: dict[str, Any] | None = None,
 ) -> EvaluationResult | None:
     """Bir sembolü uçtan uca değerlendir; final kararı döndür.
 
@@ -943,6 +976,8 @@ async def evaluate_symbol(
     decision_created_utc = datetime.now(timezone.utc)
     symbol = symbol.strip().upper()
     request_id = request_id or _build_request_id(symbol)
+    evaluation_purpose = str(evaluation_purpose or "TRADING").strip().upper()
+    research_only = evaluation_purpose == "RESEARCH_DISCOVERY"
 
     # ── 1. Kök sembol snapshot'ı ─────────────────────────────────────────
     snapshot = await gateway.get_snapshot(symbol)
@@ -992,10 +1027,16 @@ async def evaluate_symbol(
         symbol, root_payload, request_id=request_id, mode=mode
     )
 
+
+    sig_req = sig_req.model_copy(
+        update={"evaluation_purpose": evaluation_purpose}
+    )
+
     # ── 4. Runtime kontroller ────────────────────────────────────────────
     sig_req, runtime_engine, kill_switch_enabled = await with_runtime_controls(sig_req)
     sig_req = await with_resolved_daily_trade_count(sig_req)
-    if force_paper and sig_req.mode != SignalMode.PAPER:
+    sig_req = await with_trade_eligibility(sig_req)
+    if (force_paper or research_only) and sig_req.mode != SignalMode.PAPER:
         sig_req = sig_req.model_copy(update={"mode": SignalMode.PAPER})
 
     if kill_switch_enabled:
@@ -1013,6 +1054,8 @@ async def evaluate_symbol(
             response=response,
             mode=sig_req.mode,
             decision_created_utc=decision_created_utc,
+            evaluation_purpose=evaluation_purpose,
+            raw_action=SignalAction.WAIT,
         )
 
     # ── 5. Dış bağlam (haber + akıllı para + admin fundamentals) ─────────
@@ -1073,6 +1116,11 @@ async def evaluate_symbol(
     payload["runtimeMode"] = sig_req.mode.value
     payload["configHash"] = runtime_config_hash
     payload["profileCode"] = active_profile_code
+    if research_context:
+        payload.update(_json_safe(research_context))
+    payload["evaluationPurpose"] = evaluation_purpose
+    if research_only:
+        payload["allowOrder"] = False
 
     # ── 5.5. Pozisyon bağlamı (portfolio yönetimi) ───────────────────────
     # Açık bot pozisyonu varken LLM'in görevi yeni alım aramak değil eldeki
@@ -1086,7 +1134,11 @@ async def evaluate_symbol(
     # Override asla REAL_LIVE'da uygulanmaz — test amaçlı bir özellik gerçek
     # sermayeyi hareket ettiremesin.
     raw: dict[str, Any] | None = None
-    if sig_req.mode in (SignalMode.PAPER, SignalMode.MANUAL, SignalMode.DEMO_LIVE):
+    if not research_only and sig_req.mode in (
+        SignalMode.PAPER,
+        SignalMode.MANUAL,
+        SignalMode.DEMO_LIVE,
+    ):
         try:
             async with async_session_factory() as ov_session:
                 override = await consume_override(ov_session, sig_req.symbol)
@@ -1097,7 +1149,7 @@ async def evaluate_symbol(
 
     # ── 6.5. Token-cost kapıları (LLM'e gitmeden karar) ──────────────────
     # Sıra: admin override > pre-flight gate > karar cache'i > LLM.
-    if raw is None:
+    if raw is None and not research_only:
         gate_reason = preflight_wait_reason(
             symbol=sig_req.symbol,
             indicator_consensus=sig_req.indicator_consensus,
@@ -1133,7 +1185,7 @@ async def evaluate_symbol(
 
     # ── 7. RiskEngine (makro rejim filtresiyle) ──────────────────────────
     decision = dict_to_risk_decision(raw, sig_req)
-    if decision.action == SignalAction.BUY:
+    if decision.action == SignalAction.BUY and not research_only:
         sig_req = await with_fresh_account_sizing_context(
             sig_req,
             gateway=gateway,
@@ -1159,7 +1211,16 @@ async def evaluate_symbol(
         )
 
     return EvaluationResult(
-        response=response, mode=sig_req.mode, decision_created_utc=decision_created_utc
+        response=response,
+        mode=sig_req.mode,
+        decision_created_utc=decision_created_utc,
+        evaluation_purpose=evaluation_purpose,
+        research_score=(
+            _safe_float(raw.get("research_score"))
+            if "research_score" in raw
+            else None
+        ),
+        raw_action=decision.action,
     )
 
 
@@ -1186,15 +1247,16 @@ async def _build_position_context(req: SignalRequest) -> dict[str, Any] | None:
 
     gateway_context = dict(req.gateway_position_context or {})
     bot_avg_cost = await _bot_average_cost_from_fill_ledger(req.symbol)
+    cost_source = "BOT_FILL_LEDGER" if bot_avg_cost is not None else "UNAVAILABLE"
     if bot_avg_cost is None and row is not None and row.avg_price:
         bot_avg_cost = Decimal(str(row.avg_price))
+        cost_source = "BOT_POSITION_CACHE"
 
     account_avg_raw = gateway_context.get("accountAvgCost")
     account_avg_cost = (
         Decimal(str(account_avg_raw)) if account_avg_raw not in (None, 0, "0") else None
     )
     account_net_qty = int(gateway_context.get("accountQtyNet") or req.total_account_qty)
-    cost_source = "BOT_FILL_LEDGER" if bot_avg_cost is not None else "UNAVAILABLE"
     if (
         bot_avg_cost is None
         and account_avg_cost is not None

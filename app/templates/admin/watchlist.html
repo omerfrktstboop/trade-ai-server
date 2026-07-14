@@ -1,1 +1,20 @@
-{% extends "admin/base.html" %}{% block title %}Watchlist{% endblock %}{% block page_title %}Watchlist Quality{% endblock %}{% block content %}<div class="table-container"><table><thead><tr><th>Symbol</th><th>Source</th><th>Quality</th><th>Momentum</th><th>Volume</th><th>Depth</th><th>News</th><th>Risk</th><th>Active</th></tr></thead><tbody>{% for watch, score in rows %}<tr><td>{{ watch.symbol }}</td><td>{{ watch.source }}</td><td>{{ score.quality_score if score else '-' }}</td><td>{{ score.momentum_score if score else '-' }}</td><td>{{ score.volume_score if score else '-' }}</td><td>{{ score.depth_score if score else '-' }}</td><td>{{ score.news_score if score else '-' }}</td><td>{{ score.risk_score if score else '-' }}</td><td>{{ watch.is_active }}</td></tr>{% else %}<tr class="empty-row"><td colspan="9">No watchlist candidates</td></tr>{% endfor %}</tbody></table></div>{% endblock %}
+{% extends "admin/base.html" %}
+{% block title %}Trade Watchlist{% endblock %}
+{% block page_title %}Trade Watchlist{% endblock %}
+{% block content %}
+<div class="card mb-24">
+  <p class="text-muted text-sm">Yalnız bu listedeki aktif semboller otomatik BUY scannerına girer. Research Candidate listesi ayrıdır.</p>
+</div>
+<div class="table-container"><table>
+  <thead><tr><th>Sembol</th><th>Kaynak</th><th>Research</th><th>Confidence</th><th>Risk</th><th>Aktif</th><th>Eklenme</th><th>Son Geçerlilik</th><th>Neden</th></tr></thead>
+  <tbody>{% for watch, candidate in rows %}<tr>
+    <td><strong>{{ watch.symbol }}</strong></td><td>{{ watch.source }}</td>
+    <td>{{ watch.research_score if watch.research_score is not none else '—' }}</td>
+    <td>{{ watch.confidence_score if watch.confidence_score is not none else '—' }}</td>
+    <td>{{ watch.risk_score if watch.risk_score is not none else '—' }}</td>
+    <td>{{ watch.is_active }}</td><td>{{ watch.eligible_at | local_time }}</td>
+    <td>{{ watch.expires_at | local_time if watch.expires_at else 'MANUAL' }}</td>
+    <td class="text-muted">{{ watch.promotion_reason or watch.removal_reason or '—' }}</td>
+  </tr>{% else %}<tr class="empty-row"><td colspan="9">Trade Watchlist boş; research promotion veya manuel override bekleniyor.</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endblock %}

@@ -32,6 +32,9 @@ def _req(**kwargs) -> SignalRequest:
         rsi=50.0,
         ema20=98.0,
         ema50=95.0,
+        # These unit tests exercise gates after server-side watchlist
+        # resolution.  HTTP/evaluator tests cover the authoritative DB lookup.
+        tradeEligible=True,
         mode=SignalMode.MANUAL,
     )
     defaults.update(kwargs)

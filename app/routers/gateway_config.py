@@ -14,7 +14,7 @@ limits on top):
 import hashlib
 import json
 import math
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -22,7 +22,12 @@ from sqlalchemy import select
 from app.config import settings
 from app.core.auth import verify_gateway_token
 from app.db.session import async_session_factory
-from app.models.db import BotPosition, LockedPosition, WatchlistSymbol
+from app.models.db import (
+    BotPosition,
+    LockedPosition,
+    ResearchCandidate,
+    TradeWatchlistSymbol,
+)
 from app.services.admin_config import list_admin_configs
 from app.services.daily_trade_count import get_today_order_count_maps
 from app.services.trade_profile import get_active_profile
@@ -74,11 +79,26 @@ async def gateway_runtime_config() -> dict:
         profile = await get_active_profile(session)
         portfolio = (await session.execute(select(BotPosition))).scalars().all()
         locked = (await session.execute(select(LockedPosition))).scalars().all()
-        watchlist = (
+        research_candidates = (
             (
                 await session.execute(
-                    select(WatchlistSymbol.symbol).where(
-                        WatchlistSymbol.is_active.is_(True)
+                    select(ResearchCandidate.symbol).where(
+                        ResearchCandidate.status.in_(
+                            ("DETECTED", "RESEARCH_PENDING", "RESEARCHED", "QUALIFIED", "PROMOTED")
+                        )
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        trade_watchlist = (
+            (
+                await session.execute(
+                    select(TradeWatchlistSymbol.symbol).where(
+                        TradeWatchlistSymbol.is_active.is_(True),
+                        (TradeWatchlistSymbol.expires_at.is_(None))
+                        | (TradeWatchlistSymbol.expires_at >= datetime.now(UTC)),
                     )
                 )
             )
@@ -87,17 +107,18 @@ async def gateway_runtime_config() -> dict:
         )
         daily_counts = await get_today_order_count_maps(session)
 
-    symbols = {
+    manually_allowed = {
         value.strip().upper()
         for value in values["allowedSymbols"].split(",")
         if value.strip()
     }
+    symbols = set(manually_allowed)
     market_index_symbol = settings.market_index_symbol.strip().upper()
-    buy_symbols = [
+    configured_buy_symbols = {
         s.strip().upper()
         for s in values["buyAllowedSymbols"].split(",")
         if s.strip() and not _is_index_symbol(s, market_index_symbol)
-    ]
+    }
     sell_symbols = [
         s.strip().upper()
         for s in values["sellExitAllowedSymbols"].split(",")
@@ -108,19 +129,33 @@ async def gateway_runtime_config() -> dict:
         for s in values.get("declineSymbols", "").split(",")
         if s.strip()
     ]
+    eligible_symbols = {
+        str(symbol).strip().upper()
+        for symbol in trade_watchlist
+        if str(symbol).strip()
+        and not _is_index_symbol(str(symbol), market_index_symbol)
+    }
+    effective_buy_symbols = eligible_symbols.difference(decline_symbols)
+    if manually_allowed:
+        effective_buy_symbols.intersection_update(manually_allowed)
+    if configured_buy_symbols:
+        effective_buy_symbols.intersection_update(configured_buy_symbols)
     symbols.update(row.symbol.strip().upper() for row in portfolio if row.qty > 0)
-    # Data-only abonelikler: emir yolu RiskEngine'in allowedSymbols
-    # kontrolünden geçtiği için bunlara emir gidemez; gateway yalnızca
-    # snapshot/movers verisi sağlar.
+    # Data-only subscriptions never enter ``buyAllowedSymbols`` unless a
+    # separate active trade-watchlist row exists.  RiskEngine and scanner
+    # independently repeat that DB-backed eligibility check.
     #   - Makro filtre endeksi (XU100)
     #   - Discovery keşif evreni (movers ranking'i genişletir)
     #   - Aktif watchlist adayları (scanner analizi için snapshot gerekir)
     if market_index_symbol:
         symbols.add(market_index_symbol)
     symbols.update(
-        s.strip().upper() for s in settings.discovery_symbols.split(",") if s.strip()
+        s.strip().upper()
+        for s in values["scanUniverseSymbols"].split(",")
+        if s.strip()
     )
-    symbols.update(str(s).strip().upper() for s in watchlist)
+    symbols.update(str(s).strip().upper() for s in research_candidates)
+    symbols.update(eligible_symbols)
     instrument_types = {
         symbol: (
             "INDEX"
@@ -146,7 +181,8 @@ async def gateway_runtime_config() -> dict:
         "subscriptionSymbols": sorted(symbols),
         "marketIndexSymbol": market_index_symbol or None,
         "instrumentTypes": instrument_types,
-        "buyAllowedSymbols": sorted(set(buy_symbols)),
+        "buyAllowedSymbols": sorted(effective_buy_symbols),
+        "tradeEligibleSymbols": sorted(eligible_symbols),
         "sellExitAllowedSymbols": sorted(set(sell_symbols)),
         "declineSymbols": sorted(set(decline_symbols)),
         "tradingKillSwitchActive": values["tradingKillSwitchActive"] == "true"

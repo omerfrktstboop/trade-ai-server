@@ -30,16 +30,14 @@ from sqlalchemy import select
 from app.config import settings
 from app.core.risk_config import risk_config
 from app.db.session import async_session_factory
-from app.models.db import BotPosition, OrderLog
+from app.models.db import BotPosition, OrderLog, TradeWatchlistSymbol
 from app.models.signal import OrderType, SignalAction, SignalMode
 from app.services.admin_config import (
     build_runtime_risk_config,
+    get_admin_config_value,
     is_kill_switch_enabled,
 )
-from app.services.discovery_agent import (
-    list_active_watchlist_symbols,
-    run_discovery_scan,
-)
+from app.services.discovery_agent import run_discovery_scan
 from app.services.evaluator import EvaluationResult, evaluate_symbol
 from app.services.account_context import (
     MatriksAccountContextAdapter,
@@ -66,6 +64,15 @@ from app.services.order_preflight import validate_order_preflight
 from app.services.position_sizing import TradeSizingContext
 from app.services.signal_override import list_pending_override_symbols
 from app.services.trade_profile import get_active_profile
+from app.services.research_pipeline import (
+    get_pipeline_counts,
+    is_trade_eligible,
+    list_trade_eligible_symbols,
+    load_research_policy,
+    maintain_trade_watchlist,
+    record_trade_watchlist_decision,
+    run_research_cycle,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +104,15 @@ class SymbolScanner:
         self._last_order_sent_at: dict[tuple[str, SignalAction], datetime] = {}
         self._last_discovery_by_symbol: dict[str, datetime] = {}
         self._last_discovery_run: datetime | None = None
+        self._last_research_run: datetime | None = None
+        self._last_promotion_at: datetime | None = None
+        self._pipeline_counts: dict[str, int] = {
+            "scanUniverseCount": 0,
+            "researchCandidateCount": 0,
+            "pendingResearchCount": 0,
+            "qualifiedCandidateCount": 0,
+            "tradeWatchlistCount": 0,
+        }
         self._last_portfolio_scan: datetime | None = None
         self._last_tick_at: datetime | None = None
         self._last_evaluated_symbols: list[str] = []
@@ -144,6 +160,17 @@ class SymbolScanner:
                 if self._last_discovery_run
                 else None
             ),
+            "lastResearchRunAt": (
+                self._last_research_run.isoformat()
+                if self._last_research_run
+                else None
+            ),
+            "lastPromotionAt": (
+                self._last_promotion_at.isoformat()
+                if self._last_promotion_at
+                else None
+            ),
+            **self._pipeline_counts,
             "lastPortfolioScanAt": (
                 self._last_portfolio_scan.isoformat()
                 if self._last_portfolio_scan
@@ -232,15 +259,9 @@ class SymbolScanner:
         # kill-switch scanner exits cannot leave the admin panel stale.
 
         # ── Sırası gelen sembolleri değerlendir ────────────────────────────
-        symbols = [
-            s.strip().upper()
-            for s in runtime_cfg.allowed_symbols.split(",")
-            if s.strip()
-        ]
-        # Discovery agent'ın bulduğu aktif watchlist adayları da taranır —
-        # emir izni yine RiskEngine'in allowedSymbols kontrolünde kalır.
-        watchlist = await list_active_watchlist_symbols()
-        symbols.extend(s for s in watchlist if s not in symbols)
+        # Normal scanner evaluates only promoted trade-watchlist symbols.
+        # Research candidates have their own forced-PAPER pipeline below.
+        symbols = await list_trade_eligible_symbols()
         # Manual BUY/SELL overrides must run even when the symbol is not in
         # the regular scan watchlist (for example an existing portfolio
         # position such as OPT25F). Preserve watchlist order, then append the
@@ -299,12 +320,15 @@ class SymbolScanner:
                 result.mode.value,
             )
             await self._maybe_send_order(result)
+            await record_trade_watchlist_decision(result)
 
         # ── Otonom keşif (movers → watchlist) + portföy re-evaluasyonu ────
         # Gateway tur ortasında düştüyse aynı tick'te tekrar denemek anlamsız.
         if not gateway_down_mid_cycle:
             await self._run_discovery()
+            await self._run_research(runtime_cfg._declined_set())
             await self._run_portfolio_scan(pending_overrides)
+            await self._refresh_pipeline_status()
 
         self._last_evaluated_symbols = list(evaluated)
         return evaluated
@@ -319,13 +343,9 @@ class SymbolScanner:
         await cancel_timed_out_orders(self._gateway, now=now)
 
     async def _run_discovery(self) -> None:
-        """Discovery agent'ı periyodik çalıştır: movers → elemeler → watchlist.
-
-        Adayları ``watchlist_symbols`` tablosuna yazar; bir sonraki tick'te
-        tarama listesine otomatik girerler. LLM çağrısı YAPMAZ — eleme
-        tamamen kural tabanlı (tavan kilidi / sığ hacim / satış duvarı).
-        """
-        interval = timedelta(minutes=max(5, settings.discovery_interval_minutes))
+        """Run low-cost movers screening and create research-only candidates."""
+        policy = await load_research_policy()
+        interval = timedelta(minutes=policy.discovery_interval_minutes)
         now = datetime.now(timezone.utc)
         if self._last_discovery_run and (now - self._last_discovery_run) < interval:
             return
@@ -338,6 +358,43 @@ class SymbolScanner:
             return
         if added:
             logger.info("Discovery scan accepted symbols=%s", added)
+
+    async def _run_research(self, declined_symbols: set[str]) -> None:
+        """Evaluate due candidates in forced PAPER mode, then maintain eligibility."""
+        try:
+            self._last_research_run = datetime.now(timezone.utc)
+            await run_research_cycle(self._gateway)
+            removed = await maintain_trade_watchlist(declined_symbols)
+            if removed:
+                logger.info("Trade watchlist maintenance removed=%s", removed)
+        except Exception:
+            logger.exception("Research pipeline cycle failed")
+
+    async def _refresh_pipeline_status(self) -> None:
+        try:
+            counts = await get_pipeline_counts()
+            async with async_session_factory() as session:
+                universe = await get_admin_config_value(session, "scanUniverseSymbols")
+                latest_promotion = (
+                    await session.execute(
+                        select(TradeWatchlistSymbol.eligible_at)
+                        .where(
+                            TradeWatchlistSymbol.source == "RESEARCH_PROMOTION"
+                        )
+                        .order_by(TradeWatchlistSymbol.eligible_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+            counts["scanUniverseCount"] = len(
+                {item.strip().upper() for item in universe.split(",") if item.strip()}
+            )
+            self._pipeline_counts = counts
+            if latest_promotion is not None:
+                if latest_promotion.tzinfo is None:
+                    latest_promotion = latest_promotion.replace(tzinfo=timezone.utc)
+                self._last_promotion_at = latest_promotion
+        except Exception:
+            logger.exception("Research pipeline status refresh failed")
 
     async def _run_portfolio_scan(self, pending_overrides: set[str]) -> None:
         """Eldeki pozisyonları periyodik yeniden değerlendir (Portfolio Manager).
@@ -457,6 +514,16 @@ class SymbolScanner:
                 "Order blocked: mode=%s is not allowed to send orders in Phase 2 "
                 "(only DEMO_LIVE) requestId=%s",
                 result.mode.value,
+                response.request_id,
+            )
+            return
+
+        if response.action == SignalAction.BUY and not await is_trade_eligible(
+            response.symbol
+        ):
+            logger.warning(
+                "BUY blocked: symbol is not trade eligible symbol=%s requestId=%s",
+                response.symbol,
                 response.request_id,
             )
             return

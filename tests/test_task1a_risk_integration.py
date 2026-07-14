@@ -62,6 +62,7 @@ def request(*, with_account=True, **updates) -> SignalRequest:
         "low": 98,
         "volume": 1000,
         "mode": SignalMode.DEMO_LIVE,
+        "tradeEligible": True,
         "accountSizingContext": account if with_account else None,
     }
     data.update(updates)
@@ -126,6 +127,7 @@ def test_sell_quantity_comes_from_bot_owned_sellable_lots():
             with_account=False,
             botPositionQty=8,
             totalAccountQty=20,
+            accountAvailableQty=20,
             lockedLongTermQty=15,
         ),
         RiskDecision(action=SignalAction.SELL, confidence=90, qty=999),

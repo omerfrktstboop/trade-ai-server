@@ -612,6 +612,7 @@ class TestRiskEngineIntegration:
             high=102.0,
             low=98.0,
             volume=1000.0,
+            tradeEligible=True,
             mode=SignalMode.REAL_LIVE,
         )
         resp = engine.evaluate(request, decision)

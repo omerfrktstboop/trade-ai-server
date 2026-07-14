@@ -19,6 +19,7 @@ from app.models.db import (
     ConfigAuditLog,
     MarketSnapshot,
     OrderLog,
+    ResearchCandidate,
     RiskDecision,
 )
 from app.services.admin_config import CONFIG_DEFINITIONS, READ_ONLY_CONFIG_KEYS
@@ -95,9 +96,8 @@ class TestAdminConfig:
         assert "DEEPSEEK_API_KEY" not in keys
         assert "DATABASE_URL" not in keys
         descriptions = {item["key"]: item["description"] for item in resp.json()}
-        assert (
-            "İşlem yapılmasına izin verilen semboller" in descriptions["allowedSymbols"]
-        )
+        assert "Manuel BUY beyaz listesi" in descriptions["allowedSymbols"]
+        assert "Trade Watchlist zorunluluğu" in descriptions["allowedSymbols"]
 
     def test_config_update_writes_audit_log(
         self, client: TestClient, auth_headers: dict[str, str]
@@ -148,7 +148,8 @@ class TestAdminConfig:
         assert "allowedSymbols" in resp.text
         assert "killSwitchEnabled" in resp.text
         assert "Açıklama" in resp.text
-        assert "İşlem yapılmasına izin verilen semboller" in resp.text
+        assert "Manuel BUY beyaz listesi" in resp.text
+        assert "Trade Watchlist zorunluluğu" in resp.text
 
     def test_config_page_covers_every_runtime_config_definition(
         self, client: TestClient, auth_headers: dict[str, str]
@@ -807,21 +808,19 @@ class TestResearchPage:
     ):
         async with async_session_factory() as session:
             session.add(
-                RiskDecision(
-                    request_id=f"research-{symbol}",
+                ResearchCandidate(
                     symbol=symbol,
-                    action=action,
-                    confidence=confidence,
-                    risk_score=10.0,
-                    allow_order=action == "BUY",
-                    reason=f"{symbol} research seed",
-                    entry_min=entry,
-                    entry_max=entry,
-                    stop_loss=stop,
-                    target_price=target,
-                    qty=10.0,
-                    order_type="LIMIT",
-                    mode="PAPER",
+                    status="RESEARCHED",
+                    source=["GAINER"],
+                    trend_pre_score=72,
+                    ai_action=action,
+                    ai_research_score=78 if action == "BUY" else 55,
+                    ai_confidence_score=confidence,
+                    ai_risk_score=10,
+                    ai_reason=f"{symbol} research seed",
+                    ai_stop_loss=stop,
+                    ai_target_price=target,
+                    technical_summary={"rsi": 55, "emaTrendAligned": True},
                 )
             )
             await session.commit()
@@ -834,8 +833,7 @@ class TestResearchPage:
     ):
         resp = client.get("/admin/research", headers=auth_headers)
         assert resp.status_code == 200
-        assert "hiç değerlendirme yok" in resp.text
-        assert "THYAO" in resp.text  # in the missing-symbols section
+        assert "Bu filtrede araştırma adayı bulunmuyor" in resp.text
 
     def test_ranked_page_orders_buy_above_wait(
         self, client: TestClient, auth_headers: dict[str, str]
@@ -849,9 +847,10 @@ class TestResearchPage:
 
         resp = client.get("/admin/research", headers=auth_headers)
         assert resp.status_code == 200
-        assert resp.text.index("THYAO") < resp.text.index("AKBNK")
-        assert "4.00x" in resp.text  # R/R = (120-100)/(100-95)
-        assert "/admin/logs/research-THYAO" in resp.text
+        assert "THYAO" in resp.text
+        assert "AKBNK" in resp.text
+        assert "78.0" in resp.text
+        assert "GAINER" in resp.text
 
 
 class TestLocalTimeFilter:

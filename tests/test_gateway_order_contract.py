@@ -32,3 +32,14 @@ def test_account_endpoint_marks_provider_timestamp_and_reliability():
     assert 'DateTime.UtcNow.ToString("o")' in handler
     assert "accountDataReliable = user != null" in handler
     assert "accountDataReliable = false" in handler
+
+
+def test_empty_gateway_buy_watchlist_is_fail_closed():
+    source = (Path(__file__).parents[1] / "matriks" / "TradeAiGateway.cs").read_text(
+        encoding="utf-8"
+    )
+    handler = source.split("private async Task HandleOrderAsync", 1)[1]
+    handler = handler.split("private string CheckModeGates", 1)[0]
+    assert 'side == "BUY" && !orderConfig.BuyAllowedSymbols.Contains(symbol)' in handler
+    assert "BuyAllowedSymbols.Length > 0" not in handler
+    assert "not in the active trade watchlist" in handler

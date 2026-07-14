@@ -180,14 +180,22 @@ class Settings(BaseSettings):
     news_risk_lookback_hours: int = 24
     news_risk_keywords_csv: str = "tedbir,brüt takas,kredili işlem yasağı,açığa satış yasağı,manipülasyon,soruşturma,faaliyet durdurma,iflas,konkordato,haciz,ceza,dava,spk inceleme,pay satışı,ortak satışı,bedelli sermaye artırımı,bilanço zararı"
 
-    # Dinamik watchlist keşif evreni — gateway'de kayıtlı olmayan bu semboller
-    # periyodik olarak taranır; BUY sinyali gelince allowedSymbols'e eklenir.
+    # Data-only discovery universe. Subscription/research does not grant BUY;
+    # only two-pass research promotion creates a trade-watchlist row.
     discovery_symbols: str = (
         "GARAN,ISCTR,VAKBN,HALKB,YKBNK,FROTO,TOASO,PGSUS,TAVHL,TCELL,"
         "TTKOM,BIMAS,MGROS,ULKER,ARCLK,VESTL,OTKAR,EKGYO,PETKM,EREGL,"
         "ASELS,BRSAN,ALARK,DOAS,SAHOL,GUBRF,CIMSA,ZOREN,MAVI,ODAS"
     )
-    discovery_interval_minutes: int = 30
+    discovery_interval_minutes: int = 5
+    max_research_candidates_per_cycle: int = 10
+    max_concurrent_research_evaluations: int = 2
+    candidate_cooldown_minutes: int = 15
+    max_trade_watchlist_size: int = 20
+    research_candidate_ttl_hours: int = 24
+    trade_watchlist_ttl_hours: int = 24
+    promotion_min_interval_minutes: int = 10
+    promotion_consecutive_passes: int = 2
 
     # Discovery agent (movers tabanlı) eleme eşikleri.
     # Tavan/taban kilidi: |değişim| bu yüzdeyi aşan adaylar elenir.

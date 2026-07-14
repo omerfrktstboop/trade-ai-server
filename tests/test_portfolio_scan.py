@@ -141,8 +141,9 @@ class TestPortfolioScan:
         scanner = SymbolScanner(gateway=make_gateway_client(FakeGateway()))
         await scanner.tick()
 
-        # Yalnızca watchlist'teki THYAO taranır; portföy turu sembol eklemez.
-        assert calls == ["THYAO"]
+        # ``allowedSymbols`` is only a manual filter now; without an active
+        # trade-watchlist row or a held position the normal scanner is empty.
+        assert calls == []
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -172,11 +173,12 @@ class TestPositionContext:
         ctx = await _build_position_context(req)
 
         assert ctx is not None
-        assert ctx["qty"] == 100.0
-        assert ctx["avgCost"] == 320.0
+        assert ctx["botQty"] == 100.0
+        assert ctx["botAvgCost"] == 320.0
         assert ctx["currentPrice"] == 336.0
-        assert ctx["unrealizedPnlPct"] == 5.0  # (336-320)/320
-        assert ctx["positionValueTl"] == 33600.0
+        assert ctx["botUnrealizedPnlPct"] == 5.0  # (336-320)/320
+        assert ctx["botPositionValueTl"] == 33600.0
+        assert ctx["costSource"] == "BOT_POSITION_CACHE"
 
     async def test_no_position_returns_none(self):
         from app.services.evaluator import _build_position_context
@@ -218,5 +220,5 @@ class TestPositionContext:
         ctx = await _build_position_context(req)
 
         assert ctx is not None
-        assert ctx["avgCost"] is None
-        assert "unrealizedPnlPct" not in ctx
+        assert ctx["botAvgCost"] is None
+        assert "botUnrealizedPnlPct" not in ctx

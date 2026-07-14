@@ -49,17 +49,17 @@ class RiskConfig(BaseSettings):
     allowed_symbols: str = Field(
         default="THYAO,AKBNK,SISE,KCHOL,TUPRS",
         description=(
-            "Comma-separated allow-list of tradeable symbols. EMPTY means "
-            "'allow all symbols' (the whole scanned universe); declined "
-            "symbols are still blocked."
+            "Manual comma-separated BUY filter. EMPTY lifts only this manual "
+            "filter; automated BUY still requires active trade-watchlist "
+            "eligibility and declined symbols remain blocked."
         ),
     )
 
     decline_symbols: str = Field(
         default="",
         description=(
-            "Comma-separated blacklist. Symbols here are never BUY-able even "
-            "when allowed_symbols is empty (allow-all). Exiting an existing "
+            "Comma-separated blacklist. Symbols here are never BUY-able. "
+            "Exiting an existing "
             "position (SELL) stays permitted so holdings never get trapped."
         ),
     )

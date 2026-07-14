@@ -5,11 +5,11 @@ from app.services.order_preflight import validate_order_preflight
 from tests.fake_gateway import make_snapshot_payload
 
 
-def _validate(payload=None, created=None):
+def _validate(payload=None, created=None, health=None):
     return validate_order_preflight(
         payload=payload or make_snapshot_payload("THYAO"),
         positions={"confidence": "HIGH", "snapshotAgeSeconds": 1},
-        health={"configStale": False},
+        health=health or {"configStale": False, "positionsLoaded": True},
         side="BUY",
         qty=1,
         limit_price=71.5,
@@ -89,6 +89,12 @@ def test_old_decision_is_rejected():
         "decision"
         in _validate(created=datetime.now(timezone.utc) - timedelta(seconds=21)).lower()
     )
+
+
+def test_unloaded_positions_are_rejected():
+    reason = _validate(health={"configStale": False, "positionsLoaded": False})
+    assert reason is not None
+    assert "positions" in reason.lower()
 
 
 def test_non_finite_order_is_rejected():

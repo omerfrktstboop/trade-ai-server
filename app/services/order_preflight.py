@@ -98,4 +98,6 @@ def validate_order_preflight(
         return "position snapshot is stale or unreliable"
     if health.get("configStale") is not False:
         return "gateway config is stale"
+    if health.get("positionsLoaded") is not True:
+        return "gateway positions are not loaded"
     return None

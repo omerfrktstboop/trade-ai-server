@@ -224,10 +224,9 @@ class SymbolScanner:
             await self._refresh_pipeline_status()
 
     async def _tick(self) -> list[str]:
-        trading_started = monotonic()
+        """Run one scanner cycle and return evaluated trade symbols for tests."""
         self._last_tick_at = datetime.now(timezone.utc)
         self._last_evaluated_symbols = []
-        """Tek tarama turu. Değerlendirilen sembollerin listesini döndürür (test için)."""
         # ── Runtime config (kill switch, cutoff, semboller, interval) ──────
         kill_switch = False
         runtime_cfg = risk_config
@@ -273,6 +272,8 @@ class SymbolScanner:
         # Research discovery is forced PAPER market-data work, so it must run
         # before account/trading gates and can never enter trade/order paths.
         await self._run_research(runtime_cfg._declined_set())
+        # Trading duration intentionally excludes discovery and research work.
+        trading_started = monotonic()
 
         # Aşağıdaki kapılar trade değerlendirmesi/portföy akışına aittir;
         # discovery'nin hazır olma koşullarının parçası değildir.
@@ -524,7 +525,7 @@ class SymbolScanner:
         if not held:
             return
 
-        logger.info("Portfolio scan starting positions=%s", held)
+        logger.info("PORTFOLIO_SCAN_STARTED positionCount=%s", len(held))
         for symbol in held:
             if self._stop_event.is_set():
                 break

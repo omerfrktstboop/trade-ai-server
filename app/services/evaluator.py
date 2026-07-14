@@ -245,7 +245,6 @@ def build_payload(
     }
     technical_features = _build_technical_feature_payload(req)
     if technical_features:
-        payload.update(technical_features)
         payload["technicalFeatures"] = technical_features
     if news_context:
         payload["newsContext"] = news_context

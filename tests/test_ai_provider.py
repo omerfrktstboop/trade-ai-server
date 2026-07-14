@@ -15,6 +15,17 @@ from app.services.ai_provider import (
     get_provider,
 )
 
+COMPACT_CONTEXT = {
+    "schemaVersion": "ai-decision-context-v1",
+    "symbol": "THYAO",
+    "period": {"requested": "MIN5", "actual": "MIN5", "mismatch": False},
+    "evaluationPurpose": "TRADE_EVALUATION",
+    "dataQuality": {},
+    "price": {"last": 100.0},
+    "market": {},
+    "technical": {},
+}
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -266,7 +277,7 @@ class TestDeepSeekDecide:
 
         with patch("aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value = _mock_session(resp)
-            result = await provider.decide({"symbol": "THYAO", "rsi": 22.0})
+            result = await provider.decide(COMPACT_CONTEXT | {"technical": {"rsi": 22.0}})
 
         assert result["action"] == "BUY"
         assert result["confidence"] == 85.5
@@ -291,7 +302,7 @@ class TestDeepSeekDecide:
 
         with patch("aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value = _mock_session(resp)
-            result = await provider.decide({"symbol": "AKBNK", "rsi": 78.0})
+            result = await provider.decide(COMPACT_CONTEXT | {"symbol": "AKBNK", "technical": {"rsi": 78.0}})
 
         assert result["action"] == "SELL"
         assert result["confidence"] == 90.0
@@ -310,7 +321,7 @@ class TestDeepSeekDecide:
 
         with patch("aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value = _mock_session(resp)
-            result = await provider.decide({})
+            result = await provider.decide(COMPACT_CONTEXT)
 
         assert result["action"] == "WAIT"
         assert result["confidence"] == 60.0
@@ -323,7 +334,7 @@ class TestDeepSeekDecide:
 
         with patch("aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value = _mock_session(resp)
-            result = await provider.decide({})
+            result = await provider.decide(COMPACT_CONTEXT)
 
         assert result["action"] == "WAIT"
         assert result["confidence"] == 0.0
@@ -340,7 +351,7 @@ class TestDeepSeekDecide:
 
         with patch("aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value = session
-            result = await provider.decide({})
+            result = await provider.decide(COMPACT_CONTEXT)
 
         assert result["action"] == "WAIT"
         assert "connection refused" in result["reason"]
@@ -354,7 +365,7 @@ class TestDeepSeekDecide:
 
         with patch("aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value = session
-            result = await provider.decide({})
+            result = await provider.decide(COMPACT_CONTEXT)
 
         assert result["action"] == "WAIT"
         assert (
@@ -377,7 +388,7 @@ class TestDeepSeekDecide:
 
         with patch("aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value = _mock_session(resp)
-            result = await provider.decide({})
+            result = await provider.decide(COMPACT_CONTEXT)
 
         assert result["action"] == "WAIT"
         assert "Could not parse" in result["reason"]
@@ -390,7 +401,7 @@ class TestDeepSeekDecide:
 
         with patch("aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value = _mock_session(resp)
-            result = await provider.decide({})
+            result = await provider.decide(COMPACT_CONTEXT)
 
         assert result["action"] == "WAIT"
         assert "Empty response" in result["reason"]
@@ -406,13 +417,13 @@ class TestDeepSeekDecide:
 
         with patch("aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value = _mock_session(resp)
-            result = await provider.decide({})
+            result = await provider.decide(COMPACT_CONTEXT)
 
         assert result["action"] == "WAIT"
         assert "Empty content" in result["reason"]
 
     @pytest.mark.asyncio
-    async def test_payload_includes_symbol_and_indicators(self):
+    async def test_payload_includes_compact_context_only(self):
         """Verify that the payload is serialized and sent correctly."""
         provider = _provider()
         resp = _fake_resp(
@@ -434,10 +445,14 @@ class TestDeepSeekDecide:
             mock_cls.return_value = session
             await provider.decide(
                 {
+                    "schemaVersion": "ai-decision-context-v1",
                     "symbol": "TUPRS",
-                    "rsi": 45.0,
-                    "ema20": 200.0,
-                    "lastPrice": 205.0,
+                    "period": {"requested": "MIN5", "actual": "MIN5", "mismatch": False},
+                    "evaluationPurpose": "TRADE_EVALUATION",
+                    "dataQuality": {"quoteReliable": True},
+                    "price": {"last": 205.0},
+                    "market": {},
+                    "technical": {"rsi": 45.0, "ema20": 200.0},
                 }
             )
 
@@ -454,6 +469,8 @@ class TestDeepSeekDecide:
         assert json_body["messages"][0]["role"] == "system"
         assert json_body["messages"][1]["role"] == "user"
         assert "TUPRS" in json_body["messages"][1]["content"]
+        assert '"price": {' in json_body["messages"][1]["content"]
+        assert "lastPrice" not in json_body["messages"][1]["content"]
 
 
 # ── Factory tests for new config ──────────────────────────────────────────────
@@ -479,12 +496,12 @@ class TestMockProvider:
     @pytest.mark.asyncio
     async def test_always_returns_wait(self):
         provider = MockAiProvider()
-        result = await provider.decide({"symbol": "THYAO"})
+        result = await provider.decide(COMPACT_CONTEXT)
         assert result["action"] == "WAIT"
         assert result["confidence"] == 0.0
 
     @pytest.mark.asyncio
     async def test_ignores_input_always_safe(self):
         provider = MockAiProvider()
-        result = await provider.decide({"rsi": 10, "macd_cross": "bullish"})
+        result = await provider.decide(COMPACT_CONTEXT)
         assert result["action"] == "WAIT"

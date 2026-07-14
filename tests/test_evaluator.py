@@ -78,7 +78,7 @@ class TestEvaluateSymbol:
         assert result.response.request_id.startswith("THYAO-")
         assert result.response.request_id.endswith("-scan")
 
-    async def test_ai_payload_contains_snapshot_fields_and_steps(self):
+    async def test_ai_payload_is_compact_context_only(self):
         fake = FakeGateway()
         provider = StubProvider()
 
@@ -88,15 +88,13 @@ class TestEvaluateSymbol:
 
         assert len(provider.payloads) == 1
         payload = provider.payloads[0]
+        assert payload["schemaVersion"] == "ai-decision-context-v1"
         assert payload["symbol"] == "THYAO"
-        assert payload["lastPrice"] == 71.5
-        assert payload["rsi"] == 55.0
-        # agenticSteps eski ContextStep şemasında olmalı
-        steps = payload["agenticSteps"]
-        assert steps[0]["stepNo"] == 1
-        assert steps[0]["symbol"] == "THYAO"
-        assert steps[0]["dataType"] == "OHLCV"
-        assert steps[0]["payload"]["lastPrice"] == 71.5
+        assert payload["price"]["last"] == 71.5
+        assert payload["technical"]["rsi"] == 55.0
+        assert "agenticSteps" not in payload
+        assert "lastPrice" not in payload
+        assert "rsi" not in payload
 
     async def test_no_usable_price_returns_none_without_ai_call(self):
         fake = FakeGateway()
@@ -126,7 +124,7 @@ class TestEvaluateSymbol:
 
 
 class TestRelatedSymbols:
-    async def test_related_symbol_snapshot_added_as_second_step(self):
+    async def test_related_symbol_data_is_not_sent_to_provider(self):
         # ANELE → THYAO (evaluator.RELATED_SYMBOLS)
         fake = FakeGateway(symbols=["ANELE", "THYAO"])
         provider = StubProvider()
@@ -135,10 +133,7 @@ class TestRelatedSymbols:
             "ANELE", gateway=make_gateway_client(fake), provider=provider
         )
 
-        steps = provider.payloads[0]["agenticSteps"]
-        assert len(steps) == 2
-        assert steps[1]["symbol"] == "THYAO"
-        assert steps[1]["dataType"] == "DEPTH"
+        assert "agenticSteps" not in provider.payloads[0]
 
     async def test_related_symbol_failure_does_not_block_decision(self):
         # THYAO gateway'in listesinde yok → ilişkili çağrı 400 alır ama karar üretilir
@@ -150,8 +145,7 @@ class TestRelatedSymbols:
         )
 
         assert result is not None
-        steps = provider.payloads[0]["agenticSteps"]
-        assert len(steps) == 1
+        assert "agenticSteps" not in provider.payloads[0]
 
     async def test_symbol_without_related_mapping_single_step(self):
         fake = FakeGateway()
@@ -161,8 +155,7 @@ class TestRelatedSymbols:
             "AKBNK", gateway=make_gateway_client(fake), provider=provider
         )
 
-        steps = provider.payloads[0]["agenticSteps"]
-        assert len(steps) == 1
+        assert "agenticSteps" not in provider.payloads[0]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

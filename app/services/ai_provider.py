@@ -18,6 +18,7 @@ import aiohttp
 
 from app.config import AIProvider, settings
 from app.core.prompts import get_trading_system_prompt
+from app.models.ai_decision_context import AiDecisionContext
 
 logger = logging.getLogger(__name__)
 
@@ -155,11 +156,14 @@ def _normalize_decision(raw: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _compact_context_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate the sole provider input contract at the provider boundary."""
+    return AiDecisionContext.model_validate(payload).model_dump(exclude_none=True)
+
+
 def _build_payload_str(payload: dict[str, Any]) -> str:
-    """Serialize payload to a compact JSON string for the user message."""
-    # Filter out large/token fields to keep prompt concise
-    relevant = {k: v for k, v in payload.items() if k != "requestId"}
-    return json.dumps(relevant, indent=2, ensure_ascii=False, default=str)
+    """Serialize a validated compact decision context for the user message."""
+    return json.dumps(_compact_context_payload(payload), indent=2, ensure_ascii=False)
 
 
 # ── Abstract base ─────────────────────────────────────────────────────────────
@@ -170,10 +174,10 @@ class AiProvider(ABC):
 
     @abstractmethod
     async def decide(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Produce a trading decision from the signal payload.
+        """Produce a trading decision from an ``AiDecisionContext`` payload.
 
         Parameters:
-            payload: Serialized SignalRequest fields (OHLC, indicators, …).
+            payload: Serialized ``ai-decision-context-v1`` fields only.
 
         Returns:
             A dict with at minimum:
@@ -206,6 +210,7 @@ class MockAiProvider(AiProvider):
     """Always returns WAIT — safe no-op for testing and development."""
 
     async def decide(self, payload: dict[str, Any]) -> dict[str, Any]:
+        _compact_context_payload(payload)
         logger.debug("MockAiProvider.decide called — returning WAIT")
         return {
             "action": "WAIT",
@@ -254,7 +259,7 @@ class DeepSeekProvider(AiProvider):
         }
 
     async def decide(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Send signal payload to DeepSeek, parse JSON response.
+        """Send compact decision context to DeepSeek, parse JSON response.
 
         On any error (network, timeout, parse) → WAIT fallback.
         """

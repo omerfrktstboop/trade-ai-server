@@ -291,8 +291,14 @@ def build_ai_decision_context(
         headline = str(item.get("title") or "").strip()
         if not headline:
             continue
-        summary = item.get("content")
-        news_items.append({"headline": headline[:500], "summary": str(summary)[:1000] if summary else None, "sentiment": "UNKNOWN"})
+        summary = item.get("summary")
+        news_items.append(
+            {
+                "headline": headline[:500],
+                "summary": str(summary)[:1000] if summary else None,
+                "sentiment": item.get("sentiment") or "UNKNOWN",
+            }
+        )
 
     broker_entry = (broker_flow_context or {}).get(symbol, {})
     kap_entry = (kap_context or {}).get(symbol, {})
@@ -324,7 +330,9 @@ def build_ai_decision_context(
         else:
             depth.update({
                 "spreadPct": req.spread_pct,
-                "buyPressure": req.depth_buy_pressure_score,
+                "buyPressure": min(
+                    1.0, max(0.0, (req.depth_buy_pressure_score or 0.0) / 100.0)
+                ),
                 "signal": req.depth_order_book_signal,
                 "bidAskRatio": req.depth_bid_ask_ratio_top5,
                 "nearestBidWallDistancePct": req.depth_nearest_bid_wall_distance_pct,

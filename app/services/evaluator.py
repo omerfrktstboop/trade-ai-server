@@ -1,25 +1,25 @@
-"""In-process signal evaluator — full-inversion mimarisinin beyni.
+﻿"""In-process signal evaluator â€” full-inversion mimarisinin beyni.
 
-Eski FETCH_DATA/session protokolünün (``/api/signal/evaluate-agent`` +
+Eski FETCH_DATA/session protokolÃ¼nÃ¼n (``/api/signal/evaluate-agent`` +
 ``agent_session`` + ``session_store`` + ``agent_planner`` + HTTP ping-pong)
-yerine geçer: veri toplama artık ağ üzerinden çok turlu bir oturum değil,
-bu modül içinde senkron gateway çağrılarıdır.
+yerine geÃ§er: veri toplama artÄ±k aÄŸ Ã¼zerinden Ã§ok turlu bir oturum deÄŸil,
+bu modÃ¼l iÃ§inde senkron gateway Ã§aÄŸrÄ±larÄ±dÄ±r.
 
-Akış::
+AkÄ±ÅŸ::
 
-    gateway.get_snapshot(root)                      # OHLCV+DEPTH+TECHNICAL tek çağrıda
-      └─ RELATED_SYMBOLS[root] varsa ek snapshot    # ör. ANELE → THYAO derinliği
-    → SignalRequest köprüsü
-    → runtime kontroller (kill switch, mode override, runtime risk config)
-    → news + fundamentals bağlamı
-    → admin test override VEYA AI provider
-    → RiskEngine
-    → log + DB persist (market_snapshots / ai_decisions / risk_decisions)
+    gateway.get_snapshot(root)                      # OHLCV+DEPTH+TECHNICAL tek Ã§aÄŸrÄ±da
+      â””â”€ RELATED_SYMBOLS[root] varsa ek snapshot    # Ã¶r. ANELE â†’ THYAO derinliÄŸi
+    â†’ SignalRequest kÃ¶prÃ¼sÃ¼
+    â†’ runtime kontroller (kill switch, mode override, runtime risk config)
+    â†’ news + fundamentals baÄŸlamÄ±
+    â†’ admin test override VEYA AI provider
+    â†’ RiskEngine
+    â†’ log + DB persist (market_snapshots / ai_decisions / risk_decisions)
 
-Bu modül aynı zamanda değerlendirme boru hattının paylaşılan yardımcılarına
-ev sahipliği yapar (``build_payload``, ``dict_to_risk_decision``,
-``with_runtime_controls``, ``persist_evaluation`` …). ``/api/signal/evaluate``
-router'ı bunları buradan alır — beyin serviste, HTTP katmanı ince.
+Bu modÃ¼l aynÄ± zamanda deÄŸerlendirme boru hattÄ±nÄ±n paylaÅŸÄ±lan yardÄ±mcÄ±larÄ±na
+ev sahipliÄŸi yapar (``build_payload``, ``dict_to_risk_decision``,
+``with_runtime_controls``, ``persist_evaluation`` â€¦). ``/api/signal/evaluate``
+router'Ä± bunlarÄ± buradan alÄ±r â€” beyin serviste, HTTP katmanÄ± ince.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from app.core.risk_config import RiskConfig, risk_config
 from app.db.session import async_session_factory
 from sqlalchemy import select
 
+from app.models.ai_decision_context import AiDecisionContext
 from app.models.db import AiDecision as AiDecisionModel
 from app.models.db import BotPosition as BotPositionModel
 from app.models.db import OrderLog
@@ -99,7 +100,7 @@ def _json_safe(value: Any) -> Any:
     """Return a JSON-compatible copy for DB JSON columns."""
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
-# Statik singleton — runtime config yüklenemediğinde kullanılan yedek motor.
+# Statik singleton â€” runtime config yÃ¼klenemediÄŸinde kullanÄ±lan yedek motor.
 _static_effective_config = EffectiveRiskConfigResolver().resolve(
     environment_limits=EnvironmentRiskLimits.from_environment(),
     system_config=SystemRiskConfig(),
@@ -119,8 +120,8 @@ def _decision_persistence_metadata(payload: dict[str, Any]) -> tuple[str, str | 
     return settings.ai_provider.value, model
 
 
-# Kök sembol değerlendirilirken derinliği de çekilen ilişkili hisseler.
-# (Eski agent_planner.RELATED_SYMBOLS — planner silindi, kural burada yaşıyor.)
+# KÃ¶k sembol deÄŸerlendirilirken derinliÄŸi de Ã§ekilen iliÅŸkili hisseler.
+# (Eski agent_planner.RELATED_SYMBOLS â€” planner silindi, kural burada yaÅŸÄ±yor.)
 RELATED_SYMBOLS: dict[str, str] = {
     "ANELE": "THYAO",
     "PGSUS": "THYAO",
@@ -130,11 +131,11 @@ RELATED_SYMBOLS: dict[str, str] = {
 
 @dataclass(frozen=True)
 class EvaluationResult:
-    """Final karar + kararın alındığı efektif mod.
+    """Final karar + kararÄ±n alÄ±ndÄ±ÄŸÄ± efektif mod.
 
-    ``mode`` runtime override'lar ve ``force_paper`` uygulandıktan sonraki
-    değerdir — scanner'ın emir gönderme kapısı bu alana bakar (SignalResponse
-    mode taşımaz).
+    ``mode`` runtime override'lar ve ``force_paper`` uygulandÄ±ktan sonraki
+    deÄŸerdir â€” scanner'Ä±n emir gÃ¶nderme kapÄ±sÄ± bu alana bakar (SignalResponse
+    mode taÅŸÄ±maz).
     """
 
     response: SignalResponse
@@ -147,9 +148,9 @@ class EvaluationResult:
     raw_action: SignalAction | None = None
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# AI payload oluşturma
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# AI payload oluÅŸturma
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 
 def build_payload(
@@ -161,12 +162,12 @@ def build_payload(
     kap_context: dict[str, Any] | None = None,
     active_config: RiskConfig | None = None,
 ) -> dict:
-    """Convert a SignalRequest into a plain dict for the AI provider.
+    """Build the complete audit payload retained outside provider requests.
 
     ``news_context``, ``broker_flow_context`` (smart-money / AKD flow) and
     ``fundamentals_context`` are live: the scanner/evaluate flow fetches them
     per symbol and passes them here. ``fund_context`` (fund_scanner) is still
-    a placeholder and normally not passed — kept in the signature so wiring a
+    a placeholder and normally not passed â€” kept in the signature so wiring a
     real source later is a one-line change at the call site.
     """
     config = active_config or risk_config
@@ -262,6 +263,107 @@ def build_payload(
     return payload
 
 
+
+
+def build_ai_decision_context(
+    req: SignalRequest,
+    *,
+    news_context: dict[str, Any] | None = None,
+    broker_flow_context: dict[str, Any] | None = None,
+    kap_context: dict[str, Any] | None = None,
+    profile: str | None = None,
+    macro_market_regime: str | None = None,
+    position_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the only market-data contract sent to an AI provider.
+
+    The gateway snapshot and the broader audit payload deliberately stay out of
+    this contract. ``exclude_none=True`` keeps it compact without dropping
+    meaningful zeroes or ``False`` flags.
+    """
+    symbol = req.symbol.strip().upper()
+    news_entry = (news_context or {}).get(symbol, {})
+    raw_news = news_entry.get("latestNews", []) if isinstance(news_entry, dict) else []
+    news_items = []
+    for item in raw_news[:3] if isinstance(raw_news, list) else []:
+        if not isinstance(item, dict):
+            continue
+        headline = str(item.get("title") or "").strip()
+        if not headline:
+            continue
+        summary = item.get("content")
+        news_items.append({"headline": headline[:500], "summary": str(summary)[:1000] if summary else None, "sentiment": "UNKNOWN"})
+
+    broker_entry = (broker_flow_context or {}).get(symbol, {})
+    kap_entry = (kap_context or {}).get(symbol, {})
+    events: dict[str, Any] = {}
+    if news_items:
+        events["news"] = {"items": news_items}
+    if isinstance(broker_entry, dict) and broker_entry:
+        top_buyers = broker_entry.get("topBuyers") or []
+        top_sellers = broker_entry.get("topSellers") or []
+        events["brokerFlow"] = {
+            "smartMoneyFlow": broker_entry.get("smartMoneyFlow"),
+            "netSmartLot": broker_entry.get("netSmartLot"),
+            "topBuyer": (top_buyers[0].get("name") if top_buyers and isinstance(top_buyers[0], dict) else None),
+            "topSeller": (top_sellers[0].get("name") if top_sellers and isinstance(top_sellers[0], dict) else None),
+        }
+    if isinstance(kap_entry, dict) and kap_entry:
+        risk_events = kap_entry.get("riskEvents24h") or []
+        events["kap"] = {
+            "blockingRisk": kap_entry.get("hasBlockingRisk"),
+            "activeRiskCount": len(risk_events) if isinstance(risk_events, list) else None,
+            "unknownDateRisk": kap_entry.get("hasUnknownDateRisk"),
+        }
+
+    depth: dict[str, Any] | None = None
+    if req.depth_reliable is not None:
+        depth = {"reliable": req.depth_reliable}
+        if req.depth_reliable is False:
+            depth["signal"] = "UNAVAILABLE"
+        else:
+            depth.update({
+                "spreadPct": req.spread_pct,
+                "buyPressure": req.depth_buy_pressure_score,
+                "signal": req.depth_order_book_signal,
+                "bidAskRatio": req.depth_bid_ask_ratio_top5,
+                "nearestBidWallDistancePct": req.depth_nearest_bid_wall_distance_pct,
+                "nearestAskWallDistancePct": req.depth_nearest_ask_wall_distance_pct,
+                "wallConcentrationRisk": req.depth_wall_concentration_risk,
+            })
+
+    position: dict[str, Any] | None = None
+    if req.bot_position_qty > 0:
+        position = {
+            "botQty": req.bot_position_qty,
+            "botAvgCost": (position_context or {}).get("botAvgCost"),
+            "unrealizedPnlPct": (position_context or {}).get("botUnrealizedPnlPct"),
+            "lockedLongTerm": req.locked_long_term_qty > 0,
+        }
+
+    context = AiDecisionContext.model_validate({
+        "symbol": symbol,
+        "period": {"requested": req.requested_timeframe or req.timeframe, "actual": req.actual_bar_period, "mismatch": req.timeframe_mismatch},
+        "profile": profile,
+        "evaluationPurpose": req.evaluation_purpose,
+        "dataQuality": {"quoteAgeSec": req.quote_age_seconds, "ohlcvAgeSec": req.ohlcv_age_seconds, "depthAgeSec": req.depth_age_seconds, "quoteReliable": req.quote_reliable, "ohlcReliable": req.ohlc_reliable},
+        "price": {"last": req.last_price, "open": req.open, "high": req.high, "low": req.low},
+        "market": {"barVolume": req.bar_volume, "sessionTurnoverTl": req.session_turnover_tl, "macroMarketRegime": macro_market_regime, "symbolTrendRegime": req.symbol_trend_regime or req.market_regime},
+        "technical": {
+            "rsi": req.rsi, "ema20": req.ema20, "ema50": req.ema50,
+            "macd": req.macd, "macdSignal": req.macd_signal, "atr": req.atr,
+            "natr": req.natr, "adx": req.adx, "obvSlope": req.obv_slope,
+            "vwapDistancePct": req.vwap_distance_pct, "alphaTrendSignal": req.alpha_trend_signal,
+            "indicatorConsensus": req.indicator_consensus, "indicatorConsensusRatio": req.indicator_consensus_ratio,
+            "indicatorBuyCount": req.indicator_buy_count, "indicatorSellCount": req.indicator_sell_count,
+            "indicatorNeutralCount": req.indicator_neutral_count,
+        },
+        "depth": depth,
+        "position": position,
+        "events": events or None,
+    })
+    return context.model_dump(exclude_none=True)
+
 def _build_depth_context(req: SignalRequest) -> dict[str, Any]:
     if req.depth_reliable is False:
         return {"depthReliable": False, "orderBookSignal": "UNAVAILABLE"}
@@ -325,9 +427,9 @@ def _build_technical_feature_payload(req: SignalRequest) -> dict[str, Any]:
     return result
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # Runtime kontroller
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 
 async def with_runtime_controls(
@@ -480,13 +582,13 @@ def _has_explicit_daily_trade_count(req: SignalRequest) -> bool:
     return bool({"daily_trade_count", "dailyTradeCount"} & req.model_fields_set)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# AI yanıtı → RiskDecision
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# AI yanÄ±tÄ± â†’ RiskDecision
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 
 def _safe_action(raw_value: Any) -> SignalAction:
-    """Parse action string safely — invalid values fall back to WAIT."""
+    """Parse action string safely â€” invalid values fall back to WAIT."""
     if not raw_value:
         return SignalAction.WAIT
     try:
@@ -496,7 +598,7 @@ def _safe_action(raw_value: Any) -> SignalAction:
 
 
 def _safe_float(raw_value: Any, default: Any = 0.0) -> Any:
-    """Parse a float safely — non-numeric values return the default."""
+    """Parse a float safely â€” non-numeric values return the default."""
     if raw_value is None:
         return default
     try:
@@ -519,7 +621,7 @@ def _safe_decimal(raw_value: Any, default: Any = None) -> Decimal | Any:
 def dict_to_risk_decision(raw: dict, _req: SignalRequest | None = None) -> RiskDecision:
     """Parse a provider response dict into a RiskDecision.
 
-    Every field is parsed defensively — no matter what garbage the AI
+    Every field is parsed defensively â€” no matter what garbage the AI
     returns, this function will not raise. Invalid actions fall back to
     WAIT, non-numeric fields default to 0.
     """
@@ -553,7 +655,7 @@ def dict_to_risk_decision(raw: dict, _req: SignalRequest | None = None) -> RiskD
 def _parse_entry_range(raw: dict) -> EntryRange | None:
     """Parse entryRange from AI response (supports camelCase + snake_case).
 
-    Never raises — garbage values produce None.
+    Never raises â€” garbage values produce None.
     """
     # camelCase nested: {"entryRange": {"min": 100, "max": 105}}
     entry_range = raw.get("entryRange") or raw.get("entry_range")
@@ -586,9 +688,9 @@ def _parse_entry_range(raw: dict) -> EntryRange | None:
     return None
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Kalıcılık
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# KalÄ±cÄ±lÄ±k
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 
 async def persist_evaluation(
@@ -638,8 +740,8 @@ async def persist_evaluation(
                     mode=req.mode.value,
                 )
             )
-            # Cache tekrarında sağlayıcının eski gecikmesini yazmak yanıltıcı
-            # olur — süre yalnızca gerçek LLM çağrısında kaydedilir.
+            # Cache tekrarÄ±nda saÄŸlayÄ±cÄ±nÄ±n eski gecikmesini yazmak yanÄ±ltÄ±cÄ±
+            # olur â€” sÃ¼re yalnÄ±zca gerÃ§ek LLM Ã§aÄŸrÄ±sÄ±nda kaydedilir.
             response_time_ms = (
                 raw_ai.get("_response_time_ms")
                 if payload.get("decisionSource") == "llm"
@@ -685,7 +787,7 @@ async def persist_evaluation(
             await session.commit()
 
     except Exception:
-        # DB is optional for the evaluation flow — never fail the caller
+        # DB is optional for the evaluation flow â€” never fail the caller
         logger.exception(
             "Failed to persist signal evaluation request_id=%s symbol=%s",
             req.request_id,
@@ -750,9 +852,9 @@ async def persist_sizing_audit(req: SignalRequest, engine: RiskEngine) -> None:
         )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Gateway snapshot → SignalRequest
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# Gateway snapshot â†’ SignalRequest
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 
 def _payload_get(payload: dict[str, Any], key: str, default: Any = None) -> Any:
@@ -918,21 +1020,21 @@ def snapshot_to_signal_request(
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Ana değerlendirme akışı
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# Ana deÄŸerlendirme akÄ±ÅŸÄ±
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 
 def _build_request_id(symbol: str) -> str:
-    """Eski bot'un BuildRequestId formatıyla uyumlu: SYMBOL-yyyyMMdd-HHmmss-scan."""
+    """Eski bot'un BuildRequestId formatÄ±yla uyumlu: SYMBOL-yyyyMMdd-HHmmss-scan."""
     return f"{symbol}-{datetime.now():%Y%m%d-%H%M%S}-scan"
 
 
 def _snapshot_step(
     step_no: int, symbol: str, data_type: str, payload: dict[str, Any], reason: str
 ) -> dict[str, Any]:
-    """AI payload'undaki ``agenticSteps`` girdisi — eski ContextStep şeması
-    (stepNo/symbol/dataType/payload/reason) korunuyor ki prompt değişmesin."""
+    """AI payload'undaki ``agenticSteps`` girdisi â€” eski ContextStep ÅŸemasÄ±
+    (stepNo/symbol/dataType/payload/reason) korunuyor ki prompt deÄŸiÅŸmesin."""
     return {
         "stepNo": step_no,
         "symbol": symbol,
@@ -953,24 +1055,24 @@ async def evaluate_symbol(
     evaluation_purpose: str = "TRADING",
     research_context: dict[str, Any] | None = None,
 ) -> EvaluationResult | None:
-    """Bir sembolü uçtan uca değerlendir; final kararı döndür.
+    """Bir sembolÃ¼ uÃ§tan uca deÄŸerlendir; final kararÄ± dÃ¶ndÃ¼r.
 
     Args:
-        symbol: Kök sembol (ör. ``"THYAO"``).
-        gateway: Matriks gateway client'ı (default: paylaşılan singleton).
+        symbol: KÃ¶k sembol (Ã¶r. ``"THYAO"``).
+        gateway: Matriks gateway client'Ä± (default: paylaÅŸÄ±lan singleton).
         provider: AI provider (default: settings'ten gelen singleton).
-        mode: İstek modu — runtime ``tradingMode`` override'ı yine uygulanır.
-        force_paper: True → mode override'dan SONRA bile PAPER'a sabitle;
-            emir yolu bu çağrı için tamamen kapalı demektir.
-        request_id: Verilmezse ``SYMBOL-yyyyMMdd-HHmmss-scan`` üretilir.
+        mode: Ä°stek modu â€” runtime ``tradingMode`` override'Ä± yine uygulanÄ±r.
+        force_paper: True â†’ mode override'dan SONRA bile PAPER'a sabitle;
+            emir yolu bu Ã§aÄŸrÄ± iÃ§in tamamen kapalÄ± demektir.
+        request_id: Verilmezse ``SYMBOL-yyyyMMdd-HHmmss-scan`` Ã¼retilir.
 
     Returns:
         ``EvaluationResult`` (final karar + efektif mod); veri
-        değerlendirilemeyecek kadar bozuksa (lastPrice<=0) ``None``.
+        deÄŸerlendirilemeyecek kadar bozuksa (lastPrice<=0) ``None``.
 
     Raises:
-        GatewayUnavailable: Gateway'e hiç ulaşılamıyor — çağıran (scanner)
-        yakalayıp turu atlar.
+        GatewayUnavailable: Gateway'e hiÃ§ ulaÅŸÄ±lamÄ±yor â€” Ã§aÄŸÄ±ran (scanner)
+        yakalayÄ±p turu atlar.
     """
     gateway = gateway or gateway_client
     decision_created_utc = datetime.now(timezone.utc)
@@ -979,7 +1081,7 @@ async def evaluate_symbol(
     evaluation_purpose = str(evaluation_purpose or "TRADING").strip().upper()
     research_only = evaluation_purpose == "RESEARCH_DISCOVERY"
 
-    # ── 1. Kök sembol snapshot'ı ─────────────────────────────────────────
+    # â”€â”€ 1. KÃ¶k sembol snapshot'Ä± â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     snapshot = await gateway.get_snapshot(symbol)
     root_payload: dict[str, Any] = snapshot.get("payload") or {}
 
@@ -998,7 +1100,7 @@ async def evaluate_symbol(
         _snapshot_step(1, symbol, "OHLCV", root_payload, "Root symbol snapshot")
     ]
 
-    # ── 2. İlişkili sembol verisi ────────────────────────────────────────
+    # â”€â”€ 2. Ä°liÅŸkili sembol verisi â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     related = RELATED_SYMBOLS.get(symbol)
     if related is not None:
         try:
@@ -1009,11 +1111,11 @@ async def evaluate_symbol(
                     related,
                     "DEPTH",
                     related_snapshot.get("payload") or {},
-                    f"{symbol} için {related} derinlik verisi (ilişkili hisse)",
+                    f"{symbol} iÃ§in {related} derinlik verisi (iliÅŸkili hisse)",
                 )
             )
         except GatewayError as exc:
-            # İlişkili veri "olsa iyi olur" kategorisi — yoksa kararı engellemez.
+            # Ä°liÅŸkili veri "olsa iyi olur" kategorisi â€” yoksa kararÄ± engellemez.
             logger.warning(
                 "Related symbol snapshot failed; continuing without it "
                 "root=%s related=%s error=%s",
@@ -1022,7 +1124,7 @@ async def evaluate_symbol(
                 exc,
             )
 
-    # ── 3. SignalRequest köprüsü ─────────────────────────────────────────
+    # â”€â”€ 3. SignalRequest kÃ¶prÃ¼sÃ¼ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     sig_req = snapshot_to_signal_request(
         symbol, root_payload, request_id=request_id, mode=mode
     )
@@ -1032,7 +1134,7 @@ async def evaluate_symbol(
         update={"evaluation_purpose": evaluation_purpose}
     )
 
-    # ── 4. Runtime kontroller ────────────────────────────────────────────
+    # â”€â”€ 4. Runtime kontroller â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     sig_req, runtime_engine, kill_switch_enabled = await with_runtime_controls(sig_req)
     sig_req = await with_resolved_daily_trade_count(sig_req)
     sig_req = await with_trade_eligibility(sig_req)
@@ -1058,7 +1160,7 @@ async def evaluate_symbol(
             raw_action=SignalAction.WAIT,
         )
 
-    # ── 5. Dış bağlam (haber + akıllı para + admin fundamentals) ─────────
+    # â”€â”€ 5. DÄ±ÅŸ baÄŸlam (haber + akÄ±llÄ± para + admin fundamentals) â”€â”€â”€â”€â”€â”€â”€â”€â”€
     runtime_config_hash = decision_context_fingerprint(
         runtime_engine.config.model_dump(mode="json")
     )
@@ -1122,17 +1224,26 @@ async def evaluate_symbol(
     if research_only:
         payload["allowOrder"] = False
 
-    # ── 5.5. Pozisyon bağlamı (portfolio yönetimi) ───────────────────────
-    # Açık bot pozisyonu varken LLM'in görevi yeni alım aramak değil eldeki
-    # pozisyonu yönetmektir: maliyet + anlık K/Z payload'a eklenir ve prompt
+    # â”€â”€ 5.5. Pozisyon baÄŸlamÄ± (portfolio yÃ¶netimi) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # AÃ§Ä±k bot pozisyonu varken LLM'in gÃ¶revi yeni alÄ±m aramak deÄŸil eldeki
+    # pozisyonu yÃ¶netmektir: maliyet + anlÄ±k K/Z payload'a eklenir ve prompt
     # kural 16 devreye girer (kar al / zarar kes / tut).
     position_context = await _build_position_context(sig_req)
     if position_context:
         payload["positionContext"] = position_context
 
-    # ── 6. Admin test override VEYA AI kararı ────────────────────────────
-    # Override asla REAL_LIVE'da uygulanmaz — test amaçlı bir özellik gerçek
+    # â”€â”€ 6. Admin test override VEYA AI kararÄ± â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Override asla REAL_LIVE'da uygulanmaz â€” test amaÃ§lÄ± bir Ã¶zellik gerÃ§ek
     # sermayeyi hareket ettiremesin.
+    ai_context = build_ai_decision_context(
+        sig_req,
+        news_context=news_context,
+        broker_flow_context=broker_flow_context,
+        kap_context=kap_context,
+        profile=active_profile_code,
+        macro_market_regime=market_regime,
+        position_context=position_context,
+    )
     raw: dict[str, Any] | None = None
     if not research_only and sig_req.mode in (
         SignalMode.PAPER,
@@ -1147,8 +1258,8 @@ async def evaluate_symbol(
         except Exception:
             logger.exception("Failed to check signal override for %s", sig_req.symbol)
 
-    # ── 6.5. Token-cost kapıları (LLM'e gitmeden karar) ──────────────────
-    # Sıra: admin override > pre-flight gate > karar cache'i > LLM.
+    # â”€â”€ 6.5. Token-cost kapÄ±larÄ± (LLM'e gitmeden karar) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # SÄ±ra: admin override > pre-flight gate > karar cache'i > LLM.
     if raw is None and not research_only:
         gate_reason = preflight_wait_reason(
             symbol=sig_req.symbol,
@@ -1166,7 +1277,7 @@ async def evaluate_symbol(
             payload["decisionSource"] = "preflight-gate"
 
     if raw is None:
-        context_fingerprint = decision_context_fingerprint(payload)
+        context_fingerprint = decision_context_fingerprint(ai_context)
         cached = decision_cache.get(
             sig_req.symbol, sig_req.last_price, news_context, context_fingerprint
         )
@@ -1176,14 +1287,14 @@ async def evaluate_symbol(
 
     if raw is None:
         provider = provider or get_default_provider()
-        raw = await provider.decide(payload)
+        raw = await provider.decide(ai_context)
         payload["decisionSource"] = "llm"
-        # Yalnızca gerçek LLM cevapları cache'lenir — kapı WAIT'leri değil.
+        # YalnÄ±zca gerÃ§ek LLM cevaplarÄ± cache'lenir â€” kapÄ± WAIT'leri deÄŸil.
         decision_cache.put(
             sig_req.symbol, sig_req.last_price, news_context, raw, context_fingerprint
         )
 
-    # ── 7. RiskEngine (makro rejim filtresiyle) ──────────────────────────
+    # â”€â”€ 7. RiskEngine (makro rejim filtresiyle) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     decision = dict_to_risk_decision(raw, sig_req)
     if decision.action == SignalAction.BUY and not research_only:
         sig_req = await with_fresh_account_sizing_context(
@@ -1198,7 +1309,7 @@ async def evaluate_symbol(
 
     response = await apply_news_risk_lock(response, sig_req.symbol)
 
-    # ── 8. Log + persist ─────────────────────────────────────────────────
+    # â”€â”€ 8. Log + persist â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _log_evaluation(sig_req, response)
     await persist_evaluation(sig_req, payload, raw, response)
     try:
@@ -1225,10 +1336,10 @@ async def evaluate_symbol(
 
 
 async def _build_position_context(req: SignalRequest) -> dict[str, Any] | None:
-    """Açık bot pozisyonu için maliyet + K/Z bağlamı üret; yoksa None.
+    """AÃ§Ä±k bot pozisyonu iÃ§in maliyet + K/Z baÄŸlamÄ± Ã¼ret; yoksa None.
 
-    Maliyet ``bot_positions.avg_price``ten okunur (position_sync güncel
-    tutar). DB hatası veya kayıt yokluğu evaluation'ı asla düşürmez.
+    Maliyet ``bot_positions.avg_price``ten okunur (position_sync gÃ¼ncel
+    tutar). DB hatasÄ± veya kayÄ±t yokluÄŸu evaluation'Ä± asla dÃ¼ÅŸÃ¼rmez.
     """
     if req.bot_position_qty <= 0:
         return None
@@ -1339,3 +1450,7 @@ def _log_evaluation(req: SignalRequest, response: SignalResponse) -> None:
         request=req.model_dump(by_alias=True, exclude={"mode"}, mode="json"),
         response=response.model_dump(by_alias=True, mode="json"),
     )
+
+
+
+

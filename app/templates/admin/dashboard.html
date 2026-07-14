@@ -52,6 +52,16 @@
   </div>
 </div>
 
+<div class="mb-24">
+  <div class="flex-between mb-16"><h2 class="section-title">Discovery ve Research Durumu</h2><a class="log-link" href="/admin/research">Araştırma adayları →</a></div>
+  <div class="stat-grid">
+    <div class="card"><div class="card-header">Son Ranking</div><div class="card-value" style="font-size:16px">{{ bot_status.scanner.rankingStatus | default('NOT_RUN') }}</div><div class="mt-16 text-sm text-muted">zaman: {{ bot_status.scanner.lastRankingAt | default('never') }}<br>kaynak: {{ bot_status.scanner.rankingSource | default('NONE') }}</div></div>
+    <div class="card"><div class="card-header">Ranking Girdileri</div><div class="card-value">{{ bot_status.scanner.mergedCandidateCount | default(0) }}</div><div class="mt-16 text-sm text-muted">birleşen aday<br>haftalık: {{ bot_status.scanner.weeklyGainerCount | default(0) }}, TL ciro: {{ bot_status.scanner.turnoverLeaderCount | default(0) }}<br>göreceli hacim: {{ bot_status.scanner.relativeVolumeLeaderCount | default(0) }}</div></div>
+    <div class="card"><div class="card-header">Filtreleme</div><div class="card-value">{{ bot_status.scanner.filteredCandidateCount | default(0) }}</div><div class="mt-16 text-sm text-muted">elenen · kabul: {{ bot_status.scanner.acceptedCandidateCount | default(0) }}<br>{% for code, count in (bot_status.scanner.rejectionReasonCounts | default({}) | dictsort) %}{{ code }}: {{ count }}{% if not loop.last %}<br>{% endif %}{% else %}reason code yok{% endfor %}</div></div>
+    <div class="card"><div class="card-header">Research → Trade Watchlist</div><div class="card-value">{{ bot_status.scanner.tradeWatchlistCount | default(0) }}</div><div class="mt-16 text-sm text-muted">pending: {{ bot_status.scanner.pendingResearchCount | default(0) }}, qualified: {{ bot_status.scanner.qualifiedCandidateCount | default(0) }}<br>promotion: {{ bot_status.scanner.promotedCandidateCount | default(0) }} · aktif trade watchlist</div></div>
+  </div>
+</div>
+
 {% set account = latest_account_normalization %}
 <div class="mb-24">
   <div class="flex-between mb-16"><h2 class="section-title">Account Sizing Context</h2></div>

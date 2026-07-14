@@ -82,11 +82,20 @@ async def gateway_runtime_config() -> dict:
         research_candidates = (
             (
                 await session.execute(
-                    select(ResearchCandidate.symbol).where(
+                    select(ResearchCandidate.symbol)
+                    .where(
                         ResearchCandidate.status.in_(
-                            ("DETECTED", "RESEARCH_PENDING", "RESEARCHED", "QUALIFIED", "PROMOTED")
-                        )
+                            ("DETECTED", "RESEARCH_PENDING", "RESEARCHED", "QUALIFIED")
+                        ),
+                        (ResearchCandidate.expires_at.is_(None))
+                        | (ResearchCandidate.expires_at >= datetime.now(UTC)),
                     )
+                    .order_by(
+                        ResearchCandidate.trend_pre_score.desc(),
+                        ResearchCandidate.relative_volume.desc(),
+                        ResearchCandidate.volume_tl.desc(),
+                    )
+                    .limit(max(1, int(values["maxActiveResearchSymbols"])))
                 )
             )
             .scalars()

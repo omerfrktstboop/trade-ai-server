@@ -45,12 +45,23 @@ class DiscoveryScanResult(list[str]):
         status: str,
         universe_count: int = 0,
         candidate_count: int = 0,
+        ranking_source: str = "NONE",
+        weekly_gainer_count: int = 0,
+        turnover_leader_count: int = 0,
+        relative_volume_leader_count: int = 0,
+        filtered_count: int = 0,
+        rejection_reason_counts: dict[str, int] | None = None,
     ) -> None:
         super().__init__(symbols or [])
         self.status = status
         self.universe_count = universe_count
         self.candidate_count = candidate_count
-
+        self.ranking_source = ranking_source
+        self.weekly_gainer_count = weekly_gainer_count
+        self.turnover_leader_count = turnover_leader_count
+        self.relative_volume_leader_count = relative_volume_leader_count
+        self.filtered_count = filtered_count
+        self.rejection_reason_counts = rejection_reason_counts or {}
 
 @dataclass(frozen=True)
 class DiscoveryPolicy:
@@ -59,7 +70,10 @@ class DiscoveryPolicy:
     maximum_change_pct: float = 9.3
     maximum_spread_pct: float = 0.50
     maximum_ask_bid_ratio: float = 3.0
+    maximum_quote_age_seconds: float = 120.0
+    maximum_weekly_change_pct: float = 18.0
     candidate_ttl_hours: int = 24
+    max_candidates: int = 10
 
 
 @dataclass(frozen=True)
@@ -78,6 +92,7 @@ async def load_discovery_policy() -> DiscoveryPolicy:
         minimum_volume_tl=float(values["discoveryMinimumVolumeTl"]),
         maximum_spread_pct=float(values["discoveryMaximumSpreadPct"]),
         candidate_ttl_hours=max(1, int(values["researchCandidateTtlHours"])),
+        max_candidates=max(1, int(values["maxResearchCandidatesPerCycle"])),
     )
 
 
@@ -100,36 +115,84 @@ async def run_discovery_scan(
         for item in movers.get("items") or []
         if item.get("symbol")
     }
-    sources: dict[str, set[str]] = {}
-    for source, key in (("GAINER", "gainers"), ("VOLUME_LEADER", "volumeLeaders")):
-        for symbol_raw in movers.get(key) or []:
-            symbol = str(symbol_raw).strip().upper()
-            if symbol:
-                sources.setdefault(symbol, set()).add(source)
+    capabilities = movers.get("rankingCapabilities")
+    capability_contract = capabilities if isinstance(capabilities, dict) else {}
+    weekly_available = _ranking_available(capability_contract, "weeklyGainers")
+    turnover_available = _ranking_available(capability_contract, "turnoverLeaders")
+    relative_volume_available = _ranking_available(
+        capability_contract, "relativeVolumeLeaders"
+    )
 
-    # Movers may already expose richer fields in future gateway versions.
-    # Include those candidates without requiring a new endpoint contract.
+    # The gateway only ranks the deliberately small, configured subscription
+    # universe. Never infer a BIST-wide or relative-volume ranking when the
+    # capability contract does not publish one.
+    sources: dict[str, set[str]] = {}
+    ranking_lists: list[tuple[str, str]] = []
+    if weekly_available or (not capability_contract and movers.get("weeklyGainers")):
+        ranking_lists.append(("WEEKLY_GAINER", "weeklyGainers"))
+    elif not capability_contract:
+        # Older gateways have no capability block; keep this explicit legacy
+        # daily-movers fallback separate from weekly momentum.
+        ranking_lists.append(("DAILY_MOMENTUM_FALLBACK", "gainers"))
+    if turnover_available or (not capability_contract and movers.get("volumeLeaders")):
+        ranking_lists.append(("TURNOVER_LEADER", "volumeLeaders"))
+    if relative_volume_available:
+        ranking_lists.append(("RELATIVE_VOLUME", "relativeVolumeLeaders"))
+
+    ranking_input_counts = {
+        "WEEKLY_GAINER": 0,
+        "TURNOVER_LEADER": 0,
+        "RELATIVE_VOLUME": 0,
+    }
+    for source, key in ranking_lists:
+        ranked_symbols = {
+            str(symbol_raw).strip().upper()
+            for symbol_raw in movers.get(key) or []
+            if str(symbol_raw).strip().upper() in items
+        }
+        if source in ranking_input_counts:
+            ranking_input_counts[source] = len(ranked_symbols)
+        for symbol in ranked_symbols:
+            sources.setdefault(symbol, set()).add(source)
+    # A richer, capability-backed gateway may attach these fields directly to
+    # ranking items. They do not trigger an extra market-wide subscription.
     for symbol, item in items.items():
         if (_to_float(item.get("changePct30m")) or 0) > 1:
             sources.setdefault(symbol, set()).add("MOMENTUM_30M")
         if (_to_float(item.get("changePct60m")) or 0) > 1:
             sources.setdefault(symbol, set()).add("MOMENTUM_60M")
-        if (_to_float(item.get("relativeVolume")) or 0) >= 1.5:
+        if relative_volume_available and (_to_float(item.get("relativeVolume")) or 0) >= 1.5:
             sources.setdefault(symbol, set()).add("RELATIVE_VOLUME")
         if item.get("breakout20Bar") is True:
             sources.setdefault(symbol, set()).add("BREAKOUT_20_BAR")
-
     accepted: list[
         tuple[str, list[str], dict[str, Any], DiscoveryVerdict, dict[str, Any]]
     ] = []
-    for symbol, candidate_sources in sources.items():
+    rejection_reason_counts: dict[str, int] = {}
+    ranked_symbols = _limited_ranked_symbols(sources, items, policy.max_candidates)
+    for symbol in ranked_symbols:
+        candidate_sources = sources[symbol]
         item = items.get(symbol)
         if item is None:
             continue
-        verdict = await _screen(gw, symbol, item, policy)
-        if verdict is None or verdict.trend_pre_score < policy.minimum_trend_score:
+        verdict, reason_code = await _screen(gw, symbol, item, policy)
+        if verdict is None:
+            if reason_code:
+                rejection_reason_counts[reason_code] = (
+                    rejection_reason_counts.get(reason_code, 0) + 1
+                )
             continue
-        expanded_sources = sorted(candidate_sources | _derived_sources(verdict))
+        if verdict.trend_pre_score < policy.minimum_trend_score:
+            reason_code = "DISCOVERY_TREND_SCORE_BELOW_MINIMUM"
+            rejection_reason_counts[reason_code] = (
+                rejection_reason_counts.get(reason_code, 0) + 1
+            )
+            continue
+        expanded_sources = sorted(
+            candidate_sources | _derived_sources(
+                verdict, allow_relative_volume=relative_volume_available
+            )
+        )
         quality = calculate_quality(item, verdict.wall_ratio)
         accepted.append((symbol, expanded_sources, item, verdict, quality))
 
@@ -145,32 +208,51 @@ async def run_discovery_scan(
         await _upsert_candidates(accepted, policy)
     await _expire_stale_candidates()
 
+    ranking_source = "+".join(source for source, _ in ranking_lists) or "DERIVED_MOMENTUM"
     logger.info(
-        "Discovery scanned universe=%s candidates=%s shortlisted=%s",
+        "DISCOVERY_RANKING_COMPLETED universeCount=%s mergedCandidateCount=%s "
+        "acceptedCount=%s filteredCount=%s rankingSource=%s weeklyGainerCount=%s "
+        "turnoverLeaderCount=%s relativeVolumeLeaderCount=%s rejectionReasonCounts=%s",
         movers.get("universeSize", len(items)),
         len(sources),
         len(accepted),
+        sum(rejection_reason_counts.values()),
+        ranking_source,
+        ranking_input_counts["WEEKLY_GAINER"],
+        ranking_input_counts["TURNOVER_LEADER"],
+        ranking_input_counts["RELATIVE_VOLUME"],
+        rejection_reason_counts,
     )
     return DiscoveryScanResult(
         [symbol for symbol, *_ in accepted],
         status="COMPLETED",
         universe_count=int(movers.get("universeSize") or len(items)),
         candidate_count=len(sources),
+        ranking_source=ranking_source,
+        weekly_gainer_count=ranking_input_counts["WEEKLY_GAINER"],
+        turnover_leader_count=ranking_input_counts["TURNOVER_LEADER"],
+        relative_volume_leader_count=ranking_input_counts["RELATIVE_VOLUME"],
+        filtered_count=sum(rejection_reason_counts.values()),
+        rejection_reason_counts=rejection_reason_counts,
     )
-
 
 async def _screen(
     gw: MatriksGatewayClient,
     symbol: str,
     item: dict[str, Any],
     policy: DiscoveryPolicy,
-) -> DiscoveryVerdict | None:
+) -> tuple[DiscoveryVerdict | None, str | None]:
     change_pct = _to_float(item.get("changePct")) or 0.0
+    weekly_change_pct = _to_float(item.get("weeklyChangePct"))
     volume_tl = _volume_tl(item)
+    if _is_limit_locked(item, change_pct, policy):
+        return None, "DISCOVERY_LIMIT_LOCKED"
     if abs(change_pct) >= policy.maximum_change_pct:
-        return None
+        return None, "DISCOVERY_DAILY_CHANGE_LIMIT"
+    if weekly_change_pct is not None and weekly_change_pct >= policy.maximum_weekly_change_pct:
+        return None, "DISCOVERY_WEEKLY_CHANGE_LIMIT"
     if volume_tl < policy.minimum_volume_tl:
-        return None
+        return None, "DISCOVERY_VOLUME_BELOW_MINIMUM"
 
     snapshot_payload: dict[str, Any] = {}
     try:
@@ -196,16 +278,20 @@ async def _screen(
         analysis.get("spreadPct"), snapshot_payload.get("spreadPct")
     )
     if analysis.get("orderBookSignal") == "STRONG_SELL_PRESSURE":
-        return None
+        return None, "DISCOVERY_STRONG_SELL_PRESSURE"
     if spread_pct is not None and spread_pct > policy.maximum_spread_pct:
-        return None
+        return None, "DISCOVERY_SPREAD_ABOVE_MAXIMUM"
     if wall_ratio is not None and wall_ratio > policy.maximum_ask_bid_ratio:
-        return None
+        return None, "DISCOVERY_ASK_BID_IMBALANCE"
 
     combined = {**item, **snapshot_payload}
     combined["volumeTl"] = volume_tl
     combined["spreadPct"] = spread_pct
     combined["askBidRatio"] = wall_ratio
+    combined["quoteAgeSeconds"] = _first_float(snapshot_payload.get("quoteAgeSeconds"), item.get("quoteAgeSeconds"))
+    combined["snapshotAgeSeconds"] = _first_float(snapshot_payload.get("snapshotAgeSeconds"), snapshot_payload.get("ageSeconds"))
+    if _is_stale(combined, policy):
+        return None, "DISCOVERY_STALE_DATA"
     score, components = calculate_trend_pre_score(combined, policy)
     summary = {
         **components,
@@ -225,22 +311,22 @@ async def _screen(
             analysis.get("depthReliable", combined.get("depthReliable", False))
         ),
         "breakout20Bar": bool(combined.get("breakout20Bar", False)),
-        "limitLocked": False,
+        "limitLocked": _is_limit_locked(combined, change_pct, policy),
     }
     reason = (
-        f"trendPreScore={score:.1f}; changePctDaily={change_pct:+.2f}; "
+        f"trendPreScore={score:.1f}; weeklyChangePct={weekly_change_pct!s}; changePctDaily={change_pct:+.2f}; "
         f"volumeTl={volume_tl:,.0f}"
     )
-    return DiscoveryVerdict(reason, wall_ratio, score, summary)
+    return DiscoveryVerdict(reason, wall_ratio, score, summary), None
 
 
 def calculate_trend_pre_score(
     data: dict[str, Any], policy: DiscoveryPolicy | None = None
 ) -> tuple[float, dict[str, Any]]:
-    """Return a deterministic 0-100 trend score and auditable components."""
+    """Return a deterministic research-ranking score; it never grants trading permission."""
     policy = policy or DiscoveryPolicy()
-    score = 0.0
     change = _to_float(data.get("changePct")) or 0.0
+    weekly_change = _to_float(data.get("weeklyChangePct"))
     volume = _volume_tl(data)
     relative_volume = _to_float(data.get("relativeVolume"))
     price = _to_float(data.get("lastPrice"))
@@ -249,45 +335,80 @@ def calculate_trend_pre_score(
     ema20_slope = _to_float(data.get("ema20Slope"))
     rsi = _to_float(data.get("rsi") or data.get("rsi14"))
     spread = _to_float(data.get("spreadPct"))
+    quote_age = _first_float(data.get("quoteAgeSeconds"), data.get("snapshotAgeSeconds"), data.get("ageSeconds"))
+    limit_locked = _is_limit_locked(data, change, policy)
+    overextended = change >= policy.maximum_change_pct or (
+        weekly_change is not None and weekly_change >= policy.maximum_weekly_change_pct
+    )
 
-    if 1 < change < policy.maximum_change_pct:
-        score += 20
-    elif 0 < change < policy.maximum_change_pct:
-        score += 10
+    score = 0.0
+    if weekly_change is not None:
+        score += 15 if 2 <= weekly_change < 10 else (8 if 0 < weekly_change < policy.maximum_weekly_change_pct else 0)
+    score += 15 if 1 <= change < 5 else (7 if 0 < change < policy.maximum_change_pct else 0)
     if volume >= policy.minimum_volume_tl:
-        score += 20
-        if volume >= policy.minimum_volume_tl * 2:
-            score += 5
-    score += 15 if relative_volume is not None and relative_volume >= 1.5 else 5
-    score += 15 if price and ema20 and price > ema20 else (5 if ema20 is None else 0)
+        score += 15 + (5 if volume >= policy.minimum_volume_tl * 2 else 0)
+    score += 12 if relative_volume is not None and relative_volume >= 1.5 else 2
+    score += 10 if price is not None and ema20 is not None and price > ema20 else 0
     trend_aligned = bool(
         (ema20 is not None and ema50 is not None and ema20 > ema50)
         or (ema20_slope is not None and ema20_slope > 0)
     )
-    score += 15 if trend_aligned else (5 if ema20 is None and ema20_slope is None else 0)
-    score += 10 if rsi is not None and 50 <= rsi <= 75 else (5 if rsi is None else 0)
-    score += 5 if spread is None or spread <= policy.maximum_spread_pct else 0
-    if data.get("breakout20Bar") is True:
-        score += 5
-    if str(data.get("macdState") or "").upper() in {"BUY", "BULLISH"}:
-        score += 5
+    score += 12 if trend_aligned else 0
+    score += 10 if rsi is not None and 52 <= rsi <= 70 else (4 if rsi is not None and 70 < rsi <= 75 else 0)
+    score -= 10 if rsi is not None and rsi > 75 else 0
+    score += 6 if spread is not None and spread <= policy.maximum_spread_pct else 0
+    score += 5 if quote_age is not None and 0 <= quote_age <= policy.maximum_quote_age_seconds else 0
+    score += 5 if data.get("breakout20Bar") is True else 0
+    score += 5 if str(data.get("macdState") or "").upper() in {"BUY", "BULLISH"} else 0
+    score -= 40 if limit_locked else 0
+    score -= 25 if overextended else 0
 
     components = {
         "changePctDaily": change,
+        "weeklyChangePct": weekly_change,
         "changePct30m": _to_float(data.get("changePct30m")),
         "changePct60m": _to_float(data.get("changePct60m")),
         "volumeTl": volume,
         "relativeVolume": relative_volume,
-        "priceAboveEma20": bool(price and ema20 and price > ema20),
+        "priceAboveEma20": bool(price is not None and ema20 is not None and price > ema20),
         "emaTrendAligned": trend_aligned,
+        "quoteAgeSeconds": quote_age,
+        "limitLocked": limit_locked,
+        "overextended": overextended,
+        "rsiOverbought": rsi is not None and rsi > 75,
     }
-    return min(100.0, round(score, 2)), components
+    return max(0.0, min(100.0, round(score, 2))), components
+def _ranking_available(capabilities: dict[str, Any], name: str) -> bool:
+    ranking = capabilities.get(name)
+    return isinstance(ranking, dict) and ranking.get("available") is True
 
 
-def _derived_sources(verdict: DiscoveryVerdict) -> set[str]:
+def _limited_ranked_symbols(
+    sources: dict[str, set[str]],
+    items: dict[str, dict[str, Any]],
+    limit: int,
+) -> list[str]:
+    """Merge and bound rankings before per-symbol enrichment calls."""
+    return sorted(
+        sources,
+        key=lambda symbol: (
+            len(sources[symbol]),
+            "WEEKLY_GAINER" in sources[symbol],
+            "TURNOVER_LEADER" in sources[symbol],
+            _to_float(items[symbol].get("weeklyChangePct")) or float("-inf"),
+            _volume_tl(items[symbol]),
+            symbol,
+        ),
+        reverse=True,
+    )[:limit]
+
+
+def _derived_sources(
+    verdict: DiscoveryVerdict, *, allow_relative_volume: bool
+) -> set[str]:
     summary = verdict.technical_summary
     sources: set[str] = set()
-    if (summary.get("relativeVolume") or 0) >= 1.5:
+    if allow_relative_volume and (summary.get("relativeVolume") or 0) >= 1.5:
         sources.add("RELATIVE_VOLUME")
     if summary.get("emaTrendAligned"):
         sources.add("EMA_UPTREND")
@@ -447,7 +568,19 @@ async def list_active_watchlist_symbols() -> list[str]:
         )
     return sorted(str(symbol).upper() for symbol in rows)
 
+def _is_limit_locked(data: dict[str, Any], change_pct: float, policy: DiscoveryPolicy) -> bool:
+    return bool(
+        data.get("limitLocked") is True
+        or data.get("isLimitLocked") is True
+        or data.get("limitUpLocked") is True
+        or data.get("limitDownLocked") is True
+        or abs(change_pct) >= policy.maximum_change_pct
+    )
 
+
+def _is_stale(data: dict[str, Any], policy: DiscoveryPolicy) -> bool:
+    age = _first_float(data.get("quoteAgeSeconds"), data.get("snapshotAgeSeconds"), data.get("ageSeconds"))
+    return age is not None and (age < 0 or age > policy.maximum_quote_age_seconds)
 def _ask_bid_ratio(depth: dict[str, Any]) -> float | None:
     payload = depth.get("payload") or depth
     analysis = payload.get("depthAnalysis") or payload.get("analysis") or {}

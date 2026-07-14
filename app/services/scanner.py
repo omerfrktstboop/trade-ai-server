@@ -63,7 +63,7 @@ from app.services.notifications import (
 from app.services.manual_approvals import queue_response
 from app.services.order_sync import cancel_timed_out_orders
 from app.services.order_ledger import mark_send_result, mark_send_started, reserve_order
-from app.services.order_preflight import validate_order_preflight
+from app.services.order_preflight import parse_finite_decimal, validate_order_preflight
 from app.services.position_sizing import TradeSizingContext
 from app.services.signal_override import list_pending_override_symbols
 from app.services.trade_profile import get_active_profile
@@ -109,11 +109,24 @@ class SymbolScanner:
         self._last_discovery_run: datetime | None = None
         self._last_research_run: datetime | None = None
         self._last_promotion_at: datetime | None = None
+        self._ranking_status: dict[str, object] = {
+            "lastRankingAt": None,
+            "rankingStatus": "NOT_RUN",
+            "rankingSource": "NONE",
+            "weeklyGainerCount": 0,
+            "turnoverLeaderCount": 0,
+            "relativeVolumeLeaderCount": 0,
+            "mergedCandidateCount": 0,
+            "filteredCandidateCount": 0,
+            "acceptedCandidateCount": 0,
+            "rejectionReasonCounts": {},
+        }
         self._pipeline_counts: dict[str, int] = {
             "scanUniverseCount": 0,
             "researchCandidateCount": 0,
             "pendingResearchCount": 0,
             "qualifiedCandidateCount": 0,
+            "promotedCandidateCount": 0,
             "tradeWatchlistCount": 0,
         }
         self._last_portfolio_scan: datetime | None = None
@@ -174,6 +187,7 @@ class SymbolScanner:
                 else None
             ),
             **self._pipeline_counts,
+            **self._ranking_status,
             "lastPortfolioScanAt": (
                 self._last_portfolio_scan.isoformat()
                 if self._last_portfolio_scan
@@ -395,6 +409,22 @@ class SymbolScanner:
             return
         elapsed_ms = int((monotonic() - started) * 1000)
         status = getattr(outcome, "status", "COMPLETED")
+        self._ranking_status = {
+            "lastRankingAt": self._last_discovery_run.isoformat(),
+            "rankingStatus": status,
+            "rankingSource": getattr(outcome, "ranking_source", "NONE"),
+            "weeklyGainerCount": getattr(outcome, "weekly_gainer_count", 0),
+            "turnoverLeaderCount": getattr(outcome, "turnover_leader_count", 0),
+            "relativeVolumeLeaderCount": getattr(
+                outcome, "relative_volume_leader_count", 0
+            ),
+            "mergedCandidateCount": getattr(outcome, "candidate_count", 0),
+            "filteredCandidateCount": getattr(outcome, "filtered_count", 0),
+            "acceptedCandidateCount": len(outcome),
+            "rejectionReasonCounts": dict(
+                getattr(outcome, "rejection_reason_counts", {})
+            ),
+        }
         if status == "GATEWAY_UNAVAILABLE":
             logger.info(
                 "DISCOVERY_SKIPPED_GATEWAY_UNAVAILABLE elapsedMs=%s", elapsed_ms
@@ -558,7 +588,17 @@ class SymbolScanner:
                 response.request_id,
             )
             return
-        if response.qty <= 0 or not response.price or response.price <= 0:
+        parsed_qty = parse_finite_decimal(response.qty)
+        parsed_price = parse_finite_decimal(response.price)
+        if (
+            isinstance(response.qty, bool)
+            or not isinstance(response.qty, int)
+            or parsed_qty is None
+            or parsed_qty <= 0
+            or parsed_qty != parsed_qty.to_integral_value()
+            or parsed_price is None
+            or parsed_price <= 0
+        ):
             logger.warning(
                 "Order skipped: invalid qty/price qty=%s price=%s requestId=%s",
                 response.qty,

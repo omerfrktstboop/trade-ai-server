@@ -32,6 +32,7 @@ ResearchEvaluator = Callable[..., Awaitable[EvaluationResult | None]]
 class ResearchPolicy:
     discovery_interval_minutes: int = 5
     max_candidates_per_cycle: int = 10
+    max_active_symbols: int = 10
     max_concurrent_evaluations: int = 2
     cooldown_minutes: int = 15
     max_trade_watchlist_size: int = 20
@@ -57,6 +58,7 @@ async def load_research_policy(session: AsyncSession | None = None) -> ResearchP
         return ResearchPolicy(
             discovery_interval_minutes=max(1, int(values["discoveryIntervalMinutes"])),
             max_candidates_per_cycle=max(1, int(values["maxResearchCandidatesPerCycle"])),
+            max_active_symbols=max(1, int(values["maxActiveResearchSymbols"])),
             max_concurrent_evaluations=max(
                 1, int(values["maxConcurrentResearchEvaluations"])
             ),
@@ -115,7 +117,12 @@ async def run_research_cycle(
                         ResearchCandidate.relative_volume.desc(),
                         ResearchCandidate.volume_tl.desc(),
                     )
-                    .limit(policy.max_candidates_per_cycle)
+                    .limit(
+                        min(
+                            policy.max_candidates_per_cycle,
+                            policy.max_active_symbols,
+                        )
+                    )
                 )
             )
             .scalars()
@@ -170,7 +177,7 @@ async def apply_research_result(
             return False
 
         response = result.response
-        research_score = float(result.research_score or 0)
+        research_score = _float_or_none(result.research_score)
         candidate.ai_action = (result.raw_action or response.action).value
         candidate.ai_research_score = research_score
         candidate.ai_confidence_score = response.confidence_score
@@ -202,7 +209,7 @@ async def apply_research_result(
             "Research evaluated symbol=%s trendPreScore=%.1f researchScore=%.1f action=%s",
             symbol,
             candidate.trend_pre_score,
-            research_score,
+            research_score if research_score is not None else -1.0,
             candidate.ai_action,
         )
 
@@ -215,7 +222,7 @@ async def apply_research_result(
             candidate.status = "RESEARCHED"
             candidate.consecutive_pass_count = 0
             candidate.rejected_at = None
-            candidate.rejection_reason = f"Not trade eligible yet: {reason}"
+            candidate.rejection_reason = reason
             session.add(
                 ResearchCandidateEvent(
                     candidate_id=candidate.id,
@@ -228,7 +235,7 @@ async def apply_research_result(
                 "Research candidate retained for monitoring symbol=%s "
                 "researchScore=%.1f reason=%s",
                 symbol,
-                research_score,
+                research_score if research_score is not None else -1.0,
                 reason,
             )
             await session.commit()
@@ -236,9 +243,19 @@ async def apply_research_result(
 
         previous_success = _as_utc(candidate.last_successful_evaluation_at)
         minimum_gap = timedelta(minutes=policy.minimum_pass_interval_minutes)
-        if previous_success is None or now - previous_success >= minimum_gap:
-            candidate.consecutive_pass_count += 1
-            candidate.last_successful_evaluation_at = now
+        time_spaced_success = (
+            previous_success is None or now - previous_success >= minimum_gap
+        )
+        if not time_spaced_success:
+            # A second qualifying response inside the promotion interval is
+            # evidence for monitoring only. It cannot reuse a prior pass to
+            # trigger a Trade Watchlist promotion.
+            candidate.rejection_reason = "PROMOTION_PASSES_NOT_TIME_SPACED"
+            await session.commit()
+            return False
+
+        candidate.consecutive_pass_count += 1
+        candidate.last_successful_evaluation_at = now
         candidate.status = "QUALIFIED"
         candidate.rejection_reason = None
         if candidate.consecutive_pass_count < policy.consecutive_passes:
@@ -265,7 +282,7 @@ async def apply_research_result(
             )
         ).scalar_one_or_none()
         if (watch is None or not watch.is_active) and active_count >= policy.max_trade_watchlist_size:
-            candidate.rejection_reason = "trade watchlist capacity reached"
+            candidate.rejection_reason = "PROMOTION_WATCHLIST_CAPACITY_REACHED"
             await session.commit()
             return False
 
@@ -319,40 +336,47 @@ def _promotion_verdict(
     response = result.response
     raw_action = result.raw_action or response.action
     if candidate.symbol in policy.declined_symbols:
-        return False, "symbol is in declineSymbols", None
+        return False, "PROMOTION_SYMBOL_DECLINED", None
     if raw_action != SignalAction.BUY:
-        return False, f"AI action is {raw_action.value}, not BUY", None
-    if float(result.research_score or 0) < policy.minimum_research_score:
-        return False, "research score below promotion threshold", None
-    if response.confidence_score < policy.minimum_confidence:
-        return False, "confidence below promotion threshold", None
-    if response.risk_score > policy.maximum_risk_score:
-        return False, "risk score above promotion threshold", None
-    if candidate.trend_pre_score < policy.minimum_trend_score:
-        return False, "trend pre-score below threshold", None
+        return False, "PROMOTION_ACTION_NOT_BUY", None
+    research_score = _float_or_none(result.research_score)
+    confidence = _float_or_none(response.confidence_score)
+    risk_score = _float_or_none(response.risk_score)
+    trend_score = _float_or_none(candidate.trend_pre_score)
+    volume_tl = _float_or_none(candidate.volume_tl)
+    if research_score is None or research_score < policy.minimum_research_score:
+        return False, "PROMOTION_RESEARCH_SCORE_BELOW_MINIMUM", None
+    if confidence is None or confidence < policy.minimum_confidence:
+        return False, "PROMOTION_CONFIDENCE_BELOW_MINIMUM", None
+    if risk_score is None or risk_score > policy.maximum_risk_score:
+        return False, "PROMOTION_RISK_SCORE_ABOVE_MAXIMUM", None
+    if trend_score is None or trend_score < policy.minimum_trend_score:
+        return False, "PROMOTION_TREND_SCORE_BELOW_MINIMUM", None
     if response.entry_range is None or response.stop_loss is None or response.target_price is None:
-        return False, "entry/stop/target missing", None
+        return False, "PROMOTION_PRICE_LEVELS_MISSING", None
     reward_risk = _reward_risk_ratio(
         response.entry_range.max, response.stop_loss, response.target_price
     )
     if reward_risk is None or reward_risk < 1.5:
-        return False, "reward/risk ratio below 1.5", reward_risk
+        return False, "PROMOTION_REWARD_RISK_BELOW_MINIMUM", reward_risk
     summary = candidate.technical_summary or {}
     if bool(summary.get("limitLocked")):
-        return False, "symbol is limit locked", reward_risk
+        return False, "PROMOTION_LIMIT_LOCKED", reward_risk
     if summary.get("priceAboveEma20") is not True:
-        return False, "price is not confirmed above EMA20", reward_risk
+        return False, "PROMOTION_PRICE_BELOW_EMA20", reward_risk
+    if summary.get("emaTrendAligned") is not True:
+        return False, "PROMOTION_EMA_TREND_NOT_ALIGNED", reward_risk
     ema20_slope = _float_or_none(summary.get("ema20Slope"))
-    if ema20_slope is not None and ema20_slope < 0:
-        return False, "EMA20 slope is negative", reward_risk
-    if float(candidate.volume_tl or 0) < policy.minimum_volume_tl:
-        return False, "volume below minimum", reward_risk
+    if ema20_slope is None or ema20_slope < 0:
+        return False, "PROMOTION_EMA20_SLOPE_INVALID", reward_risk
+    if volume_tl is None or volume_tl < policy.minimum_volume_tl:
+        return False, "PROMOTION_VOLUME_BELOW_MINIMUM", reward_risk
     spread = _float_or_none(summary.get("spreadPct"))
     if spread is None or spread > policy.maximum_spread_pct:
-        return False, "spread unavailable or above maximum", reward_risk
+        return False, "PROMOTION_SPREAD_ABOVE_MAXIMUM", reward_risk
     if summary.get("depthReliable") is not True:
-        return False, "depth is not reliable", reward_risk
-    return True, "all promotion gates passed", reward_risk
+        return False, "PROMOTION_DEPTH_UNRELIABLE", reward_risk
+    return True, "PROMOTION_ELIGIBLE", reward_risk
 
 
 async def list_trade_eligible_symbols() -> list[str]:
@@ -576,6 +600,7 @@ async def get_pipeline_counts() -> dict[str, int]:
         "researchCandidateCount": sum(status_counts.values()),
         "pendingResearchCount": status_counts.get("RESEARCH_PENDING", 0),
         "qualifiedCandidateCount": status_counts.get("QUALIFIED", 0),
+        "promotedCandidateCount": status_counts.get("PROMOTED", 0),
         "tradeWatchlistCount": trade_count,
     }
 

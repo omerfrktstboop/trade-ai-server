@@ -286,6 +286,12 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         str(settings.max_research_candidates_per_cycle),
         "Bir turda AI arastirmasina alinabilecek en fazla aday.",
     ),
+    "maxActiveResearchSymbols": ConfigDefinition(
+        "maxActiveResearchSymbols",
+        "int",
+        str(settings.max_active_research_symbols),
+        "Gateway market-data aboneligindeki en fazla aktif research sembolu.",
+    ),
     "maxConcurrentResearchEvaluations": ConfigDefinition(
         "maxConcurrentResearchEvaluations",
         "int",
@@ -485,6 +491,7 @@ CONFIG_SECTION_DEFINITIONS = (
             "scanUniverseSymbols",
             "discoveryIntervalMinutes",
             "maxResearchCandidatesPerCycle",
+            "maxActiveResearchSymbols",
             "maxConcurrentResearchEvaluations",
             "candidateCooldownMinutes",
             "maxTradeWatchlistSize",

@@ -189,6 +189,7 @@ class Settings(BaseSettings):
     )
     discovery_interval_minutes: int = 5
     max_research_candidates_per_cycle: int = 10
+    max_active_research_symbols: int = 10
     max_concurrent_research_evaluations: int = 2
     candidate_cooldown_minutes: int = 15
     max_trade_watchlist_size: int = 20

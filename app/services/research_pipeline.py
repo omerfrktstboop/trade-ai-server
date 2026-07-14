@@ -207,12 +207,26 @@ async def apply_research_result(
         )
 
         if not qualified:
-            candidate.status = "REJECTED"
+            # A discovery candidate is a monitoring object, not an order
+            # permission. A transient trade gate (for example an unavailable
+            # depth event timestamp) must not evict a liquid trend symbol
+            # from periodic research. Only promotion into the separate Trade
+            # Watchlist remains strict.
+            candidate.status = "RESEARCHED"
             candidate.consecutive_pass_count = 0
-            candidate.rejected_at = now
-            candidate.rejection_reason = reason
+            candidate.rejected_at = None
+            candidate.rejection_reason = f"Not trade eligible yet: {reason}"
+            session.add(
+                ResearchCandidateEvent(
+                    candidate_id=candidate.id,
+                    symbol=symbol,
+                    event_type="MONITORING",
+                    details={"reason": candidate.rejection_reason},
+                )
+            )
             logger.info(
-                "Research candidate rejected symbol=%s researchScore=%.1f reason=%s",
+                "Research candidate retained for monitoring symbol=%s "
+                "researchScore=%.1f reason=%s",
                 symbol,
                 research_score,
                 reason,

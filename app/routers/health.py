@@ -81,12 +81,18 @@ async def health_ready() -> JSONResponse:
             and float(verification_age) <= 5
         )
         gateway_ok = bool(gateway.get("ok")) and gateway.get("configStale") is False
-        freshness_ok = (
-            bool(quote_ages)
-            and max(quote_ages) <= 15
-            and bool(depth_ages)
-            and max(depth_ages) <= 10
+        # A real depth event timestamp is intentionally absent on supported
+        # Matriks builds.  ``depthAgeSeconds=None`` therefore means
+        # "timestamp unavailable", not a stale depth event.  Readiness must
+        # not be permanently red solely for that contract limitation.  The
+        # order-time preflight remains fail-closed: it independently requires
+        # a reliable, valid order book for every BUY/SELL order.
+        quote_freshness_ok = bool(quote_ages) and max(quote_ages) <= 15
+        depth_event_freshness_available = bool(depth_ages)
+        depth_freshness_ok = (
+            not depth_event_freshness_available or max(depth_ages) <= 10
         )
+        freshness_ok = quote_freshness_ok and depth_freshness_ok
         position_ok = position_age is not None and float(position_age) <= 90
         backlog = int(gateway.get("callbackOutboxBacklog") or 0)
         gateway_ready = (
@@ -106,6 +112,8 @@ async def health_ready() -> JSONResponse:
             "ok": freshness_ok,
             "maxQuoteAgeSeconds": max(quote_ages) if quote_ages else None,
             "maxDepthAgeSeconds": max(depth_ages) if depth_ages else None,
+            "depthEventFreshnessAvailable": depth_event_freshness_available,
+            "depthEventFreshnessRequiredForReadiness": False,
         }
         checks["positions"] = {"ok": position_ok, "ageSeconds": position_age}
         checks["demoAccount"] = {

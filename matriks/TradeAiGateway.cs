@@ -2168,8 +2168,26 @@ namespace Matriks.Lean.Algotrader
                 foreach (string symbolRaw in AllowedSymbols)
                 {
                     string symbol = NormalizeSymbol(symbolRaw);
+                    // Discovery can be the first consumer after a gateway
+                    // restart.  Populate the quote cache here rather than
+                    // requiring a prior /snapshot request; otherwise the
+                    // movers -> research pipeline can never bootstrap.
+                    // Indices are macro-only and do not belong to the equity
+                    // discovery ranking.
+                    if (!IsEquitySymbol(symbol))
+                        continue;
+
                     MarketQuoteSnapshot quote;
-                    if (!_lastValidQuoteBySymbol.TryGetValue(symbol, out quote) || quote.Last <= 0m)
+                    try
+                    {
+                        quote = ReadMarketQuote(symbol);
+                    }
+                    catch (Exception ex)
+                    {
+                        SafeDebug("Movers quote unavailable symbol=" + symbol + " error=" + ex.Message);
+                        continue;
+                    }
+                    if (quote.Last <= 0m)
                         continue;
 
                     decimal refPrice;

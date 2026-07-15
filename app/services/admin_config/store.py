@@ -184,6 +184,54 @@ async def get_trading_mode_override(session: AsyncSession) -> SignalMode | None:
     return SignalMode(value.upper())
 
 
+async def _env_overridable_bool(
+    session: AsyncSession, key: str, env_value: bool
+) -> bool:
+    """DB row (admin panel) overrides the .env value; no row -> live env value.
+
+    The definition default shown in the panel is the env value captured at
+    import time, but the *effective* fallback here reads the live settings
+    attribute so test monkeypatching keeps working until a row is written.
+    """
+    if await has_admin_config_row(session, key):
+        return _parse_bool(await get_admin_config_value(session, key))
+    return env_value
+
+
+async def get_scanner_allow_orders(session: AsyncSession) -> bool:
+    """Single entry point for the order-dispatch master switch (panel > env)."""
+    from app.config import settings
+
+    return await _env_overridable_bool(
+        session, "scannerAllowOrders", settings.scanner_allow_orders
+    )
+
+
+async def is_scanner_runtime_enabled(session: AsyncSession) -> bool:
+    """Panel-controlled scanner pause. Default true: the env SCANNER_ENABLED
+    flag still gates whether the background loop starts at all; this key only
+    pauses ticks of an already-running scanner."""
+    return _parse_bool(await get_admin_config_value(session, "scannerEnabled"))
+
+
+async def get_manual_approval_allow_orders(session: AsyncSession) -> bool:
+    from app.config import settings
+
+    return await _env_overridable_bool(
+        session, "manualApprovalAllowOrders", settings.manual_approval_allow_orders
+    )
+
+
+async def get_portfolio_scan_interval_minutes(session: AsyncSession) -> int:
+    from app.config import settings
+
+    if await has_admin_config_row(session, "portfolioScanIntervalMinutes"):
+        return int(
+            await get_admin_config_value(session, "portfolioScanIntervalMinutes")
+        )
+    return int(settings.portfolio_scan_interval_minutes)
+
+
 async def build_runtime_risk_config(session: AsyncSession) -> RiskConfig:
     """Build RiskConfig from the active trade profile + DB-backed admin
     config, falling back to code defaults where neither applies.

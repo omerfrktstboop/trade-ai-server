@@ -28,7 +28,10 @@ from app.config import settings
 from app.db.session import async_session_factory
 from app.models.db import BotPosition, RiskDecision
 from app.models.signal import OrderType, SignalAction, SignalMode, SignalResponse
-from app.services.admin_config import get_trading_mode_override
+from app.services.admin_config import (
+    get_scanner_allow_orders,
+    get_trading_mode_override,
+)
 from app.services.daily_trade_count import _start_of_trading_day
 from app.services.effective_risk_config import decimal_from_external
 from app.services.evaluation.pipeline import EvaluationResult
@@ -69,14 +72,15 @@ stop_loss_guard = StopLossGuard()
 
 async def _resolve_effective_mode(session) -> SignalMode:
     """Mirror evaluate_symbol's mode resolution: admin override, then the
-    Phase 2 force-PAPER clamp when order dispatch is globally disabled."""
+    Phase 2 force-PAPER clamp when order dispatch is globally disabled
+    (scannerAllowOrders admin key, falling back to the .env value)."""
     override = await get_trading_mode_override(session)
     mode = (
         override
         if override is not None
         else SignalMode(settings.default_mode.value.upper())
     )
-    if not settings.scanner_allow_orders and mode != SignalMode.PAPER:
+    if not await get_scanner_allow_orders(session) and mode != SignalMode.PAPER:
         mode = SignalMode.PAPER
     return mode
 

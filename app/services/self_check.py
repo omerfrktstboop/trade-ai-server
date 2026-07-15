@@ -6,7 +6,12 @@ from typing import Any
 from sqlalchemy import text
 from app.config import is_supported_ai_provider, settings
 from app.db.session import async_session_factory
-from app.services.admin_config import get_admin_config_value
+from app.services.admin_config import (
+    get_admin_config_value,
+    get_manual_approval_allow_orders,
+    get_scanner_allow_orders,
+    is_scanner_runtime_enabled,
+)
 from app.services.matriks_gateway import (
     gateway_client,
 )
@@ -56,13 +61,18 @@ async def run_self_check() -> dict[str, Any]:
         return "Gateway token missing", "FAIL" if settings.is_production else "WARN"
 
     async def scanner_status():
+        async with async_session_factory() as session:
+            runtime_enabled = await is_scanner_runtime_enabled(session)
+            allow_orders = await get_scanner_allow_orders(session)
         return (
-            f"enabled={settings.scanner_enabled} running={scanner.running} allowOrders={settings.scanner_allow_orders}",
-            "PASS" if scanner.running else "WARN",
+            f"envEnabled={settings.scanner_enabled} panelEnabled={runtime_enabled} "
+            f"running={scanner.running} allowOrders={allow_orders}",
+            "PASS" if scanner.running and runtime_enabled else "WARN",
         )
 
     async def manual_approval_gate():
-        allowed = settings.manual_approval_allow_orders
+        async with async_session_factory() as session:
+            allowed = await get_manual_approval_allow_orders(session)
         return f"allowOrders={str(allowed).lower()}", "WARN" if allowed else "PASS"
 
     async def ai():

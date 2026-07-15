@@ -17,6 +17,10 @@ from app.models.db import (
     OrderLog,
     RiskDecision,
 )
+from app.services.admin_config import (
+    get_scanner_allow_orders,
+    is_scanner_runtime_enabled,
+)
 from app.services.ai_provider import get_ai_provider_status
 from app.services.block_reason_classifier import classify_block_reason
 from app.services.cash_reservation import calculate_backend_reserved_cash
@@ -309,6 +313,15 @@ async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
         "positionSync": position_synchronizer.get_status(),
         "runtime": {"dbAvailable": db_error is None, "dbError": db_error},
     }
+    # get_status() env varsayılanını gösterir; panel override'ı varsa onu yansıt.
+    try:
+        async with async_session_factory() as session:
+            result["scanner"]["allowOrders"] = await get_scanner_allow_orders(session)
+            result["scanner"]["panelEnabled"] = await is_scanner_runtime_enabled(
+                session
+            )
+    except Exception:
+        pass
     try:
         result["aiProvider"] = get_ai_provider_status()
     except Exception as exc:

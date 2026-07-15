@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
 
-from app.config import settings
 from app.db.session import async_session_factory
 from app.models.db import ManualApprovalRequest, OrderLog
 from app.models.signal import OrderType, SignalAction, SignalMode
@@ -13,7 +12,11 @@ from app.services.matriks_gateway import (
     GatewayUnavailable,
     gateway_client,
 )
-from app.services.admin_config import get_admin_config_value, is_kill_switch_enabled
+from app.services.admin_config import (
+    get_admin_config_value,
+    get_manual_approval_allow_orders,
+    is_kill_switch_enabled,
+)
 
 
 async def queue_response(
@@ -156,8 +159,11 @@ async def approve_request(
 
 
 async def _approval_block_reason(session, row: ManualApprovalRequest) -> str | None:
-    if not settings.manual_approval_allow_orders:
-        return "Manual approval orders disabled by MANUAL_APPROVAL_ALLOW_ORDERS"
+    if not await get_manual_approval_allow_orders(session):
+        return (
+            "Manual approval orders disabled "
+            "(manualApprovalAllowOrders admin config / env default)"
+        )
     if row.order_type != OrderType.LIMIT.value:
         return "Manual approval blocked: only LIMIT orders are allowed"
 

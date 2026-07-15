@@ -77,43 +77,69 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "tradingMode",
         "mode",
         _settings_default_mode(),
-        "Gelen request mode değerini sistem genelinde override eden çalışma modu.",
+        "Sistem geneli çalışma modu; tüm değerlendirmelerde istek modunu ezer. PAPER=simülasyon, DEMO_LIVE=demo hesapla gerçek emir.",
     ),
     "killSwitchEnabled": ConfigDefinition(
         "killSwitchEnabled",
         "bool",
         "false",
-        "true olduğunda tüm sinyal değerlendirmeleri WAIT ve allowOrder=false döner.",
+        "Acil durdurma: açıkken tüm sinyal değerlendirmeleri WAIT döner, hiçbir emir gönderilmez.",
     ),
     "botMode": ConfigDefinition(
         "botMode",
         "mode",
         "PAPER",
-        "Matriks bot runtime modu. Riskli modlar confirmation ister.",
+        "Matriks botun çalışma modu. Riskli modlara geçiş CONFIRM onayı ister.",
     ),
     "botEnableDemoOrders": ConfigDefinition(
         "botEnableDemoOrders",
         "bool",
         "false",
-        "Matriks botun demo hesaba emir gondermesine izin verir.",
+        "Matriks botun demo hesaba emir göndermesine izin verir.",
     ),
     "botEnableRealOrders": ConfigDefinition(
         "botEnableRealOrders",
         "bool",
         "false",
-        "Matriks botun real hesaba emir gondermesine izin verir.",
+        "Matriks botun gerçek hesaba emir göndermesine izin verir.",
     ),
     "tradingKillSwitchActive": ConfigDefinition(
         "tradingKillSwitchActive",
         "bool",
         "false",
-        "true iken tum order dispatch yollarini kapatir.",
+        "Açıkken tüm emir gönderim yolları kapanır; analiz devam eder.",
     ),
     "forceSafeMode": ConfigDefinition(
         "forceSafeMode",
         "bool",
         "false",
-        "true iken analiz surer, order dispatch kapanir.",
+        "Açıkken analiz devam eder ama hiçbir emir gönderilmez (güvenli mod).",
+    ),
+    "scannerEnabled": ConfigDefinition(
+        "scannerEnabled",
+        "bool",
+        "true",
+        "Tarama döngüsünü çalıştırır. Kapatılırsa AI değerlendirmesi VE stop-loss "
+        "bekçisi dahil tüm otomasyon durur — kapatmak onay ister.",
+    ),
+    "scannerAllowOrders": ConfigDefinition(
+        "scannerAllowOrders",
+        "bool",
+        str(settings.scanner_allow_orders).lower(),
+        "Tarama kararlarının gerçek emre dönüşmesine izin verir. Kapalıyken tüm "
+        "kararlar PAPER'a sabitlenir, emir yolu tamamen kapalıdır.",
+    ),
+    "manualApprovalAllowOrders": ConfigDefinition(
+        "manualApprovalAllowOrders",
+        "bool",
+        str(settings.manual_approval_allow_orders).lower(),
+        "Manuel onay kuyruğundan onaylanan emirlerin gönderilmesine izin verir.",
+    ),
+    "portfolioScanIntervalMinutes": ConfigDefinition(
+        "portfolioScanIntervalMinutes",
+        "int",
+        str(settings.portfolio_scan_interval_minutes),
+        "Eldeki pozisyonların AI ile yeniden değerlendirilme aralığı (dakika, en az 5).",
     ),
     "buyAllowedSymbols": ConfigDefinition(
         "buyAllowedSymbols",
@@ -131,229 +157,271 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "botRealLiveModeAllowed",
         "bool",
         "false",
-        "REAL_LIVE modunun profile disinda backend tarafindan kullanilabilmesini belirler.",
+        "REAL_LIVE modunun backend tarafından kullanılabilmesine izin verir.",
     ),
     "botRealLiveArmed": ConfigDefinition(
         "botRealLiveArmed",
         "bool",
         "false",
-        "REAL_LIVE emir yolunu kasitli olarak kurar; tek basina emir yetkisi vermez.",
+        "REAL_LIVE emir yolunu bilinçli olarak kurar; tek başına emir yetkisi vermez.",
     ),
     "botRequireDemoAccount": ConfigDefinition(
         "botRequireDemoAccount",
         "bool",
         "true",
-        "Demo hesap onayi zorunlulugunu belirler.",
+        "Emir öncesi demo hesap doğrulaması zorunluluğunu belirler.",
     ),
     "botDemoAccountConfirmed": ConfigDefinition(
         "botDemoAccountConfirmed",
         "bool",
         "false",
-        "Matriks demo hesap kullanildigini onaylar.",
+        "Matriks tarafında demo hesap kullanıldığını onaylar.",
     ),
     "botAllowMarketOrders": ConfigDefinition(
         "botAllowMarketOrders",
         "bool",
         "false",
-        "MARKET emirleri sistem genelinde yasaktir; true kabul edilmez.",
+        "MARKET emirleri sistem genelinde yasaktır; açılamaz (kod kilidi).",
     ),
     "botHttpTimeoutSeconds": ConfigDefinition(
         "botHttpTimeoutSeconds",
         "int",
         "15",
-        "Matriks bot HTTP timeout suresi, saniye.",
+        "Matriks bot HTTP istek zaman aşımı (saniye).",
     ),
     "sizingRiskPerTradePct": ConfigDefinition(
-        "sizingRiskPerTradePct", "decimal", "0.50", "Per-trade equity risk percent."
+        "sizingRiskPerTradePct",
+        "decimal",
+        "0.50",
+        "İşlem başına riske edilecek özkaynak yüzdesi.",
     ),
     "sizingMaxCashUtilizationPct": ConfigDefinition(
         "sizingMaxCashUtilizationPct",
         "decimal",
         "25",
-        "Maximum cash utilization percent.",
+        "Tek seferde kullanılabilecek en fazla nakit yüzdesi.",
     ),
     "sizingMaxAccountExposurePct": ConfigDefinition(
         "sizingMaxAccountExposurePct",
         "decimal",
         "50",
-        "Maximum account exposure percent.",
+        "Hesap genelinde izin verilen en fazla toplam pozisyon yüzdesi.",
     ),
     "sizingMaxPositionValuePerSymbol": ConfigDefinition(
         "sizingMaxPositionValuePerSymbol",
         "decimal",
         "3000",
-        "Maximum symbol position value.",
+        "Sembol başına izin verilen en fazla pozisyon değeri (TL).",
     ),
     "sizingMaxOrderValueTl": ConfigDefinition(
-        "sizingMaxOrderValueTl", "decimal", "1000", "Maximum order value in TL."
+        "sizingMaxOrderValueTl",
+        "decimal",
+        "1000",
+        "Tek emirde izin verilen en fazla tutar (TL).",
     ),
     "sizingMaxQtyPerOrder": ConfigDefinition(
-        "sizingMaxQtyPerOrder", "int", "3", "Maximum integer lot quantity per order."
+        "sizingMaxQtyPerOrder",
+        "int",
+        "3",
+        "Tek emirde izin verilen en fazla lot adedi (tam sayı).",
     ),
     "sizingMinOrderValueTl": ConfigDefinition(
-        "sizingMinOrderValueTl", "decimal", "1", "Minimum order value in TL."
+        "sizingMinOrderValueTl",
+        "decimal",
+        "1",
+        "Bir emrin gönderilebilmesi için gereken en düşük tutar (TL).",
     ),
     "sizingMinStopDistancePct": ConfigDefinition(
-        "sizingMinStopDistancePct", "decimal", "0.10", "Minimum stop distance percent."
+        "sizingMinStopDistancePct",
+        "decimal",
+        "0.10",
+        "Giriş fiyatı ile stop arasındaki en düşük mesafe yüzdesi.",
     ),
     "sizingMaxStopDistancePct": ConfigDefinition(
-        "sizingMaxStopDistancePct", "decimal", "10", "Maximum stop distance percent."
+        "sizingMaxStopDistancePct",
+        "decimal",
+        "10",
+        "Giriş fiyatı ile stop arasındaki en yüksek mesafe yüzdesi.",
     ),
     "sizingMinimumStopSlippagePct": ConfigDefinition(
         "sizingMinimumStopSlippagePct",
         "decimal",
         "0.05",
-        "Minimum stop slippage buffer percent.",
+        "Stop kayması için ayrılan en düşük tampon yüzdesi.",
     ),
     "sizingMaximumStopSlippagePct": ConfigDefinition(
         "sizingMaximumStopSlippagePct",
         "decimal",
         "1",
-        "Maximum stop slippage buffer percent.",
+        "Stop kayması için ayrılan en yüksek tampon yüzdesi.",
     ),
     "sizingProfileStopSlippagePct": ConfigDefinition(
         "sizingProfileStopSlippagePct",
         "decimal",
         "0.20",
-        "System stop slippage preference percent.",
+        "Sistem geneli tercih edilen stop kayma tamponu yüzdesi.",
     ),
     "sizingMaxAccountDataAgeSeconds": ConfigDefinition(
         "sizingMaxAccountDataAgeSeconds",
         "decimal",
         "60",
-        "Maximum account sizing data age.",
+        "Hesap verisinin emir boyutlamada kullanılabileceği en fazla yaş (saniye).",
     ),
     "sizingMinimumBuyConfidence": ConfigDefinition(
-        "sizingMinimumBuyConfidence", "decimal", "75", "Minimum BUY confidence."
+        "sizingMinimumBuyConfidence",
+        "decimal",
+        "75",
+        "BUY emri için gereken en düşük AI güven puanı.",
     ),
     "sizingMinimumSellConfidence": ConfigDefinition(
-        "sizingMinimumSellConfidence", "decimal", "70", "Minimum SELL confidence."
+        "sizingMinimumSellConfidence",
+        "decimal",
+        "70",
+        "SELL emri için gereken en düşük AI güven puanı.",
     ),
     "sizingDailyOrderLimit": ConfigDefinition(
-        "sizingDailyOrderLimit", "int", "3", "Global daily order limit."
+        "sizingDailyOrderLimit",
+        "int",
+        "3",
+        "Günlük toplam emir limiti (tüm semboller).",
     ),
     "sizingPerSymbolDailyOrderLimit": ConfigDefinition(
-        "sizingPerSymbolDailyOrderLimit", "int", "1", "Per-symbol daily order limit."
+        "sizingPerSymbolDailyOrderLimit",
+        "int",
+        "1",
+        "Sembol başına günlük emir limiti.",
     ),
     "sizingAllowMarginBuying": ConfigDefinition(
         "sizingAllowMarginBuying",
         "bool",
         "false",
-        "Permit margin buying only when environment, system and profile all allow it.",
+        "Krediyle (marjin) alıma izin verir; ortam, sistem ve profil birlikte izin vermeli.",
     ),
     "accountReservationHandling": ConfigDefinition(
         "accountReservationHandling",
         "reservation_handling",
         "UNKNOWN",
-        "Whether broker buying power already deducts open BUY orders.",
+        "Aracı kurumun kullanılabilir bakiyesi bekleyen BUY emirlerini düşüyor mu bilgisi.",
     ),
     "marketDataDiagnosticsEnabled": ConfigDefinition(
         "marketDataDiagnosticsEnabled",
         "bool",
         "false",
-        "Hacim/periyot semantik diagnostik loglarini etkinlestirir.",
+        "Hacim/periyot verisi tutarlılık loglarını açar (teşhis amaçlı).",
     ),
     "marketDataDiagnosticSampleRatePct": ConfigDefinition(
         "marketDataDiagnosticSampleRatePct",
         "decimal",
         "10",
-        "Diagnostik loglarda deterministik sembol sampling yuzdesi (0-100).",
+        "Teşhis loglarında örneklenecek sembol yüzdesi (0-100).",
     ),
     "marketDataWarningRateLimitSeconds": ConfigDefinition(
         "marketDataWarningRateLimitSeconds",
         "int",
         "60",
-        "Ayni sembol/alan uyarilari arasindaki minimum sure.",
+        "Aynı sembol/alan için iki uyarı arasındaki en kısa süre (saniye).",
     ),
     "scanUniverseSymbols": ConfigDefinition(
         "scanUniverseSymbols",
         "string",
         settings.discovery_symbols,
-        "Arastirma icin taranan genis BIST pay evreni; emir izni vermez.",
+        "Araştırma için taranan geniş BIST pay evreni; emir izni vermez.",
     ),
     "discoveryIntervalMinutes": ConfigDefinition(
         "discoveryIntervalMinutes",
         "int",
         str(settings.discovery_interval_minutes),
-        "Kural tabanli piyasa kesif turlari arasindaki dakika.",
+        "Kural tabanlı piyasa keşif turları arasındaki süre (dakika).",
     ),
     "maxResearchCandidatesPerCycle": ConfigDefinition(
         "maxResearchCandidatesPerCycle",
         "int",
         str(settings.max_research_candidates_per_cycle),
-        "Bir turda AI arastirmasina alinabilecek en fazla aday.",
+        "Bir turda AI araştırmasına alınabilecek en fazla aday sayısı.",
     ),
     "maxActiveResearchSymbols": ConfigDefinition(
         "maxActiveResearchSymbols",
         "int",
         str(settings.max_active_research_symbols),
-        "Gateway market-data aboneligindeki en fazla aktif research sembolu.",
+        "Gateway veri aboneliğindeki en fazla aktif araştırma sembolü.",
     ),
     "maxConcurrentResearchEvaluations": ConfigDefinition(
         "maxConcurrentResearchEvaluations",
         "int",
         str(settings.max_concurrent_research_evaluations),
-        "Eszamanli en fazla AI arastirma degerlendirmesi.",
+        "Aynı anda çalışabilecek en fazla AI araştırma değerlendirmesi.",
     ),
     "candidateCooldownMinutes": ConfigDefinition(
         "candidateCooldownMinutes",
         "int",
         str(settings.candidate_cooldown_minutes),
-        "Ayni adayin AI degerlendirmeleri arasindaki minimum sure.",
+        "Aynı adayın iki AI değerlendirmesi arasındaki en kısa süre (dakika).",
     ),
     "maxTradeWatchlistSize": ConfigDefinition(
         "maxTradeWatchlistSize",
         "int",
         str(settings.max_trade_watchlist_size),
-        "Otomatik BUY degerlendirmesine acik en fazla sembol sayisi.",
+        "Otomatik BUY değerlendirmesine açık en fazla sembol sayısı.",
     ),
     "minimumTrendPreScore": ConfigDefinition(
-        "minimumTrendPreScore", "decimal", "60", "Research Candidate on eleme puani."
+        "minimumTrendPreScore",
+        "decimal",
+        "60",
+        "Araştırma adayı ön eleme puanı (trend skoru alt sınırı).",
     ),
     "minimumResearchScore": ConfigDefinition(
-        "minimumResearchScore", "decimal", "75", "Trade Watchlist AI arastirma puani."
+        "minimumResearchScore",
+        "decimal",
+        "75",
+        "Trade Watchlist'e terfi için gereken AI araştırma puanı.",
     ),
     "researchMinimumConfidence": ConfigDefinition(
-        "researchMinimumConfidence", "decimal", "75", "Promotion minimum AI guveni."
+        "researchMinimumConfidence",
+        "decimal",
+        "75",
+        "Terfi için gereken en düşük AI güven puanı.",
     ),
     "researchMaximumRiskScore": ConfigDefinition(
-        "researchMaximumRiskScore", "decimal", "35", "Promotion maksimum AI risk puani."
+        "researchMaximumRiskScore",
+        "decimal",
+        "35",
+        "Terfi için izin verilen en yüksek AI risk puanı.",
     ),
     "promotionConsecutivePasses": ConfigDefinition(
         "promotionConsecutivePasses",
         "int",
         str(settings.promotion_consecutive_passes),
-        "Trade Watchlist icin gereken ardisik basarili arastirma sayisi.",
+        "Terfi için gereken ardışık başarılı araştırma sayısı.",
     ),
     "promotionMinIntervalMinutes": ConfigDefinition(
         "promotionMinIntervalMinutes",
         "int",
         str(settings.promotion_min_interval_minutes),
-        "Promotion basarilari arasindaki minimum dakika.",
+        "İki başarılı araştırma arasında geçmesi gereken en kısa süre (dakika).",
     ),
     "researchCandidateTtlHours": ConfigDefinition(
         "researchCandidateTtlHours",
         "int",
         str(settings.research_candidate_ttl_hours),
-        "Yenilenmeyen arastirma adayinin gecerlilik suresi.",
+        "Yenilenmeyen araştırma adayının geçerlilik süresi (saat).",
     ),
     "tradeWatchlistTtlHours": ConfigDefinition(
         "tradeWatchlistTtlHours",
         "int",
         str(settings.trade_watchlist_ttl_hours),
-        "Son basarili kontrolden sonra BUY yetkisinin gecerlilik suresi.",
+        "Son başarılı kontrolden sonra BUY yetkisinin geçerlilik süresi (saat).",
     ),
     "discoveryMinimumVolumeTl": ConfigDefinition(
         "discoveryMinimumVolumeTl",
         "decimal",
         str(settings.discovery_min_volume_tl),
-        "Discovery ve promotion icin minimum seans TL hacmi.",
+        "Keşif ve terfi için gereken en düşük seans hacmi (TL).",
     ),
     "discoveryMaximumSpreadPct": ConfigDefinition(
         "discoveryMaximumSpreadPct",
         "decimal",
         "0.50",
-        "Aday icin maksimum spread yuzdesi.",
+        "Aday için izin verilen en yüksek alış-satış makası yüzdesi.",
     ),
 }
 
@@ -362,6 +430,9 @@ RISKY_CONFIG_KEYS = {
     "killSwitchEnabled",
     "tradingKillSwitchActive",
     "forceSafeMode",
+    "scannerEnabled",
+    "scannerAllowOrders",
+    "manualApprovalAllowOrders",
     "botMode",
     "botEnableRealOrders",
     "botRealLiveModeAllowed",
@@ -415,7 +486,7 @@ CONFIG_SECTION_DEFINITIONS = (
     ConfigSectionDefinition(
         title="İşlem modu ve güvenlik kapıları",
         description=(
-            "Sistem modu, değerlendirme kill switch'i ve emir dispatch güvenlik "
+            "Sistem modu, acil durdurma anahtarları ve emir gönderim güvenlik "
             "kapıları. Güvenliği gevşeten değişiklikler CONFIRM onayı ister."
         ),
         keys=(
@@ -423,6 +494,9 @@ CONFIG_SECTION_DEFINITIONS = (
             "killSwitchEnabled",
             "tradingKillSwitchActive",
             "forceSafeMode",
+            "scannerEnabled",
+            "scannerAllowOrders",
+            "manualApprovalAllowOrders",
         ),
     ),
     ConfigSectionDefinition(
@@ -460,10 +534,10 @@ CONFIG_SECTION_DEFINITIONS = (
         ),
     ),
     ConfigSectionDefinition(
-        title="Matriks piyasa verisi sozlesmesi",
+        title="Matriks piyasa verisi teşhisleri",
         description=(
-            "Hacim ve bar periyodu semantik diagnostikleri. Mum/indikator periyodu "
-            "aktif Trade Profile ekranindaki indicator_period alanindan yonetilir."
+            "Hacim ve bar periyodu tutarlılık teşhis logları. Mum/indikatör periyodu "
+            "aktif Trade Profile ekranındaki indicator_period alanından yönetilir."
         ),
         keys=(
             "marketDataDiagnosticsEnabled",
@@ -472,15 +546,16 @@ CONFIG_SECTION_DEFINITIONS = (
         ),
     ),
     ConfigSectionDefinition(
-        title="Kesif, arastirma ve islem listesi",
+        title="Keşif, araştırma ve işlem listesi",
         description=(
-            "Genis data-only tarama evreni, AI arastirma butcesi ve Trade "
-            "Watchlist promotion/sona erme esikleri. Research Candidate olmak "
-            "tek basina emir yetkisi vermez."
+            "Geniş data-only tarama evreni, AI araştırma bütçesi ve Trade "
+            "Watchlist terfi/sona erme eşikleri. Araştırma adayı olmak "
+            "tek başına emir yetkisi vermez."
         ),
         keys=(
             "scanUniverseSymbols",
             "discoveryIntervalMinutes",
+            "portfolioScanIntervalMinutes",
             "maxResearchCandidatesPerCycle",
             "maxActiveResearchSymbols",
             "maxConcurrentResearchEvaluations",
@@ -499,10 +574,11 @@ CONFIG_SECTION_DEFINITIONS = (
         ),
     ),
     ConfigSectionDefinition(
-        title="Deterministik position sizing sınırları",
+        title="Deterministik emir boyutlama sınırları",
         description=(
-            "Environment ve aktif Trade Profile ile birlikte çözümlenen sistem "
-            "geneli lot, nakit, maruziyet, stop, slippage ve günlük limitler."
+            "Ortam değişkenleri ve aktif Trade Profile ile birlikte çözümlenen "
+            "sistem geneli lot, nakit, maruziyet, stop, kayma ve günlük limitler. "
+            "Her alanda üç kaynaktan en sıkısı geçerli olur."
         ),
         keys=(
             "sizingRiskPerTradePct",
@@ -527,8 +603,8 @@ CONFIG_SECTION_DEFINITIONS = (
     ConfigSectionDefinition(
         title="Hesap ve nakit rezervasyonu",
         description=(
-            "Margin izni ve broker buying-power rezervasyon semantiği. Hedef "
-            "broker alanları doğrulanmadan UNKNOWN değiştirilmemelidir."
+            "Marjin izni ve aracı kurum bakiye/rezervasyon davranışı. Aracı kurum "
+            "alanları doğrulanmadan UNKNOWN değeri değiştirilmemelidir."
         ),
         keys=(
             "sizingAllowMarginBuying",
@@ -536,6 +612,75 @@ CONFIG_SECTION_DEFINITIONS = (
         ),
     ),
 )
+
+
+# Admin panelde anahtar adı yerine gösterilen Türkçe, insan-okur etiketler.
+# Sözlükte olmayan bir anahtar panelden kaybolmaz — etiketi anahtarın kendisi olur.
+CONFIG_LABELS: dict[str, str] = {
+    "allowedSymbols": "İzinli Semboller (BUY beyaz liste)",
+    "declineSymbols": "Yasaklı Semboller (kara liste)",
+    "lockedLongTermSymbols": "Uzun Vade Kilitli Semboller",
+    "disableTradingAfter": "İşlem Kesim Saati",
+    "timezone": "Saat Dilimi",
+    "tradingMode": "İşlem Modu",
+    "killSwitchEnabled": "Acil Durdurma (Kill Switch)",
+    "botMode": "Matriks Bot Modu",
+    "botEnableDemoOrders": "Demo Emirlere İzin",
+    "botEnableRealOrders": "Gerçek Emirlere İzin",
+    "tradingKillSwitchActive": "Emir Yolu Kill Switch",
+    "forceSafeMode": "Güvenli Mod Zorla",
+    "scannerEnabled": "Tarayıcı Aktif",
+    "scannerAllowOrders": "Tarayıcı Emir Gönderebilir",
+    "manualApprovalAllowOrders": "Manuel Onaylı Emirlere İzin",
+    "portfolioScanIntervalMinutes": "Portföy Tarama Aralığı (dk)",
+    "buyAllowedSymbols": "BUY İzinli Semboller (gateway)",
+    "sellExitAllowedSymbols": "SELL Çıkış İzinli Semboller",
+    "botRealLiveModeAllowed": "REAL_LIVE Moduna İzin",
+    "botRealLiveArmed": "REAL_LIVE Emir Yolu Kurulu",
+    "botRequireDemoAccount": "Demo Hesap Zorunlu",
+    "botDemoAccountConfirmed": "Demo Hesap Onaylandı",
+    "botAllowMarketOrders": "MARKET Emirlere İzin (kilitli)",
+    "botHttpTimeoutSeconds": "Bot HTTP Zaman Aşımı (sn)",
+    "sizingRiskPerTradePct": "İşlem Başına Risk (%)",
+    "sizingMaxCashUtilizationPct": "En Fazla Nakit Kullanımı (%)",
+    "sizingMaxAccountExposurePct": "En Fazla Hesap Maruziyeti (%)",
+    "sizingMaxPositionValuePerSymbol": "Sembol Başına En Fazla Pozisyon (TL)",
+    "sizingMaxOrderValueTl": "Emir Başına En Fazla Tutar (TL)",
+    "sizingMaxQtyPerOrder": "Emir Başına En Fazla Lot",
+    "sizingMinOrderValueTl": "En Düşük Emir Tutarı (TL)",
+    "sizingMinStopDistancePct": "En Düşük Stop Mesafesi (%)",
+    "sizingMaxStopDistancePct": "En Yüksek Stop Mesafesi (%)",
+    "sizingMinimumStopSlippagePct": "En Düşük Stop Kayma Tamponu (%)",
+    "sizingMaximumStopSlippagePct": "En Yüksek Stop Kayma Tamponu (%)",
+    "sizingProfileStopSlippagePct": "Tercih Edilen Stop Kayma Tamponu (%)",
+    "sizingMaxAccountDataAgeSeconds": "Hesap Verisi Azami Yaşı (sn)",
+    "sizingMinimumBuyConfidence": "BUY İçin En Düşük AI Güveni",
+    "sizingMinimumSellConfidence": "SELL İçin En Düşük AI Güveni",
+    "sizingDailyOrderLimit": "Günlük Toplam Emir Limiti",
+    "sizingPerSymbolDailyOrderLimit": "Sembol Başına Günlük Emir Limiti",
+    "sizingAllowMarginBuying": "Krediyle (Marjin) Alıma İzin",
+    "accountReservationHandling": "Bakiye Rezervasyon Davranışı",
+    "marketDataDiagnosticsEnabled": "Veri Teşhis Logları",
+    "marketDataDiagnosticSampleRatePct": "Teşhis Örnekleme Oranı (%)",
+    "marketDataWarningRateLimitSeconds": "Uyarı Sıklık Sınırı (sn)",
+    "scanUniverseSymbols": "Tarama Evreni Sembolleri",
+    "discoveryIntervalMinutes": "Keşif Turu Aralığı (dk)",
+    "maxResearchCandidatesPerCycle": "Tur Başına En Fazla Araştırma Adayı",
+    "maxActiveResearchSymbols": "En Fazla Aktif Araştırma Sembolü",
+    "maxConcurrentResearchEvaluations": "Eşzamanlı AI Araştırma Sayısı",
+    "candidateCooldownMinutes": "Aday Bekleme Süresi (dk)",
+    "maxTradeWatchlistSize": "İşlem Listesi Azami Boyutu",
+    "minimumTrendPreScore": "Ön Eleme Trend Puanı (alt sınır)",
+    "minimumResearchScore": "Terfi İçin Araştırma Puanı",
+    "researchMinimumConfidence": "Terfi İçin En Düşük AI Güveni",
+    "researchMaximumRiskScore": "Terfi İçin En Yüksek Risk Puanı",
+    "promotionConsecutivePasses": "Terfi İçin Ardışık Başarı Sayısı",
+    "promotionMinIntervalMinutes": "Terfi Başarıları Arası Süre (dk)",
+    "researchCandidateTtlHours": "Araştırma Adayı Geçerliliği (saat)",
+    "tradeWatchlistTtlHours": "BUY Yetkisi Geçerliliği (saat)",
+    "discoveryMinimumVolumeTl": "En Düşük Seans Hacmi (TL)",
+    "discoveryMaximumSpreadPct": "En Yüksek Alış-Satış Makası (%)",
+}
 
 
 @dataclass(frozen=True)
@@ -547,6 +692,11 @@ class AdminConfigItem:
     is_sensitive: bool
     source: str
     updated_at: datetime | None = None
+
+    @property
+    def label(self) -> str:
+        """Panelde gösterilen Türkçe etiket; tanımsızsa anahtarın kendisi."""
+        return CONFIG_LABELS.get(self.key, self.key)
 
     @property
     def display_value(self) -> str:

@@ -38,7 +38,10 @@ from app.models.signal import OrderType, SignalAction, SignalMode
 from app.services.admin_config import (
     build_runtime_risk_config,
     get_admin_config_value,
+    get_portfolio_scan_interval_minutes,
+    get_scanner_allow_orders,
     is_kill_switch_enabled,
+    is_scanner_runtime_enabled,
 )
 from app.services.discovery_agent import run_discovery_scan
 from app.services.evaluator import EvaluationResult, evaluate_symbol
@@ -84,6 +87,19 @@ logger = logging.getLogger(__name__)
 def _configured_default_mode() -> SignalMode:
     """Translate the configured default mode for scanner-originated requests."""
     return SignalMode(settings.default_mode.value.upper())
+
+
+async def _orders_enabled() -> bool:
+    """Emir gönderim ana anahtarı (admin panel > .env varsayılanı).
+
+    DB'ye ulaşılamazsa .env değerine düşer; panelde satır yoksa da .env
+    değeri geçerlidir, yani mevcut kurulumlar davranış değiştirmez.
+    """
+    try:
+        async with async_session_factory() as session:
+            return await get_scanner_allow_orders(session)
+    except Exception:
+        return settings.scanner_allow_orders
 
 
 # Aynı uyarıyı her tick'te loglamamak için susturma süresi.
@@ -231,6 +247,8 @@ class SymbolScanner:
         kill_switch = False
         runtime_cfg = risk_config
         scan_interval_minutes = 30
+        scanner_runtime_enabled = True
+        allow_orders = settings.scanner_allow_orders
         pending_overrides: set[str] = set()
         try:
             async with async_session_factory() as session:
@@ -238,6 +256,8 @@ class SymbolScanner:
                 runtime_cfg = await build_runtime_risk_config(session)
                 profile = await get_active_profile(session)
                 scan_interval_minutes = int(profile.scan_interval_minutes)
+                scanner_runtime_enabled = await is_scanner_runtime_enabled(session)
+                allow_orders = await get_scanner_allow_orders(session)
                 pending_overrides = {
                     s.strip().upper()
                     for s in await list_pending_override_symbols(session)
@@ -252,6 +272,15 @@ class SymbolScanner:
                 "killswitch", "Kill switch enabled; skipping scan cycle"
             )
             await notify_risk_block("Kill switch açık; scanner turu atlandı")
+            return []
+
+        if not scanner_runtime_enabled:
+            # Admin panelden duraklatıldı (scannerEnabled=false). Stop-loss
+            # bekçisi dahil hiçbir otomasyon bu turda çalışmaz.
+            self._warn_throttled(
+                "scanner-paused",
+                "Scanner paused from admin panel (scannerEnabled=false)",
+            )
             return []
 
         # ── Gateway sağlık kontrolü - Matriks kapalıysa tur atlanır ────────
@@ -332,11 +361,12 @@ class SymbolScanner:
                 continue
 
             try:
-                # SCANNER_ALLOW_ORDERS=false -> PAPER'a sabit (Phase 1 davranışı).
+                # scannerAllowOrders=false (panel > env) -> PAPER'a sabit
+                # (Phase 1 davranışı), emir yolu tamamen kapalı.
                 result = await evaluate_symbol(
                     symbol,
                     mode=_configured_default_mode(),
-                    force_paper=not settings.scanner_allow_orders,
+                    force_paper=not allow_orders,
                 )
             except GatewayUnavailable:
                 self._warn_throttled(
@@ -525,7 +555,14 @@ class SymbolScanner:
         alınmış sonra pasifleşmiş) pozisyonların da yönetimsiz kalmamasını
         garanti eder.
         """
-        interval = timedelta(minutes=max(5, settings.portfolio_scan_interval_minutes))
+        try:
+            async with async_session_factory() as session:
+                interval_minutes = await get_portfolio_scan_interval_minutes(session)
+                allow_orders = await get_scanner_allow_orders(session)
+        except Exception:
+            interval_minutes = settings.portfolio_scan_interval_minutes
+            allow_orders = settings.scanner_allow_orders
+        interval = timedelta(minutes=max(5, interval_minutes))
         now = datetime.now(timezone.utc)
         if self._last_portfolio_scan and (now - self._last_portfolio_scan) < interval:
             return
@@ -563,7 +600,7 @@ class SymbolScanner:
                 result = await evaluate_symbol(
                     symbol,
                     mode=_configured_default_mode(),
-                    force_paper=not settings.scanner_allow_orders,
+                    force_paper=not allow_orders,
                 )
             except GatewayUnavailable:
                 self._warn_throttled(
@@ -607,7 +644,7 @@ class SymbolScanner:
         if response.requires_confirmation:
             await queue_response(response, result.mode)
             return
-        if not settings.scanner_allow_orders or not response.allow_order:
+        if not await _orders_enabled() or not response.allow_order:
             return
         if response.action not in (SignalAction.BUY, SignalAction.SELL):
             return

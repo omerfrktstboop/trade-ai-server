@@ -48,20 +48,21 @@
     <div class="table-container mb-16">
       <table>
         <thead>
-          <tr><th>Anahtar</th><th>Değer</th><th>Açıklama</th><th>Kaynak</th></tr>
+          <tr><th>Ayar</th><th>Değer</th><th>Açıklama</th><th>Kaynak</th></tr>
         </thead>
         <tbody>
           {% for item in section.items %}
           <tr data-config-key="{{ item.key }}">
             <td>
-              <code class="mono">{{ item.key }}</code>
+              <strong>{{ item.label }}</strong>
+              <div><code class="mono text-muted" style="font-size:11px">{{ item.key }}</code></div>
               {% if item.requires_confirmation %}
               <div><span class="badge badge-wait">risk onayı</span></div>
               {% endif %}
             </td>
             <td class="config-value-cell">{{ config_control(item) }}</td>
             <td class="text-muted text-sm">{{ item.description }}</td>
-            <td><span class="badge badge-neutral">{{ item.source }}</span></td>
+            <td><span class="badge badge-neutral">{{ 'panel' if item.source == 'db' else 'varsayılan (.env)' }}</span></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -93,10 +94,12 @@
 <div class="card mb-24" style="border-color:var(--accent)">
   <div class="section-title mb-16" style="color:var(--accent)">Tüm çalışma zamanı ayarları</div>
   <p class="text-muted text-sm">
-    Sunucunun DB destekli çalışma zamanı ayarlarının tamamı aşağıda yer alır. Profil bazlı risk ve davranış
-    ayarları ayrıca <a href="/admin/trade-profiles" class="log-link">Trade Profiles</a> ekranından yönetilir.
-    API tokenları, veritabanı bağlantısı ve gateway URL gibi secret veya yalnız başlangıçta okunan ENV değerleri
-    güvenlik ve restart gereksinimi nedeniyle bu ekranda tutulmaz.
+    Sistemin tüm davranış ayarları bu ekrandan yönetilir; kaydedilen değer anında geçerli olur, sunucu
+    yeniden başlatma gerektirmez. Kaynağı <em>varsayılan (.env)</em> görünen ayarlar henüz panelden
+    değiştirilmemiştir ve .env varsayılanıyla çalışır; kaydettiğinizde panel değeri kalıcı olarak öncelik alır.
+    Profil bazlı risk ayarları ayrıca <a href="/admin/trade-profiles" class="log-link">Trade Profiles</a>
+    ekranından yönetilir. .env dosyasında yalnızca API anahtarları, veritabanı/gateway bağlantı tanımları
+    gibi kimlik bilgileri kalır — onlar güvenlik gereği bu ekranda gösterilmez.
   </p>
 </div>
 

@@ -151,6 +151,12 @@ def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
         )
     if key in {"killSwitchEnabled", "tradingKillSwitchActive", "forceSafeMode"}:
         return _parse_bool(old_value) is True and _parse_bool(new_value) is False
+    if key == "scannerEnabled":
+        # Kapatmak stop-loss bekçisi dahil tüm otomasyonu durdurur — onay ister.
+        return _parse_bool(old_value) is True and _parse_bool(new_value) is False
+    if key in {"scannerAllowOrders", "manualApprovalAllowOrders"}:
+        # Açmak gerçek emir yolunu kurar — onay ister.
+        return _parse_bool(new_value) is True and old_value != new_value
     if key == "botMode":
         return (
             new_value

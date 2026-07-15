@@ -5,6 +5,31 @@ document says which one wins for a given key, and lists the places that
 still read a key through something other than the shared resolver for that
 system.
 
+## Panel-over-env keys (added after the original audit)
+
+Per operator request, runtime behavior flags that used to be env-only are
+now admin-panel keys where **a saved DB row permanently overrides the .env
+value; no row → the live .env value applies** (so existing deployments and
+test monkeypatching keep working until the panel writes a row):
+
+| Panel key | .env fallback | Single entry point |
+|---|---|---|
+| `scannerAllowOrders` | `SCANNER_ALLOW_ORDERS` | `admin_config.get_scanner_allow_orders(session)` |
+| `manualApprovalAllowOrders` | `MANUAL_APPROVAL_ALLOW_ORDERS` | `admin_config.get_manual_approval_allow_orders(session)` |
+| `portfolioScanIntervalMinutes` | `PORTFOLIO_SCAN_INTERVAL_MINUTES` | `admin_config.get_portfolio_scan_interval_minutes(session)` |
+| `scannerEnabled` | *(none — default `true`)* | `admin_config.is_scanner_runtime_enabled(session)` |
+
+`scannerEnabled` is a runtime *pause* for an already-running scanner loop;
+the env `SCANNER_ENABLED` still decides whether the background task starts
+at process boot (a deployment definition, needs restart). Turning
+`scannerEnabled` off requires CONFIRM because it also stops the stop-loss
+guard; turning `scannerAllowOrders`/`manualApprovalAllowOrders` on requires
+CONFIRM because it arms a real order path.
+
+.env itself now holds only identity/connection definitions (API keys, DB
+URL, gateway URL/token, Telegram) plus process-boot definitions and the
+initial defaults for the keys above — see `.env.example`.
+
 ## The four layers
 
 1. **`app/core/risk_config.py`** — the `risk_config` singleton (`RiskConfig`,

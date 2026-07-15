@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from app.services.admin_config.definitions import (
     CONFIG_DEFINITIONS,
+    CONFIG_LABELS,
     CONFIG_SECTION_DEFINITIONS,
     EMPTY_ALLOWED_CONFIG_KEYS,
     READ_ONLY_CONFIG_KEYS,
@@ -33,9 +34,13 @@ from app.services.admin_config.validation import (
 from app.services.admin_config.store import (
     build_runtime_risk_config,
     get_admin_config_value,
+    get_manual_approval_allow_orders,
+    get_portfolio_scan_interval_minutes,
+    get_scanner_allow_orders,
     get_trading_mode_override,
     has_admin_config_row,
     is_kill_switch_enabled,
+    is_scanner_runtime_enabled,
     list_admin_configs,
     set_admin_config_value,
     set_admin_config_values,
@@ -43,6 +48,7 @@ from app.services.admin_config.store import (
 
 __all__ = [
     "CONFIG_DEFINITIONS",
+    "CONFIG_LABELS",
     "CONFIG_SECTION_DEFINITIONS",
     "EMPTY_ALLOWED_CONFIG_KEYS",
     "READ_ONLY_CONFIG_KEYS",
@@ -61,9 +67,13 @@ __all__ = [
     "_serialize_value",
     "build_runtime_risk_config",
     "get_admin_config_value",
+    "get_manual_approval_allow_orders",
+    "get_portfolio_scan_interval_minutes",
+    "get_scanner_allow_orders",
     "get_trading_mode_override",
     "has_admin_config_row",
     "is_kill_switch_enabled",
+    "is_scanner_runtime_enabled",
     "list_admin_configs",
     "set_admin_config_value",
     "set_admin_config_values",

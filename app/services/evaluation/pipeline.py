@@ -51,20 +51,6 @@ from app.services.effective_risk_config import (
     SystemRiskConfig,
     resolve_effective_risk_config,
 )
-from app.services.market_regime import get_index_regime
-from app.services.matriks_gateway import (
-    GatewayError,
-    MatriksGatewayClient,
-    gateway_client,
-)
-from app.services.news_service import get_news_context
-from app.services.kap_service import get_kap_context
-from app.services.risk_engine import RiskEngine
-from app.services.signal_override import consume_override, override_to_raw_decision
-from app.services.trade_profile import get_active_profile, get_static_default_profile
-
-logger = logging.getLogger(__name__)
-
 from app.services.evaluation.parsing import _safe_float
 from app.services.evaluation.payload import (
     _build_position_context,
@@ -80,6 +66,19 @@ from app.services.evaluation.persistence import (
     persist_evaluation,
     persist_sizing_audit,
 )
+from app.services.market_regime import get_index_regime
+from app.services.matriks_gateway import (
+    GatewayError,
+    MatriksGatewayClient,
+    gateway_client,
+)
+from app.services.news_service import get_news_context
+from app.services.kap_service import get_kap_context
+from app.services.risk_engine import RiskEngine
+from app.services.signal_override import consume_override, override_to_raw_decision
+from app.services.trade_profile import get_active_profile, get_static_default_profile
+
+logger = logging.getLogger(__name__)
 
 
 # Related symbols whose depth is fetched while evaluating the root symbol.

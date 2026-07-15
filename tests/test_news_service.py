@@ -366,9 +366,12 @@ class TestNewsInPayload:
 
         payload = _build_payload(req)
 
-        assert payload["alphaTrendSignal"] == "BUY"
-        assert payload["indicatorConsensus"] == "BUY"
-        assert payload["natr"] == 2.4
-        assert payload["depthQueueDropPct"] == 12.0
-        assert payload["technicalFeatures"]["schemaVersion"] == "technical-features-v2"
-        assert payload["technicalFeatures"]["indicatorBuyCount"] == 4
+        technical = payload["technicalFeatures"]
+        assert "alphaTrendSignal" not in payload
+        assert "depthQueueDropPct" not in payload
+        assert technical["alphaTrendSignal"] == "BUY"
+        assert technical["indicatorConsensus"] == "BUY"
+        assert technical["natr"] == 2.4
+        assert technical["depthQueueDropPct"] == 12.0
+        assert technical["schemaVersion"] == "technical-features-v2"
+        assert technical["indicatorBuyCount"] == 4

@@ -69,7 +69,9 @@ class TestMockProviderFlow:
 
         import asyncio
 
-        raw = asyncio.run(provider.decide({"symbol": "THYAO"}))
+        from app.services.evaluator import build_ai_decision_context
+
+        raw = asyncio.run(provider.decide(build_ai_decision_context(_req())))
 
         from app.models.signal import SignalAction
         from app.services.risk_engine import RiskDecision
@@ -90,14 +92,13 @@ class TestMockProviderFlow:
 
         import asyncio
 
+        from app.services.evaluator import build_ai_decision_context
+
         raw = asyncio.run(
             provider.decide(
-                {
-                    "symbol": "THYAO",
-                    "rsi": 10.0,
-                    "lastPrice": 100.0,
-                    "ema20": 80.0,
-                }
+                build_ai_decision_context(
+                    _req(rsi=10.0, lastPrice=100.0, ema20=80.0)
+                )
             )
         )
 
@@ -520,5 +521,5 @@ class TestDepthReliableFlag:
         payload = _build_payload(req)
 
         assert payload["depthReliable"] is True
-        assert payload["depthQueueDropPct"] == 12.0
+        assert "depthQueueDropPct" not in payload
         assert payload["technicalFeatures"]["depthQueueDropPct"] == 12.0

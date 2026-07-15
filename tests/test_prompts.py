@@ -67,6 +67,7 @@ def test_prompt_requires_json_decision_format():
 
 def test_prompt_contains_compact_risk_and_position_rules():
     prompt = get_trading_system_prompt()
+    normalized = " ".join(prompt.split())
 
     assert "technical.natr" in prompt
     assert "technical.atr" in prompt
@@ -75,7 +76,7 @@ def test_prompt_contains_compact_risk_and_position_rules():
     assert "target distance must be at least 1.5 times" in prompt
     assert "critical volatility data is unavailable" in prompt
     assert "strongly supported WAIT may have high confidence" in prompt
-    assert "low or medium confidence" in prompt
+    assert "low or medium confidence" in normalized
     assert "risk_score`` for BUY, SELL, and WAIT" in prompt
     for risk_input in (
         "volatility",

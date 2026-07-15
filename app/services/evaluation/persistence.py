@@ -21,11 +21,10 @@ from app.models.signal import (
     SignalRequest,
     SignalResponse,
 )
+from app.services.evaluation.parsing import _safe_action, _safe_decimal, _safe_float
 from app.services.risk_engine import RiskDecision, RiskEngine
 
 logger = logging.getLogger(__name__)
-
-from app.services.evaluation.parsing import _safe_action, _safe_decimal, _safe_float
 
 
 def _json_safe(value: Any) -> Any:

@@ -210,13 +210,13 @@ class TestFundamentalsInPayload:
         assert raw_request is not None
         assert raw_request["fundamentalsContext"]["THYAO"]["fcfGrowthPct"] == 12.5
 
-    def test_prompt_documents_fundamentals_rule(self):
+    def test_compact_prompt_excludes_audit_only_fundamentals(self):
         from app.core.prompts import get_trading_system_prompt
 
         prompt = get_trading_system_prompt()
-        assert "fundamentalsContext" in prompt
-        assert "fcfGrowthPct" in prompt
-        assert "debtToEquity" in prompt
+        assert "fundamentalsContext" not in prompt
+        assert "fcfGrowthPct" not in prompt
+        assert "debtToEquity" not in prompt
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

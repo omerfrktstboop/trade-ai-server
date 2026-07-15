@@ -172,6 +172,12 @@ def _build_payload_str(payload: dict[str, Any]) -> str:
 class AiProvider(ABC):
     """Interface every AI provider must implement."""
 
+    #: True after enough consecutive decide() failures that new BUY signals
+    #: should not be trusted (T8). Providers that cannot fail this way (e.g.
+    #: MockAiProvider) leave this permanently False.
+    is_degraded: bool = False
+    consecutive_failures: int = 0
+
     @abstractmethod
     async def decide(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Produce a trading decision from an ``AiDecisionContext`` payload.
@@ -245,11 +251,30 @@ class DeepSeekProvider(AiProvider):
         model: str = "deepseek-chat",
         base_url: str = "https://api.deepseek.com/v1",
         timeout: float = 30.0,
+        max_attempts: int | None = None,
+        degraded_threshold: int | None = None,
+        probe_interval_seconds: float | None = None,
     ) -> None:
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.max_attempts = max(1, max_attempts or settings.deepseek_max_attempts)
+        self.degraded_threshold = max(
+            1, degraded_threshold or settings.ai_degraded_threshold
+        )
+        self.probe_interval_seconds = float(
+            probe_interval_seconds
+            if probe_interval_seconds is not None
+            else settings.ai_degraded_probe_interval_seconds
+        )
+        # Consecutive-failure tracking for the "AI degraded" status (T8):
+        # once >= degraded_threshold, decide() short-circuits to WAIT without
+        # attempting a network call, except for one periodic probe attempt
+        # every probe_interval_seconds so recovery can be detected.
+        self.consecutive_failures = 0
+        self.last_failure_at: float | None = None
+        self.last_attempt_at: float | None = None
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -258,11 +283,47 @@ class DeepSeekProvider(AiProvider):
             "Content-Type": "application/json",
         }
 
+    @property
+    def is_degraded(self) -> bool:
+        return self.consecutive_failures >= self.degraded_threshold
+
+    def _record_failure(self) -> None:
+        self.consecutive_failures += 1
+        self.last_failure_at = time.monotonic()
+
+    def _record_success(self) -> None:
+        self.consecutive_failures = 0
+        self.last_failure_at = None
+
     async def decide(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Send compact decision context to DeepSeek, parse JSON response.
 
-        On any error (network, timeout, parse) → WAIT fallback.
+        On any error (network, timeout, parse) → WAIT fallback. Network and
+        timeout errors retry up to ``max_attempts`` times with exponential
+        backoff; a persistent API/parse failure does not retry (retrying an
+        auth error or a malformed-JSON response from the same prompt is very
+        unlikely to help, and only adds latency to a scanner tick).
+
+        When already degraded (consecutive_failures >= degraded_threshold),
+        skips the network call entirely and returns WAIT immediately, except
+        for one periodic probe attempt every probe_interval_seconds so
+        recovery can be detected without hammering a down provider.
         """
+        if self.is_degraded:
+            now = time.monotonic()
+            due_for_probe = (
+                self.last_attempt_at is None
+                or (now - self.last_attempt_at) >= self.probe_interval_seconds
+            )
+            if not due_for_probe:
+                return {
+                    **_WAIT_FALLBACK,
+                    "reason": (
+                        f"AI provider degraded ({self.consecutive_failures} "
+                        "consecutive failures); skipping call until next probe"
+                    ),
+                }
+
         messages = [
             {"role": "system", "content": get_trading_system_prompt()},
             {"role": "user", "content": _build_payload_str(payload)},
@@ -279,63 +340,147 @@ class DeepSeekProvider(AiProvider):
         }
 
         t0 = time.monotonic()
+        self.last_attempt_at = t0
+        result = await self._call_with_retry(body, t0)
+        if result.get("_transient_failure"):
+            self._record_failure()
+            result = {k: v for k, v in result.items() if k != "_transient_failure"}
+        else:
+            self._record_success()
+        return result
 
-        try:
-            timeout = aiohttp.ClientTimeout(total=self.timeout)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=self._headers,
-                    json=body,
-                ) as resp:
-                    elapsed = time.monotonic() - t0
-                    logger.info(
-                        "DeepSeek API: status=%d elapsed=%.2fs model=%s",
-                        resp.status,
-                        elapsed,
-                        self.model,
-                    )
-
-                    if resp.status != 200:
-                        error_text = await resp.text()
-                        logger.error(
-                            "DeepSeek API error %d: %s",
+    async def _call_with_retry(self, body: dict[str, Any], t0: float) -> dict[str, Any]:
+        last_reason = "Unknown error"
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                timeout = aiohttp.ClientTimeout(total=self.timeout)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(
+                        f"{self.base_url}/chat/completions",
+                        headers=self._headers,
+                        json=body,
+                    ) as resp:
+                        elapsed = time.monotonic() - t0
+                        logger.info(
+                            "DeepSeek API: status=%d elapsed=%.2fs model=%s attempt=%d/%d",
                             resp.status,
-                            error_text[:500],
+                            elapsed,
+                            self.model,
+                            attempt,
+                            self.max_attempts,
                         )
-                        return {**_WAIT_FALLBACK, "reason": f"API error {resp.status}"}
 
-                    data = await resp.json()
+                        if resp.status >= 500:
+                            error_text = await resp.text()
+                            last_reason = f"API error {resp.status}"
+                            logger.error(
+                                "DeepSeek API error %d (attempt %d/%d): %s",
+                                resp.status,
+                                attempt,
+                                self.max_attempts,
+                                error_text[:500],
+                            )
+                            if attempt < self.max_attempts:
+                                await asyncio.sleep(2 ** (attempt - 1))
+                                continue
+                            return {
+                                **_WAIT_FALLBACK,
+                                "reason": last_reason,
+                                "_transient_failure": True,
+                            }
 
-        except aiohttp.ClientError as exc:
-            elapsed = time.monotonic() - t0
-            logger.error("DeepSeek network error after %.2fs: %s", elapsed, exc)
-            return {**_WAIT_FALLBACK, "reason": f"Network error: {exc}"}
+                        if resp.status != 200:
+                            error_text = await resp.text()
+                            logger.error(
+                                "DeepSeek API error %d: %s",
+                                resp.status,
+                                error_text[:500],
+                            )
+                            # 4xx (auth, bad request, ...) will not be fixed
+                            # by retrying the identical request, but still
+                            # counts toward the degraded-status threshold —
+                            # every subsequent call will fail identically.
+                            return {
+                                **_WAIT_FALLBACK,
+                                "reason": f"API error {resp.status}",
+                                "_transient_failure": True,
+                            }
 
-        except asyncio.TimeoutError:
-            elapsed = time.monotonic() - t0
-            logger.error("DeepSeek request timed out after %.2fs", elapsed)
-            return {
-                **_WAIT_FALLBACK,
-                "reason": f"Request timed out after {self.timeout:.0f}s",
-            }
+                        data = await resp.json()
+                        break
 
-        except Exception as exc:
-            elapsed = time.monotonic() - t0
-            logger.exception("DeepSeek unexpected error after %.2fs", elapsed)
-            return {**_WAIT_FALLBACK, "reason": f"Unexpected error: {exc}"}
+            except aiohttp.ClientError as exc:
+                elapsed = time.monotonic() - t0
+                last_reason = f"Network error: {exc}"
+                logger.error(
+                    "DeepSeek network error after %.2fs (attempt %d/%d): %s",
+                    elapsed,
+                    attempt,
+                    self.max_attempts,
+                    exc,
+                )
+                if attempt < self.max_attempts:
+                    await asyncio.sleep(2 ** (attempt - 1))
+                    continue
+                return {
+                    **_WAIT_FALLBACK,
+                    "reason": last_reason,
+                    "_transient_failure": True,
+                }
+
+            except asyncio.TimeoutError:
+                elapsed = time.monotonic() - t0
+                last_reason = f"Request timed out after {self.timeout:.0f}s"
+                logger.error(
+                    "DeepSeek request timed out after %.2fs (attempt %d/%d)",
+                    elapsed,
+                    attempt,
+                    self.max_attempts,
+                )
+                if attempt < self.max_attempts:
+                    await asyncio.sleep(2 ** (attempt - 1))
+                    continue
+                return {
+                    **_WAIT_FALLBACK,
+                    "reason": last_reason,
+                    "_transient_failure": True,
+                }
+
+            except Exception as exc:
+                elapsed = time.monotonic() - t0
+                logger.exception(
+                    "DeepSeek unexpected error after %.2fs (attempt %d/%d)",
+                    elapsed,
+                    attempt,
+                    self.max_attempts,
+                )
+                return {
+                    **_WAIT_FALLBACK,
+                    "reason": f"Unexpected error: {exc}",
+                    "_transient_failure": True,
+                }
+        else:
+            return {**_WAIT_FALLBACK, "reason": last_reason, "_transient_failure": True}
 
         # Extract assistant message content
         choices = data.get("choices", [])
         if not choices:
             logger.warning("DeepSeek returned empty choices")
-            return {**_WAIT_FALLBACK, "reason": "Empty response from model"}
+            return {
+                **_WAIT_FALLBACK,
+                "reason": "Empty response from model",
+                "_transient_failure": True,
+            }
 
         content = choices[0].get("message", {}).get("content", "")
 
         if not content:
             logger.warning("DeepSeek returned empty content")
-            return {**_WAIT_FALLBACK, "reason": "Empty content from model"}
+            return {
+                **_WAIT_FALLBACK,
+                "reason": "Empty content from model",
+                "_transient_failure": True,
+            }
 
         # Parse JSON from content
         parsed = _extract_json(content)
@@ -348,6 +493,7 @@ class DeepSeekProvider(AiProvider):
             return {
                 **_WAIT_FALLBACK,
                 "reason": f"Could not parse model response as JSON: {content[:100]}...",
+                "_transient_failure": True,
             }
 
         decision = _normalize_decision(parsed)
@@ -466,3 +612,13 @@ def get_default_provider() -> AiProvider:
     if _default_provider is None:
         _default_provider = get_provider()
     return _default_provider
+
+
+def get_ai_provider_status() -> dict[str, Any]:
+    """AI health summary for the admin panel (T8/T9)."""
+    provider = get_default_provider()
+    return {
+        "providerName": type(provider).__name__,
+        "isDegraded": provider.is_degraded,
+        "consecutiveFailures": provider.consecutive_failures,
+    }

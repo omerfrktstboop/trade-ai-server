@@ -123,6 +123,9 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-chat"
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     deepseek_timeout: int = 30
+    deepseek_max_attempts: int = 2
+    ai_degraded_threshold: int = 3
+    ai_degraded_probe_interval_seconds: int = 60
 
     # ── Database ──────────────────────────────────────────────────────────
 

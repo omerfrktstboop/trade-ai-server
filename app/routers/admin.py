@@ -49,6 +49,7 @@ from app.services.admin_config import (
     set_admin_config_value,
     set_admin_config_values,
 )
+from app.services.ai_provider import get_ai_provider_status
 from app.services.block_reason_classifier import classify_block_reason
 from app.services.daily_trade_count import get_today_trade_counts
 from app.services.fundamentals_service import (
@@ -544,6 +545,7 @@ async def admin_why_blocked(request: Request) -> HTMLResponse:
             "status_kill_switch": False,
             "status_profile_code": "UNKNOWN",
             "status_profile_risk_level": "UNKNOWN",
+            "status_ai_degraded": None,
         }
     rows = [
         r
@@ -2002,11 +2004,16 @@ async def _status_strip_context(
     visible without needing to visit Dashboard or Trade Profiles first."""
     configs = configs if configs is not None else await _config_lookup(session)
     profile = profile if profile is not None else await get_active_profile(session)
+    try:
+        ai_status = get_ai_provider_status()
+    except Exception:
+        ai_status = {"isDegraded": None}
     return {
         "status_mode": configs["tradingMode"].value,
         "status_kill_switch": configs["killSwitchEnabled"].value == "true",
         "status_profile_code": profile.code,
         "status_profile_risk_level": profile.risk_level,
+        "status_ai_degraded": ai_status["isDegraded"],
     }
 
 
@@ -2037,6 +2044,7 @@ async def _dashboard_context() -> dict[str, Any]:
             "status_kill_switch": False,
             "status_profile_code": "UNKNOWN",
             "status_profile_risk_level": "UNKNOWN",
+            "status_ai_degraded": None,
         }
         db_error = str(exc)
     else:
@@ -2085,6 +2093,16 @@ async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
         "positionSync": position_synchronizer.get_status(),
         "runtime": {"dbAvailable": db_error is None, "dbError": db_error},
     }
+    try:
+        result["aiProvider"] = get_ai_provider_status()
+    except Exception as exc:
+        logger.warning("AI provider status query failed: %s", exc)
+        result["aiProvider"] = {
+            "providerName": None,
+            "isDegraded": None,
+            "consecutiveFailures": None,
+            "error": str(exc),
+        }
     try:
         health = await gateway_client.health()
         result["gateway"] = {

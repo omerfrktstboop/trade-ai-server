@@ -427,6 +427,177 @@ class TestDeepSeekDecide:
         assert "Empty content" in result["reason"]
 
     @pytest.mark.asyncio
+    async def test_network_error_retries_then_succeeds(self, monkeypatch):
+        """First attempt fails, second (within max_attempts) succeeds."""
+        monkeypatch.setattr(
+            __import__("asyncio"), "sleep", AsyncMock(return_value=None)
+        )
+        provider = _provider(max_attempts=2)
+        session = _mock_session()
+        success_ctx = AsyncMock()
+        success_ctx.__aenter__ = AsyncMock(
+            return_value=_fake_resp(
+                status=200,
+                json_body={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"action": "BUY", "confidence": 80, "reason": "recovered"}'
+                            }
+                        }
+                    ]
+                },
+            )
+        )
+        success_ctx.__aexit__ = AsyncMock(return_value=None)
+        session.post = MagicMock(
+            side_effect=[
+                __import__("aiohttp").ClientError("timeout"),
+                success_ctx,
+            ]
+        )
+
+        with patch("aiohttp.ClientSession") as mock_cls:
+            mock_cls.return_value = session
+            result = await provider.decide(COMPACT_CONTEXT)
+
+        assert result["action"] == "BUY"
+        assert session.post.call_count == 2
+        assert provider.consecutive_failures == 0
+        assert provider.is_degraded is False
+
+    @pytest.mark.asyncio
+    async def test_exhausts_max_attempts_then_falls_back(self, monkeypatch):
+        sleep_mock = AsyncMock(return_value=None)
+        monkeypatch.setattr(__import__("asyncio"), "sleep", sleep_mock)
+        provider = _provider(max_attempts=2)
+        session = _mock_session()
+        session.post.side_effect = __import__("aiohttp").ClientError("still down")
+
+        with patch("aiohttp.ClientSession") as mock_cls:
+            mock_cls.return_value = session
+            result = await provider.decide(COMPACT_CONTEXT)
+
+        assert result["action"] == "WAIT"
+        assert session.post.call_count == 2
+        assert sleep_mock.call_count == 1
+        assert provider.consecutive_failures == 1
+
+    @pytest.mark.asyncio
+    async def test_backoff_is_exponential_between_attempts(self, monkeypatch):
+        sleep_mock = AsyncMock(return_value=None)
+        monkeypatch.setattr(__import__("asyncio"), "sleep", sleep_mock)
+        provider = _provider(max_attempts=3)
+        session = _mock_session()
+        session.post.side_effect = __import__("aiohttp").ClientError("down")
+
+        with patch("aiohttp.ClientSession") as mock_cls:
+            mock_cls.return_value = session
+            await provider.decide(COMPACT_CONTEXT)
+
+        assert [call.args[0] for call in sleep_mock.call_args_list] == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_four_xx_error_does_not_retry_but_counts_as_failure(self):
+        provider = _provider(max_attempts=2)
+        resp = _fake_resp(status=401, content='{"error": "unauthorized"}')
+
+        with patch("aiohttp.ClientSession") as mock_cls:
+            mock_cls.return_value = _mock_session(resp)
+            result = await provider.decide(COMPACT_CONTEXT)
+
+        assert result["action"] == "WAIT"
+        assert provider.consecutive_failures == 1
+
+    @pytest.mark.asyncio
+    async def test_becomes_degraded_after_threshold_consecutive_failures(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            __import__("asyncio"), "sleep", AsyncMock(return_value=None)
+        )
+        provider = _provider(max_attempts=1, degraded_threshold=3)
+        session = _mock_session()
+        session.post.side_effect = __import__("aiohttp").ClientError("down")
+
+        with patch("aiohttp.ClientSession") as mock_cls:
+            mock_cls.return_value = session
+            for _ in range(2):
+                await provider.decide(COMPACT_CONTEXT)
+            assert provider.is_degraded is False
+            await provider.decide(COMPACT_CONTEXT)
+
+        assert provider.consecutive_failures == 3
+        assert provider.is_degraded is True
+
+    @pytest.mark.asyncio
+    async def test_degraded_provider_skips_network_call(self, monkeypatch):
+        monkeypatch.setattr(
+            __import__("asyncio"), "sleep", AsyncMock(return_value=None)
+        )
+        provider = _provider(
+            max_attempts=1, degraded_threshold=1, probe_interval_seconds=3600
+        )
+        session = _mock_session()
+        session.post.side_effect = __import__("aiohttp").ClientError("down")
+
+        with patch("aiohttp.ClientSession") as mock_cls:
+            mock_cls.return_value = session
+            await provider.decide(COMPACT_CONTEXT)  # first failure -> degraded
+            assert provider.is_degraded is True
+            call_count_before = session.post.call_count
+            result = await provider.decide(COMPACT_CONTEXT)
+
+        assert session.post.call_count == call_count_before  # no new network call
+        assert result["action"] == "WAIT"
+        assert "degraded" in result["reason"].lower()
+
+    @pytest.mark.asyncio
+    async def test_degraded_provider_probes_after_interval_and_recovers(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            __import__("asyncio"), "sleep", AsyncMock(return_value=None)
+        )
+        provider = _provider(
+            max_attempts=1, degraded_threshold=1, probe_interval_seconds=0
+        )
+        session = _mock_session()
+        session.post.side_effect = __import__("aiohttp").ClientError("down")
+
+        with patch("aiohttp.ClientSession") as mock_cls:
+            mock_cls.return_value = session
+            await provider.decide(COMPACT_CONTEXT)  # first failure -> degraded
+        assert provider.is_degraded is True
+
+        success_ctx = AsyncMock()
+        success_ctx.__aenter__ = AsyncMock(
+            return_value=_fake_resp(
+                status=200,
+                json_body={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"action": "WAIT", "confidence": 50, "reason": "probe ok"}'
+                            }
+                        }
+                    ]
+                },
+            )
+        )
+        success_ctx.__aexit__ = AsyncMock(return_value=None)
+        session.post = MagicMock(return_value=success_ctx)
+
+        with patch("aiohttp.ClientSession") as mock_cls:
+            mock_cls.return_value = session
+            result = await provider.decide(COMPACT_CONTEXT)
+
+        assert session.post.call_count == 1  # probe attempted, not skipped
+        assert result["reason"] == "probe ok"
+        assert provider.is_degraded is False
+        assert provider.consecutive_failures == 0
+
+    @pytest.mark.asyncio
     async def test_payload_includes_compact_context_only(self):
         """Verify that the payload is serialized and sent correctly."""
         provider = _provider()
@@ -513,3 +684,35 @@ class TestMockProvider:
         provider = MockAiProvider()
         result = await provider.decide(COMPACT_CONTEXT)
         assert result["action"] == "WAIT"
+
+    def test_never_reports_degraded(self):
+        provider = MockAiProvider()
+        assert provider.is_degraded is False
+        assert provider.consecutive_failures == 0
+
+
+class TestAiProviderStatus:
+    def test_get_ai_provider_status_shape(self, monkeypatch):
+        import app.services.ai_provider as ai_provider_module
+
+        monkeypatch.setattr(ai_provider_module, "_default_provider", MockAiProvider())
+        status = ai_provider_module.get_ai_provider_status()
+
+        assert status == {
+            "providerName": "MockAiProvider",
+            "isDegraded": False,
+            "consecutiveFailures": 0,
+        }
+
+    def test_get_ai_provider_status_reflects_degraded_deepseek(self, monkeypatch):
+        import app.services.ai_provider as ai_provider_module
+
+        degraded = _provider(max_attempts=1, degraded_threshold=1)
+        degraded.consecutive_failures = 1
+        monkeypatch.setattr(ai_provider_module, "_default_provider", degraded)
+
+        status = ai_provider_module.get_ai_provider_status()
+
+        assert status["providerName"] == "DeepSeekProvider"
+        assert status["isDegraded"] is True
+        assert status["consecutiveFailures"] == 1

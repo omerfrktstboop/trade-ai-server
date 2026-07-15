@@ -556,6 +556,11 @@
             <span class="status-label">{{ 'KİLİT' if status_kill_switch else 'Aktif' }}</span>
           </span>
           <span class="badge {% if status_profile_risk_level in ['HIGH', 'EXTREME'] %}badge-sell{% elif status_profile_risk_level == 'LOW' %}badge-buy{% else %}badge-wait{% endif %}" title="Aktif Trade Profile">{{ status_profile_code }}</span>
+          {% if status_ai_degraded %}
+          <span class="status status-danger" title="AI Sağlığı">
+            <span class="status-label">AI DEGRADED</span>
+          </span>
+          {% endif %}
         </div>
         {% endif %}
         <form method="post" action="/admin/logout" id="logoutForm" style="display:none"></form>

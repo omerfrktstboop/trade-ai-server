@@ -36,6 +36,7 @@ from app.services.daily_trade_count import _start_of_trading_day
 from app.services.effective_risk_config import decimal_from_external
 from app.services.evaluation.pipeline import EvaluationResult
 from app.services.fill_ledger import to_decimal
+from app.services.market_observation import record_market_observation_standalone
 from app.services.matriks_gateway import (
     GatewayError,
     GatewayUnavailable,
@@ -205,7 +206,10 @@ async def check_stop_loss_positions(
             logger.exception("STOP_LOSS_GUARD_SNAPSHOT_FAILED symbol=%s", symbol)
             continue
 
-        last_price = (snapshot.get("payload") or {}).get("lastPrice")
+        guard_payload = snapshot.get("payload") or {}
+        await record_market_observation_standalone(symbol, guard_payload)
+
+        last_price = guard_payload.get("lastPrice")
         if last_price is None:
             logger.info("STOP_LOSS_GUARD_NO_OP symbol=%s reason=no_last_price", symbol)
             continue

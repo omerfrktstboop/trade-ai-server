@@ -66,6 +66,7 @@ from app.services.evaluation.persistence import (
     persist_evaluation,
     persist_sizing_audit,
 )
+from app.services.market_observation import record_market_observation_standalone
 from app.services.market_regime import get_index_regime
 from app.services.matriks_gateway import (
     GatewayError,
@@ -306,6 +307,8 @@ async def evaluate_symbol(
     # == 1. Kok sembol snapshot'i =========================================
     snapshot = await gateway.get_snapshot(symbol)
     root_payload: dict[str, Any] = snapshot.get("payload") or {}
+
+    await record_market_observation_standalone(symbol, root_payload, request_id=request_id)
 
     last_price = root_payload.get("lastPrice") or 0
     if last_price <= 0:

@@ -66,6 +66,7 @@ from app.services.order_ledger import mark_send_result, mark_send_started, reser
 from app.services.order_preflight import parse_finite_decimal, validate_order_preflight
 from app.services.position_sizing import TradeSizingContext
 from app.services.signal_override import list_pending_override_symbols
+from app.services.stop_loss_guard import check_stop_loss_positions, stop_loss_guard
 from app.services.trade_profile import get_active_profile
 from app.services.research_pipeline import (
     get_pipeline_counts,
@@ -299,6 +300,10 @@ class SymbolScanner:
         # Stale-order cancellation is an order-path operation and must honor
         # the same cutoff and positionsLoaded gates as normal trading.
         await self._run_order_timeout_check()
+        # Deterministic stop-loss check - independent of AI, runs every tick
+        # (not gated by scan_interval_minutes) so a stuck/HOLD AI cannot let
+        # a losing position ride between evaluations.
+        await self._run_stop_loss_guard()
         # ── Pozisyonları gateway'den tazele ────────────────────────────────
         # Admin panelinin Positions sayfası ve acil "tümünü sat" akışı
         # bot_positions'tan okuyor; eski push endpoint'i kaldırıldığı için
@@ -393,6 +398,22 @@ class SymbolScanner:
             return
         self._last_order_timeout_check = now
         await cancel_timed_out_orders(self._gateway, now=now)
+
+    async def _run_stop_loss_guard(self) -> None:
+        """Deterministic stop-loss check, independent of AI evaluation.
+
+        check_stop_loss_positions only detects breaches; every triggered
+        exit still goes through _maybe_send_order, so kill switch, cutoff,
+        preflight, and cooldown gates apply exactly as for any other order.
+        """
+        try:
+            triggered = await check_stop_loss_positions(self._gateway)
+        except Exception:
+            logger.exception("STOP_LOSS_GUARD_CHECK_FAILED")
+            return
+        for result in triggered:
+            await self._maybe_send_order(result)
+            stop_loss_guard.mark_triggered(result.response.symbol)
 
     async def _run_discovery(self) -> None:
         """Run low-cost movers screening and create research-only candidates."""
@@ -631,6 +652,16 @@ class SymbolScanner:
         ):
             logger.warning(
                 "BUY blocked: symbol is not trade eligible symbol=%s requestId=%s",
+                response.symbol,
+                response.request_id,
+            )
+            return
+        if (
+            response.action == SignalAction.BUY
+            and stop_loss_guard.is_symbol_cooling_down(response.symbol)
+        ):
+            logger.warning(
+                "BUY blocked: stop-loss guard cooldown active symbol=%s requestId=%s",
                 response.symbol,
                 response.request_id,
             )

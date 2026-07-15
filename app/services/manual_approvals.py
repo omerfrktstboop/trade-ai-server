@@ -13,7 +13,7 @@ from app.services.matriks_gateway import (
     GatewayUnavailable,
     gateway_client,
 )
-from app.services.admin_config import get_admin_config_value
+from app.services.admin_config import get_admin_config_value, is_kill_switch_enabled
 
 
 async def queue_response(
@@ -164,14 +164,13 @@ async def _approval_block_reason(session, row: ManualApprovalRequest) -> str | N
     values = {
         key: await get_admin_config_value(session, key)
         for key in (
-            "killSwitchEnabled",
             "tradingMode",
             "botMode",
             "botEnableDemoOrders",
             "botDemoAccountConfirmed",
         )
     }
-    if values["killSwitchEnabled"].lower() == "true":
+    if await is_kill_switch_enabled(session):
         return "Manual approval blocked: kill switch enabled"
 
     modes = {values["tradingMode"].upper(), values["botMode"].upper()}

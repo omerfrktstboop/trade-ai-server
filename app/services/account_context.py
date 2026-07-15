@@ -16,9 +16,9 @@ from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from app.models.db import AccountNormalizationAudit, SystemConfig
+from app.models.db import AccountNormalizationAudit
+from app.services.admin_config import get_admin_config_value
 from app.services.effective_risk_config import decimal_from_external
 from app.services.position_sizing import AccountSizingContext
 
@@ -29,12 +29,8 @@ ReservationHandling = Literal["BROKER_ALREADY_DEDUCTED", "BACKEND_DEDUCTED", "UN
 async def get_account_reservation_handling(
     session: AsyncSession,
 ) -> ReservationHandling:
-    row = (
-        await session.execute(
-            select(SystemConfig).where(SystemConfig.key == "accountReservationHandling")
-        )
-    ).scalar_one_or_none()
-    value = "UNKNOWN" if row is None else str(row.value).strip().upper()
+    raw = await get_admin_config_value(session, "accountReservationHandling")
+    value = str(raw).strip().upper()
     if value not in {
         "BROKER_ALREADY_DEDUCTED",
         "BACKEND_DEDUCTED",

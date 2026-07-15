@@ -33,6 +33,7 @@ from app.services.measurement_repair import (
     enqueue_repair_job,
 )
 from app.services.position_lifecycle_engine import apply_fill_to_lifecycle
+from app.services.position_lifecycle_reconciliation import reconcile_all_open_lifecycles
 
 logger = logging.getLogger(__name__)
 
@@ -184,15 +185,17 @@ async def process_repair_jobs() -> RepairJobStats:
     return stats
 
 
-async def run_once() -> tuple[ReconciliationStats, RepairJobStats]:
+async def run_once() -> tuple[ReconciliationStats, RepairJobStats, tuple[int, int]]:
     reconciliation_stats = await run_fill_reconciliation()
     repair_stats = await process_repair_jobs()
-    return reconciliation_stats, repair_stats
+    async with async_session_factory() as session:
+        lifecycle_qty_stats = await reconcile_all_open_lifecycles(session)
+    return reconciliation_stats, repair_stats, lifecycle_qty_stats
 
 
 def _main() -> None:
     logging.basicConfig(level=logging.INFO)
-    reconciliation_stats, repair_stats = asyncio.run(run_once())
+    reconciliation_stats, repair_stats, (checked, corrected) = asyncio.run(run_once())
     logger.info(
         "MEASUREMENT_RECONCILIATION_RUN_COMPLETE ordersChecked=%s fillsRecovered=%s "
         "skippedImplausible=%s",
@@ -207,6 +210,11 @@ def _main() -> None:
         repair_stats.completed,
         repair_stats.retried,
         repair_stats.escalated_manual_review,
+    )
+    logger.info(
+        "LIFECYCLE_QTY_RECONCILIATION_RUN_COMPLETE checked=%s resolved=%s",
+        checked,
+        corrected,
     )
 
 

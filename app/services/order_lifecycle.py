@@ -13,7 +13,10 @@ from app.models.db import OrderLog
 from app.services.fill_ledger import record_fill_delta
 from app.services.measurement_repair import enqueue_repair_job
 from app.services.order_state_machine import FINAL, transition
-from app.services.position_lifecycle_engine import apply_fill_to_lifecycle
+from app.services.position_lifecycle_engine import (
+    LifecycleIntegrityError,
+    apply_fill_to_lifecycle,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -117,10 +120,15 @@ async def apply_callback(
             logger.exception(
                 "FILL_LEDGER_UPDATE_FAILED request_id=%s", row.request_id
             )
+            repair_type = (
+                "LIFECYCLE_RECONCILIATION"
+                if isinstance(exc, LifecycleIntegrityError)
+                else "FILL_RECONCILIATION"
+            )
             try:
                 await enqueue_repair_job(
                     session,
-                    repair_type="FILL_RECONCILIATION",
+                    repair_type=repair_type,
                     last_error=repr(exc),
                     request_id=row.request_id,
                     order_log_id=row.id,

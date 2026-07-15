@@ -41,8 +41,13 @@ from app.services.matriks_gateway import (
     GatewayUnavailable,
     MatriksGatewayClient,
 )
+from app.services.measurement_repair import enqueue_repair_job
 from app.services.position_lifecycle_backfill import ensure_lifecycle_for_legacy_position
-from app.services.position_lifecycle_engine import get_open_lifecycle, record_stop_breach
+from app.services.position_lifecycle_engine import (
+    LifecycleIntegrityError,
+    get_open_lifecycle,
+    record_stop_breach,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +153,24 @@ async def check_stop_loss_positions(
             lifecycle = await _resolve_position_lifecycle(
                 symbol, fallback_qty=row.qty, fallback_avg_price=row.avg_price
             )
+        except LifecycleIntegrityError as exc:
+            # Never guess which of several OPEN rows is authoritative
+            # (Task 2.2) - stop updating this symbol and surface it for repair.
+            logger.error("STOP_LOSS_GUARD_DUPLICATE_LIFECYCLE symbol=%s", symbol)
+            try:
+                async with async_session_factory() as repair_session:
+                    await enqueue_repair_job(
+                        repair_session,
+                        repair_type="LIFECYCLE_RECONCILIATION",
+                        last_error=repr(exc),
+                        symbol=symbol,
+                    )
+                    await repair_session.commit()
+            except Exception:
+                logger.exception(
+                    "MEASUREMENT_REPAIR_JOB_ENQUEUE_FAILED symbol=%s", symbol
+                )
+            continue
         except Exception:
             logger.exception("STOP_LOSS_GUARD_LOOKUP_FAILED symbol=%s", symbol)
             continue

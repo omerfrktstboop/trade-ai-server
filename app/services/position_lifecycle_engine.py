@@ -13,6 +13,7 @@ import logging
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db import OrderFill, OrderLog, PositionLifecycle, PositionStopEvent, RiskDecision
@@ -21,17 +22,53 @@ from app.services.strategy_provenance import PROMPT_VERSION, STRATEGY_VERSION
 
 logger = logging.getLogger(__name__)
 
+_MAX_OPEN_INSERT_ATTEMPTS = 3
+
+
+class LifecycleIntegrityError(Exception):
+    """More than one OPEN PositionLifecycle exists for a symbol.
+
+    The partial unique index added in Task 2 makes this impossible for new
+    data going forward; if it is ever raised, it means pre-existing/corrupted
+    data was found. Callers must not guess which row is authoritative - they
+    must stop the affected measurement update and surface a repair job.
+    """
+
+    def __init__(self, symbol: str, lifecycle_ids: list[int]) -> None:
+        self.symbol = symbol
+        self.lifecycle_ids = lifecycle_ids
+        super().__init__(
+            f"{len(lifecycle_ids)} OPEN lifecycles found for {symbol}: {lifecycle_ids}"
+        )
+
 
 async def get_open_lifecycle(
     session: AsyncSession, symbol: str, *, for_update: bool = False
 ) -> PositionLifecycle | None:
+    """Return the single OPEN lifecycle for ``symbol``, or None.
+
+    Raises LifecycleIntegrityError instead of silently picking one (Task
+    2.2) if more than one OPEN row exists - that state should be prevented
+    by the partial unique index, so seeing it means genuinely corrupted data
+    that must go through repair, not a guess.
+    """
     stmt = select(PositionLifecycle).where(
         PositionLifecycle.symbol == symbol.strip().upper(),
         PositionLifecycle.status == "OPEN",
     )
     if for_update:
         stmt = stmt.with_for_update()
-    return (await session.execute(stmt)).scalar_one_or_none()
+    rows = (await session.execute(stmt)).scalars().all()
+    if len(rows) > 1:
+        ids = [row.id for row in rows]
+        logger.error(
+            "LIFECYCLE_INTEGRITY_DUPLICATE_OPEN symbol=%s count=%s ids=%s",
+            symbol,
+            len(rows),
+            ids,
+        )
+        raise LifecycleIntegrityError(symbol, ids)
+    return rows[0] if rows else None
 
 
 async def _resolve_decision_stop_target(
@@ -113,14 +150,34 @@ async def apply_fill_to_lifecycle(
     open lifecycle to apply it to (logged - never fabricated).
     """
     symbol = fill.symbol.strip().upper()
-    lifecycle = await get_open_lifecycle(session, symbol, for_update=True)
 
     if fill.action == "BUY":
-        decision_stop, decision_target = await _resolve_decision_stop_target(
-            session, fill.request_id
-        )
+        return await _apply_buy_fill(session, row, fill, symbol)
+
+    lifecycle = await get_open_lifecycle(session, symbol, for_update=True)
+    return await _apply_sell_fill(session, fill, symbol, lifecycle)
+
+
+async def _apply_buy_fill(
+    session: AsyncSession, row: OrderLog, fill: OrderFill, symbol: str
+) -> PositionLifecycle:
+    """Open a new lifecycle or merge into the open one.
+
+    Two BUY fills for the same symbol racing to open a brand new lifecycle
+    (Task 2.2): the losing INSERT hits the partial unique open-lifecycle
+    index inside its own SAVEPOINT, which rolls back cleanly; the next loop
+    iteration re-reads under FOR UPDATE, now sees the winner's committed
+    row, and merges into it instead of losing the fill or leaving two OPEN
+    lifecycles for the same symbol.
+    """
+    decision_stop, decision_target = await _resolve_decision_stop_target(
+        session, fill.request_id
+    )
+    for attempt in range(1, _MAX_OPEN_INSERT_ATTEMPTS + 1):
+        lifecycle = await get_open_lifecycle(session, symbol, for_update=True)
+
         if lifecycle is None:
-            lifecycle = PositionLifecycle(
+            candidate = PositionLifecycle(
                 symbol=symbol,
                 status="OPEN",
                 opened_at=fill.filled_at,
@@ -139,12 +196,23 @@ async def apply_fill_to_lifecycle(
                 config_hash=row.config_version,
                 profile_code=row.profile_code,
             )
-            session.add(lifecycle)
-            await session.flush()
+            try:
+                async with session.begin_nested():
+                    session.add(candidate)
+                    await session.flush()
+            except IntegrityError:
+                logger.warning(
+                    "LIFECYCLE_OPEN_INSERT_CONFLICT symbol=%s attempt=%s - "
+                    "another fill opened it first, retrying as a merge",
+                    symbol,
+                    attempt,
+                )
+                session.expunge(candidate)
+                continue
             if decision_stop is not None:
                 await _record_stop_event(
                     session,
-                    lifecycle,
+                    candidate,
                     old_stop=None,
                     new_stop=decision_stop,
                     event_type="INITIAL_STOP_CREATED",
@@ -152,74 +220,87 @@ async def apply_fill_to_lifecycle(
                     source_order_id=fill.order_id,
                     reason="First BUY fill opened the position",
                 )
-        else:
-            old_qty = lifecycle.current_qty or Decimal("0")
-            old_avg = lifecycle.average_entry_price or Decimal("0")
-            new_qty = old_qty + fill.fill_qty
-            new_avg = (
-                ((old_qty * old_avg) + (fill.fill_qty * fill.fill_price)) / new_qty
-                if new_qty > 0
-                else old_avg
-            )
-            lifecycle.current_qty = new_qty
-            lifecycle.average_entry_price = new_avg
-            lifecycle.gross_buy_value_tl = (lifecycle.gross_buy_value_tl or Decimal("0")) + (
-                fill.gross_value_tl
-            )
-            lifecycle.total_buy_cost_tl = (lifecycle.total_buy_cost_tl or Decimal("0")) + (
-                fill.total_cost_tl
-            )
+            await session.flush()
+            return candidate
 
-            old_stop = lifecycle.active_stop_loss
-            if decision_stop is None:
+        old_qty = lifecycle.current_qty or Decimal("0")
+        old_avg = lifecycle.average_entry_price or Decimal("0")
+        new_qty = old_qty + fill.fill_qty
+        new_avg = (
+            ((old_qty * old_avg) + (fill.fill_qty * fill.fill_price)) / new_qty
+            if new_qty > 0
+            else old_avg
+        )
+        lifecycle.current_qty = new_qty
+        lifecycle.average_entry_price = new_avg
+        lifecycle.gross_buy_value_tl = (lifecycle.gross_buy_value_tl or Decimal("0")) + (
+            fill.gross_value_tl
+        )
+        lifecycle.total_buy_cost_tl = (lifecycle.total_buy_cost_tl or Decimal("0")) + (
+            fill.total_cost_tl
+        )
+
+        old_stop = lifecycle.active_stop_loss
+        if decision_stop is None:
+            await _record_stop_event(
+                session,
+                lifecycle,
+                old_stop=old_stop,
+                new_stop=None,
+                event_type="STOP_UPDATE_REJECTED",
+                source_request_id=fill.request_id,
+                source_order_id=fill.order_id,
+                reason="New decision had no valid stop_loss; existing stop kept",
+            )
+        elif old_stop is None:
+            lifecycle.active_stop_loss = decision_stop
+            await _record_stop_event(
+                session,
+                lifecycle,
+                old_stop=None,
+                new_stop=decision_stop,
+                event_type="INITIAL_STOP_CREATED",
+                source_request_id=fill.request_id,
+                source_order_id=fill.order_id,
+                reason="First valid stop bound to an already-open position",
+            )
+        else:
+            new_stop = max(old_stop, decision_stop)
+            if new_stop > old_stop:
+                lifecycle.active_stop_loss = new_stop
                 await _record_stop_event(
                     session,
                     lifecycle,
                     old_stop=old_stop,
-                    new_stop=None,
-                    event_type="STOP_UPDATE_REJECTED",
+                    new_stop=new_stop,
+                    event_type="STOP_TIGHTENED",
                     source_request_id=fill.request_id,
                     source_order_id=fill.order_id,
-                    reason="New decision had no valid stop_loss; existing stop kept",
+                    reason="Additional BUY fill tightened the active stop",
                 )
-            elif old_stop is None:
-                lifecycle.active_stop_loss = decision_stop
-                await _record_stop_event(
-                    session,
-                    lifecycle,
-                    old_stop=None,
-                    new_stop=decision_stop,
-                    event_type="INITIAL_STOP_CREATED",
-                    source_request_id=fill.request_id,
-                    source_order_id=fill.order_id,
-                    reason="First valid stop bound to an already-open position",
-                )
-            else:
-                new_stop = max(old_stop, decision_stop)
-                if new_stop > old_stop:
-                    lifecycle.active_stop_loss = new_stop
-                    await _record_stop_event(
-                        session,
-                        lifecycle,
-                        old_stop=old_stop,
-                        new_stop=new_stop,
-                        event_type="STOP_TIGHTENED",
-                        source_request_id=fill.request_id,
-                        source_order_id=fill.order_id,
-                        reason="Additional BUY fill tightened the active stop",
-                    )
 
-            # A new target never silently overrides the existing one - only
-            # fills the gap if the lifecycle had none yet (Task 4.2).
-            if lifecycle.active_target_price is None and decision_target is not None:
-                lifecycle.active_target_price = decision_target
-                if lifecycle.initial_target_price is None:
-                    lifecycle.initial_target_price = decision_target
+        # A new target never silently overrides the existing one - only
+        # fills the gap if the lifecycle had none yet (Task 4.2).
+        if lifecycle.active_target_price is None and decision_target is not None:
+            lifecycle.active_target_price = decision_target
+            if lifecycle.initial_target_price is None:
+                lifecycle.initial_target_price = decision_target
 
         await session.flush()
         return lifecycle
 
-    # SELL
+    raise RuntimeError(
+        f"Could not resolve open-lifecycle insert conflict for {symbol} after "
+        f"{_MAX_OPEN_INSERT_ATTEMPTS} attempts"
+    )
+
+
+async def _apply_sell_fill(
+    session: AsyncSession,
+    fill: OrderFill,
+    symbol: str,
+    lifecycle: PositionLifecycle | None,
+) -> PositionLifecycle | None:
     if lifecycle is None:
         logger.warning(
             "SELL_FILL_NO_OPEN_LIFECYCLE symbol=%s request_id=%s", symbol, fill.request_id

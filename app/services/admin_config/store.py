@@ -265,6 +265,16 @@ async def get_fee_config(session: AsyncSession) -> FeeConfig:
     )
 
 
+async def get_outcome_maximum_observation_delay_seconds(session: AsyncSession) -> int:
+    return int(
+        await get_admin_config_value(session, "outcomeMaximumObservationDelaySeconds")
+    )
+
+
+async def get_stop_guard_maximum_quote_age_seconds(session: AsyncSession) -> int:
+    return int(await get_admin_config_value(session, "stopGuardMaximumQuoteAgeSeconds"))
+
+
 async def build_runtime_risk_config(session: AsyncSession) -> RiskConfig:
     """Build RiskConfig from the active trade profile + DB-backed admin
     config, falling back to code defaults where neither applies.

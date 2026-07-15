@@ -447,6 +447,18 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "0",
         "Komisyon oranı sıfırdan büyükken uygulanan en düşük komisyon tutarı (TL).",
     ),
+    "outcomeMaximumObservationDelaySeconds": ConfigDefinition(
+        "outcomeMaximumObservationDelaySeconds",
+        "int",
+        "120",
+        "Bir horizon hedef zamanından sonra kabul edilen en fazla gözlem gecikmesi (sn).",
+    ),
+    "stopGuardMaximumQuoteAgeSeconds": ConfigDefinition(
+        "stopGuardMaximumQuoteAgeSeconds",
+        "int",
+        "30",
+        "Stop-loss bekçisinin bir fiyatı tetikleyici kabul edebileceği en fazla yaş (sn).",
+    ),
 }
 
 RISKY_CONFIG_KEYS = {
@@ -649,6 +661,18 @@ CONFIG_SECTION_DEFINITIONS = (
             "minimumCommissionTl",
         ),
     ),
+    ConfigSectionDefinition(
+        title="Ölçüm güvenilirliği",
+        description=(
+            "Outcome labeler'ın gözlem penceresi ve stop-loss bekçisinin kabul "
+            "ettiği en fazla fiyat yaşı. Ölçüm/tetikleme kalitesini etkiler, "
+            "emir gönderme mantığını gevşetmez."
+        ),
+        keys=(
+            "outcomeMaximumObservationDelaySeconds",
+            "stopGuardMaximumQuoteAgeSeconds",
+        ),
+    ),
 )
 
 
@@ -722,6 +746,8 @@ CONFIG_LABELS: dict[str, str] = {
     "exchangeFeeBps": "Borsa Payı Oranı (bps)",
     "otherFeeBps": "Diğer Ücret Oranı (bps)",
     "minimumCommissionTl": "En Düşük Komisyon Tutarı (TL)",
+    "outcomeMaximumObservationDelaySeconds": "Outcome Gözlem Azami Gecikmesi (sn)",
+    "stopGuardMaximumQuoteAgeSeconds": "Stop Guard Azami Fiyat Yaşı (sn)",
 }
 
 

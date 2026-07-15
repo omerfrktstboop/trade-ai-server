@@ -21,15 +21,17 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import select
 
 from app.config import settings
 from app.db.session import async_session_factory
-from app.models.db import BotPosition, PositionLifecycle
+from app.models.db import BotPosition, OrderLog, PositionLifecycle
 from app.models.signal import OrderType, SignalAction, SignalMode, SignalResponse
 from app.services.admin_config import (
     get_scanner_allow_orders,
+    get_stop_guard_maximum_quote_age_seconds,
     get_trading_mode_override,
 )
 from app.services.daily_trade_count import _start_of_trading_day
@@ -43,6 +45,7 @@ from app.services.matriks_gateway import (
     MatriksGatewayClient,
 )
 from app.services.measurement_repair import enqueue_repair_job
+from app.services.order_ledger import PENDING_STATES
 from app.services.position_lifecycle_backfill import ensure_lifecycle_for_legacy_position
 from app.services.position_lifecycle_engine import (
     LifecycleIntegrityError,
@@ -94,29 +97,49 @@ async def _resolve_effective_mode(session) -> SignalMode:
     return mode
 
 
-async def _resolve_position_lifecycle(
-    symbol: str, *, fallback_qty: float, fallback_avg_price: float | None
-) -> PositionLifecycle | None:
-    """The stop and remaining quantity now come only from the open position
-    lifecycle opened by an actually-filled BUY (Task 4) - never from the most
-    recent allow_order=true decision, which may never have filled.
+_QTY_MISMATCH_EPSILON = Decimal("0.0000000001")
 
-    A position that predates this feature has no lifecycle yet; it is
-    backfilled once from BotPosition's current state so protection is not
-    silently lost during the cutover (see position_lifecycle_backfill.py).
+
+async def _enqueue_lifecycle_repair(symbol: str, last_error: str) -> None:
+    try:
+        async with async_session_factory() as repair_session:
+            await enqueue_repair_job(
+                repair_session,
+                repair_type="LIFECYCLE_RECONCILIATION",
+                last_error=last_error,
+                symbol=symbol,
+            )
+            await repair_session.commit()
+    except Exception:
+        logger.exception("MEASUREMENT_REPAIR_JOB_ENQUEUE_FAILED symbol=%s", symbol)
+
+
+async def _backfill_missing_lifecycles(bot_positions: list[BotPosition]) -> None:
+    """One-time-per-symbol sweep: a BotPosition with qty>0 that has no
+    PositionLifecycle history at all (open or closed) is backfilled once, so
+    protection is not silently lost for positions that predate this feature
+    (Task 6.1). ensure_lifecycle_for_legacy_position is itself a no-op for a
+    symbol that already has any lifecycle history, so calling it here for
+    every positive BotPosition row is safe. This is the *only* use
+    BotPosition still has in this guard, besides the mismatch cross-check
+    below - the breach-checking loop reads exclusively from
+    PositionLifecycle.
     """
-    async with async_session_factory() as session:
-        lifecycle = await get_open_lifecycle(session, symbol)
-        if lifecycle is not None:
-            return lifecycle
-        lifecycle = await ensure_lifecycle_for_legacy_position(
-            session,
-            symbol=symbol,
-            qty=fallback_qty,
-            avg_price=fallback_avg_price,
-        )
-        await session.commit()
-        return lifecycle
+    for row in bot_positions:
+        symbol = row.symbol.strip().upper()
+        if row.qty is None or row.qty <= 0:
+            continue
+        try:
+            async with async_session_factory() as session:
+                await ensure_lifecycle_for_legacy_position(
+                    session, symbol=symbol, qty=row.qty, avg_price=row.avg_price
+                )
+                await session.commit()
+        except LifecycleIntegrityError as exc:
+            logger.error("STOP_LOSS_GUARD_DUPLICATE_LIFECYCLE symbol=%s", symbol)
+            await _enqueue_lifecycle_repair(symbol, repr(exc))
+        except Exception:
+            logger.exception("STOP_LOSS_GUARD_BACKFILL_FAILED symbol=%s", symbol)
 
 
 async def check_stop_loss_positions(
@@ -129,7 +152,7 @@ async def check_stop_loss_positions(
     """
     try:
         async with async_session_factory() as session:
-            rows = (
+            bot_positions = (
                 (await session.execute(select(BotPosition).where(BotPosition.qty > 0)))
                 .scalars()
                 .all()
@@ -138,61 +161,97 @@ async def check_stop_loss_positions(
         logger.exception("STOP_LOSS_GUARD_POSITION_READ_FAILED")
         return []
 
-    if not rows:
+    await _backfill_missing_lifecycles(bot_positions)
+    bot_position_by_symbol = {row.symbol.strip().upper(): row for row in bot_positions}
+
+    # Task 6.1: the guard's primary source is the open lifecycle, not
+    # BotPosition - BotPosition is used above only to seed a backfill and
+    # below only as a cross-check for data-integrity mismatches.
+    try:
+        async with async_session_factory() as session:
+            lifecycles = (
+                (
+                    await session.execute(
+                        select(PositionLifecycle).where(
+                            PositionLifecycle.status == "OPEN",
+                            PositionLifecycle.current_qty > 0,
+                            PositionLifecycle.active_stop_loss.is_not(None),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+    except Exception:
+        logger.exception("STOP_LOSS_GUARD_LIFECYCLE_READ_FAILED")
+        return []
+
+    if not lifecycles:
         return []
 
     async with async_session_factory() as mode_session:
         mode = await _resolve_effective_mode(mode_session)
+        max_quote_age_seconds = await get_stop_guard_maximum_quote_age_seconds(
+            mode_session
+        )
 
     triggered: list[EvaluationResult] = []
-    for row in rows:
-        symbol = row.symbol.strip().upper()
-        if row.qty is None or row.qty <= 0:
-            continue
-
-        try:
-            lifecycle = await _resolve_position_lifecycle(
-                symbol, fallback_qty=row.qty, fallback_avg_price=row.avg_price
-            )
-        except LifecycleIntegrityError as exc:
-            # Never guess which of several OPEN rows is authoritative
-            # (Task 2.2) - stop updating this symbol and surface it for repair.
-            logger.error("STOP_LOSS_GUARD_DUPLICATE_LIFECYCLE symbol=%s", symbol)
-            try:
-                async with async_session_factory() as repair_session:
-                    await enqueue_repair_job(
-                        repair_session,
-                        repair_type="LIFECYCLE_RECONCILIATION",
-                        last_error=repr(exc),
-                        symbol=symbol,
-                    )
-                    await repair_session.commit()
-            except Exception:
-                logger.exception(
-                    "MEASUREMENT_REPAIR_JOB_ENQUEUE_FAILED symbol=%s", symbol
-                )
-            continue
-        except Exception:
-            logger.exception("STOP_LOSS_GUARD_LOOKUP_FAILED symbol=%s", symbol)
-            continue
-        if lifecycle is None or lifecycle.status != "OPEN":
-            logger.info(
-                "STOP_LOSS_GUARD_NO_OP symbol=%s reason=no_open_lifecycle", symbol
-            )
-            continue
+    for lifecycle in lifecycles:
+        symbol = lifecycle.symbol.strip().upper()
         qty = lifecycle.current_qty
-        if qty is None or qty <= 0:
-            continue
         stop_loss = lifecycle.active_stop_loss
-        if stop_loss is None or stop_loss <= 0:
-            logger.info(
-                "STOP_LOSS_GUARD_NO_OP symbol=%s reason=no_active_stop", symbol
-            )
+        if qty is None or qty <= 0 or stop_loss is None or stop_loss <= 0:
             continue
         # Bot-owned qty is integer lots; a lifecycle carries Decimal precision
         # only to support fractional-cost accounting upstream.
         sell_qty = int(qty.to_integral_value())
         if sell_qty <= 0:
+            continue
+
+        # Task 6.3: lifecycle vs BotPosition mismatch - never auto-sell the
+        # larger figure or silently pick one; stop and surface for repair.
+        bot_position = bot_position_by_symbol.get(symbol)
+        if bot_position is not None and bot_position.qty is not None:
+            bot_qty_d = to_decimal(bot_position.qty)
+            if bot_qty_d is not None and abs(bot_qty_d - qty) > _QTY_MISMATCH_EPSILON:
+                logger.error(
+                    "STOP_GUARD_POSITION_MISMATCH symbol=%s lifecycleQty=%s "
+                    "botPositionQty=%s",
+                    symbol,
+                    qty,
+                    bot_qty_d,
+                )
+                await _enqueue_lifecycle_repair(
+                    symbol,
+                    f"STOP_GUARD_POSITION_MISMATCH lifecycleQty={qty} "
+                    f"botPositionQty={bot_qty_d}",
+                )
+                continue
+
+        # Task 6.4: never re-trigger while a SELL for this symbol is already
+        # in flight - the pending order already represents this breach.
+        try:
+            async with async_session_factory() as session:
+                pending_sell = (
+                    await session.execute(
+                        select(OrderLog.id)
+                        .where(
+                            OrderLog.symbol == symbol,
+                            OrderLog.action == "SELL",
+                            OrderLog.status.in_(PENDING_STATES),
+                        )
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+        except Exception:
+            logger.exception(
+                "STOP_LOSS_GUARD_PENDING_ORDER_CHECK_FAILED symbol=%s", symbol
+            )
+            pending_sell = None
+        if pending_sell is not None:
+            logger.info(
+                "STOP_LOSS_GUARD_NO_OP symbol=%s reason=sell_already_pending", symbol
+            )
             continue
 
         try:
@@ -209,12 +268,39 @@ async def check_stop_loss_positions(
         guard_payload = snapshot.get("payload") or {}
         await record_market_observation_standalone(symbol, guard_payload)
 
-        last_price = guard_payload.get("lastPrice")
-        if last_price is None:
-            logger.info("STOP_LOSS_GUARD_NO_OP symbol=%s reason=no_last_price", symbol)
+        # Task 6.2: a stop may only be triggered by a fresh, reliable price.
+        if not guard_payload.get("quoteReliable"):
+            logger.info(
+                "STOP_LOSS_GUARD_NO_OP symbol=%s reason=STOP_GUARD_QUOTE_UNRELIABLE",
+                symbol,
+            )
             continue
-        last_price_d = to_decimal(last_price)
-        if last_price_d is None or last_price_d <= 0 or last_price_d > stop_loss:
+        quote_age_seconds = to_decimal(guard_payload.get("quoteAgeSeconds"))
+        if quote_age_seconds is not None and quote_age_seconds > max_quote_age_seconds:
+            logger.info(
+                "STOP_LOSS_GUARD_NO_OP symbol=%s reason=STOP_GUARD_QUOTE_STALE "
+                "quoteAgeSeconds=%s maxAllowed=%s",
+                symbol,
+                quote_age_seconds,
+                max_quote_age_seconds,
+            )
+            continue
+        if not guard_payload.get("priceSource"):
+            logger.info(
+                "STOP_LOSS_GUARD_NO_OP symbol=%s reason=STOP_GUARD_PRICE_INVALID "
+                "detail=missing_price_source",
+                symbol,
+            )
+            continue
+        last_price_d = to_decimal(guard_payload.get("lastPrice"))
+        if last_price_d is None or last_price_d <= 0:
+            logger.info(
+                "STOP_LOSS_GUARD_NO_OP symbol=%s reason=STOP_GUARD_PRICE_INVALID "
+                "detail=non_finite_or_nonpositive",
+                symbol,
+            )
+            continue
+        if last_price_d > stop_loss:
             continue
 
         logger.warning(

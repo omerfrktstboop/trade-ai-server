@@ -36,7 +36,25 @@ class DecisionOutcome(Base):
     request_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     symbol: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     evaluation_purpose: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Legacy alias for final_action - kept for backward compatibility;
+    # final_action is the field new code should read (Task 5).
     decision_action: Mapped[str] = mapped_column(String(8), nullable=False)
+
+    # What the AI/system-gate/cache actually produced, before RiskEngine
+    # gating - None only when no decision object was ever formed (e.g. the
+    # kill switch's synthetic response). Distinct from final_action, which
+    # may differ (an AI BUY the RiskEngine blocked to a final WAIT).
+    raw_ai_action: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    final_action: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    allow_order: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    block_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # llm | cache | preflight-gate | system-gate (see payload["decisionSource"])
+    decision_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    raw_ai_confidence: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
+    final_confidence: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
+    raw_ai_risk_score: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
+    final_risk_score: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
+
     decision_price: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
     decision_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True

@@ -18,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db import DecisionOutcome, ResearchCandidate
 from app.models.signal import SignalRequest, SignalResponse
+from app.services.block_reason_classifier import classify_block_reason
+from app.services.evaluation.parsing import _safe_action
 from app.services.fill_ledger import to_decimal
 from app.services.strategy_provenance import PROMPT_VERSION, STRATEGY_VERSION
 
@@ -54,11 +56,31 @@ async def create_decision_outcome(
         if "research_score" in raw_ai:
             research_score = to_decimal(raw_ai.get("research_score"))
 
+        # raw_ai_action mirrors exactly the safe-parsing RiskEngine's own
+        # input used (_safe_action), so it reflects what the AI/system-gate/
+        # cache actually produced before RiskEngine gating - never guessed,
+        # never re-derived from the (possibly gated) final response (Task 5).
+        raw_ai_action = _safe_action(raw_ai.get("action")).value
+        final_action = response.action.value
+        block_reason = (
+            classify_block_reason(response.reason) if not response.allow_order else None
+        )
+        decision_source = str(payload.get("decisionSource") or "system-gate")
+
         values = dict(
             request_id=req.request_id,
             symbol=req.symbol.strip().upper(),
             evaluation_purpose=str(req.evaluation_purpose or "TRADING"),
-            decision_action=response.action.value,
+            decision_action=final_action,
+            raw_ai_action=raw_ai_action,
+            final_action=final_action,
+            allow_order=response.allow_order,
+            block_reason=block_reason,
+            decision_source=decision_source,
+            raw_ai_confidence=to_decimal(raw_ai.get("confidence")),
+            final_confidence=to_decimal(response.confidence_score),
+            raw_ai_risk_score=to_decimal(raw_ai.get("risk_score")),
+            final_risk_score=to_decimal(response.risk_score),
             decision_price=to_decimal(req.last_price),
             decision_at=datetime.now(timezone.utc),
             strategy_version=STRATEGY_VERSION,

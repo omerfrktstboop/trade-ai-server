@@ -76,7 +76,7 @@ async def admin_performance(request: Request) -> HTMLResponse:
     range_value = str(request.query_params.get("range") or "7d")
     symbol = str(request.query_params.get("symbol") or "") or None
     try:
-        report = await build_performance_report(range_value, symbol)
+        report = await build_performance_report(range_value, symbol, gateway=gateway_client)
         error = None
     except Exception as exc:
         logger.warning("Performance report failed: %s", exc)
@@ -158,6 +158,7 @@ async def admin_api_performance(request: Request) -> dict[str, Any]:
     return await build_performance_report(
         str(request.query_params.get("range") or "7d"),
         request.query_params.get("symbol"),
+        gateway=gateway_client,
     )
 
 

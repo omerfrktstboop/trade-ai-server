@@ -423,6 +423,30 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "0.50",
         "Aday için izin verilen en yüksek alış-satış makası yüzdesi.",
     ),
+    "commissionBps": ConfigDefinition(
+        "commissionBps",
+        "decimal",
+        "0",
+        "Fill başına komisyon oranı (baz puan, 1bps = %0.01). 0 = komisyon hesaba katılmaz.",
+    ),
+    "exchangeFeeBps": ConfigDefinition(
+        "exchangeFeeBps",
+        "decimal",
+        "0",
+        "Fill başına borsa payı oranı (baz puan). 0 = ücret hesaba katılmaz.",
+    ),
+    "otherFeeBps": ConfigDefinition(
+        "otherFeeBps",
+        "decimal",
+        "0",
+        "Fill başına diğer işlem ücretleri oranı (baz puan). 0 = ücret hesaba katılmaz.",
+    ),
+    "minimumCommissionTl": ConfigDefinition(
+        "minimumCommissionTl",
+        "decimal",
+        "0",
+        "Komisyon oranı sıfırdan büyükken uygulanan en düşük komisyon tutarı (TL).",
+    ),
 }
 
 RISKY_CONFIG_KEYS = {
@@ -611,6 +635,20 @@ CONFIG_SECTION_DEFINITIONS = (
             "accountReservationHandling",
         ),
     ),
+    ConfigSectionDefinition(
+        title="Maliyet ve komisyon parametreleri",
+        description=(
+            "Gerçekleşen fill'lerden net kâr/zarar hesaplanırken kullanılan komisyon "
+            "ve ücret oranları. Varsayılan 0 - hiçbiri girilmezse maliyet hesaba "
+            "katılmaz ve mevcut davranış değişmez."
+        ),
+        keys=(
+            "commissionBps",
+            "exchangeFeeBps",
+            "otherFeeBps",
+            "minimumCommissionTl",
+        ),
+    ),
 )
 
 
@@ -680,6 +718,10 @@ CONFIG_LABELS: dict[str, str] = {
     "tradeWatchlistTtlHours": "BUY Yetkisi Geçerliliği (saat)",
     "discoveryMinimumVolumeTl": "En Düşük Seans Hacmi (TL)",
     "discoveryMaximumSpreadPct": "En Yüksek Alış-Satış Makası (%)",
+    "commissionBps": "Komisyon Oranı (bps)",
+    "exchangeFeeBps": "Borsa Payı Oranı (bps)",
+    "otherFeeBps": "Diğer Ücret Oranı (bps)",
+    "minimumCommissionTl": "En Düşük Komisyon Tutarı (TL)",
 }
 
 

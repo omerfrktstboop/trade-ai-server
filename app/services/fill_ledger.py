@@ -1,0 +1,202 @@
+"""Real fill delta recording and transaction cost / slippage calculation
+(Task 1). This is the only place OrderFill rows are created, and it must be
+called from inside the same row-locked transaction that updates the parent
+OrderLog row, so a duplicate gateway retry naturally computes delta_qty <= 0
+before ever reaching here.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
+
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.db import OrderFill, OrderLog
+from app.services.admin_config import FeeConfig, get_fee_config
+
+logger = logging.getLogger(__name__)
+
+
+def to_decimal(value: float | Decimal | str | None) -> Decimal | None:
+    """Reject non-finite/unparseable values instead of guessing a number."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    if not result.is_finite():
+        return None
+    return result
+
+
+def compute_fill_costs(
+    fee_config: FeeConfig, gross_value_tl: Decimal
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Return (commission_tl, exchange_fee_tl, other_fee_tl, total_cost_tl).
+
+    Minimum commission only applies when the rate itself is > 0 (Task 1.2) -
+    an unconfigured (all-zero) system must keep computing exactly zero cost,
+    matching behavior before this feature existed.
+    """
+    if fee_config.commission_bps > 0:
+        commission_tl = max(
+            fee_config.minimum_commission_tl,
+            gross_value_tl * fee_config.commission_bps / Decimal(10000),
+        )
+    else:
+        commission_tl = Decimal("0")
+    exchange_fee_tl = gross_value_tl * fee_config.exchange_fee_bps / Decimal(10000)
+    other_fee_tl = gross_value_tl * fee_config.other_fee_bps / Decimal(10000)
+    total_cost_tl = commission_tl + exchange_fee_tl + other_fee_tl
+    return commission_tl, exchange_fee_tl, other_fee_tl, total_cost_tl
+
+
+def compute_slippage(
+    action: str, fill_price: Decimal, limit_price: Decimal | None
+) -> tuple[Decimal | None, Decimal | None]:
+    """Return (slippage_tl, slippage_pct); (None, None) if limit_price unknown
+    (Task 1.4) - never a fabricated zero.
+
+    BUY slippage = fill - limit (positive = paid more than intended).
+    SELL slippage = limit - fill (positive = received less than intended).
+    """
+    if limit_price is None or limit_price <= 0:
+        return None, None
+    if action.upper() == "BUY":
+        slippage_tl = fill_price - limit_price
+    else:
+        slippage_tl = limit_price - fill_price
+    slippage_pct = (slippage_tl / limit_price) * Decimal(100)
+    return slippage_tl, slippage_pct
+
+
+def _fill_event_key(
+    *,
+    request_id: str,
+    cumulative_filled_qty: Decimal,
+    cumulative_avg_price: Decimal,
+) -> str:
+    """Fingerprint of the callback state that produced this fill delta. A
+    duplicate gateway retry reports the same cumulative filled_qty/avg_price
+    for the same request_id and therefore hashes to the same key."""
+    raw = f"{request_id}|{cumulative_filled_qty}|{cumulative_avg_price}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+async def record_fill_delta(
+    session: AsyncSession,
+    row: OrderLog,
+    *,
+    old_filled_qty: float | Decimal | None,
+    old_avg_price: float | Decimal | None,
+    new_filled_qty: float | Decimal | None,
+    new_avg_price: float | Decimal | None,
+    limit_price: float | Decimal | None,
+    order_id: str | None,
+    filled_at: datetime,
+) -> OrderFill | None:
+    """Create at most one OrderFill for the new quantity in this callback.
+
+    Must be called from inside the same row-locked transaction that updates
+    ``row``, after ``row.id`` is assigned. Returns None (no fill recorded)
+    for zero/negative delta, non-finite values, or an order side other than
+    BUY/SELL - rejected/canceled/never-filled orders naturally produce a
+    delta_qty <= 0 and therefore never reach here with a fill.
+    """
+    action = str(row.action or "").upper()
+    if action not in ("BUY", "SELL"):
+        return None
+
+    old_qty_d = to_decimal(old_filled_qty) or Decimal("0")
+    new_qty_d = to_decimal(new_filled_qty)
+    if new_qty_d is None:
+        return None
+    delta_qty = new_qty_d - old_qty_d
+    if delta_qty <= 0:
+        return None
+
+    old_price_d = to_decimal(old_avg_price)
+    new_price_d = to_decimal(new_avg_price)
+    if new_price_d is None or new_price_d <= 0:
+        logger.warning(
+            "FILL_DELTA_SKIPPED_NO_PRICE request_id=%s deltaQty=%s",
+            row.request_id,
+            delta_qty,
+        )
+        return None
+
+    if old_qty_d <= 0 or old_price_d is None or old_price_d <= 0:
+        delta_fill_price = new_price_d
+    else:
+        delta_fill_price = (
+            (new_price_d * new_qty_d) - (old_price_d * old_qty_d)
+        ) / delta_qty
+    if delta_fill_price <= 0:
+        logger.warning(
+            "FILL_DELTA_SKIPPED_NONPOSITIVE_PRICE request_id=%s derivedPrice=%s",
+            row.request_id,
+            delta_fill_price,
+        )
+        return None
+
+    limit_price_d = to_decimal(limit_price)
+    gross_value_tl = delta_qty * delta_fill_price
+    fee_config = await get_fee_config(session)
+    commission_tl, exchange_fee_tl, other_fee_tl, total_cost_tl = compute_fill_costs(
+        fee_config, gross_value_tl
+    )
+    slippage_tl, slippage_pct = compute_slippage(action, delta_fill_price, limit_price_d)
+
+    fill_event_key = _fill_event_key(
+        request_id=row.request_id,
+        cumulative_filled_qty=new_qty_d,
+        cumulative_avg_price=new_price_d,
+    )
+    values = dict(
+        order_log_id=row.id,
+        request_id=row.request_id,
+        order_id=order_id or row.order_id,
+        symbol=row.symbol.upper(),
+        action=action,
+        fill_qty=delta_qty,
+        fill_price=delta_fill_price,
+        limit_price=limit_price_d,
+        gross_value_tl=gross_value_tl,
+        commission_tl=commission_tl,
+        exchange_fee_tl=exchange_fee_tl,
+        other_fee_tl=other_fee_tl,
+        total_cost_tl=total_cost_tl,
+        slippage_tl=slippage_tl,
+        slippage_pct=slippage_pct,
+        fill_event_key=fill_event_key,
+        filled_at=filled_at,
+    )
+    dialect = session.bind.dialect.name
+    statement = (
+        (pg_insert(OrderFill) if dialect == "postgresql" else sqlite_insert(OrderFill))
+        .values(**values)
+        .on_conflict_do_nothing(index_elements=["fill_event_key"])
+    )
+    result = await session.execute(statement)
+    await session.flush()
+    if result.rowcount == 0:
+        logger.info(
+            "FILL_DELTA_DUPLICATE_SKIPPED request_id=%s fillEventKey=%s",
+            row.request_id,
+            fill_event_key,
+        )
+        return None
+    return (
+        await session.execute(
+            select(OrderFill).where(OrderFill.fill_event_key == fill_event_key)
+        )
+    ).scalar_one()

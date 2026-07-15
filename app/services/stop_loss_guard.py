@@ -26,7 +26,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db.session import async_session_factory
-from app.models.db import BotPosition, RiskDecision
+from app.models.db import BotPosition, PositionLifecycle
 from app.models.signal import OrderType, SignalAction, SignalMode, SignalResponse
 from app.services.admin_config import (
     get_scanner_allow_orders,
@@ -35,11 +35,14 @@ from app.services.admin_config import (
 from app.services.daily_trade_count import _start_of_trading_day
 from app.services.effective_risk_config import decimal_from_external
 from app.services.evaluation.pipeline import EvaluationResult
+from app.services.fill_ledger import to_decimal
 from app.services.matriks_gateway import (
     GatewayError,
     GatewayUnavailable,
     MatriksGatewayClient,
 )
+from app.services.position_lifecycle_backfill import ensure_lifecycle_for_legacy_position
+from app.services.position_lifecycle_engine import get_open_lifecycle, record_stop_breach
 
 logger = logging.getLogger(__name__)
 
@@ -85,25 +88,29 @@ async def _resolve_effective_mode(session) -> SignalMode:
     return mode
 
 
-async def _resolve_stop_loss(symbol: str) -> float | None:
-    """The stop recorded at the position's opening decision.
+async def _resolve_position_lifecycle(
+    symbol: str, *, fallback_qty: float, fallback_avg_price: float | None
+) -> PositionLifecycle | None:
+    """The stop and remaining quantity now come only from the open position
+    lifecycle opened by an actually-filled BUY (Task 4) - never from the most
+    recent allow_order=true decision, which may never have filled.
 
-    BotPosition carries no live stop_loss column, so this looks up the most
-    recent allowed BUY decision for the symbol instead.
+    A position that predates this feature has no lifecycle yet; it is
+    backfilled once from BotPosition's current state so protection is not
+    silently lost during the cutover (see position_lifecycle_backfill.py).
     """
     async with async_session_factory() as session:
-        stmt = (
-            select(RiskDecision.stop_loss)
-            .where(
-                RiskDecision.symbol == symbol,
-                RiskDecision.action == SignalAction.BUY.value,
-                RiskDecision.allow_order.is_(True),
-                RiskDecision.stop_loss.is_not(None),
-            )
-            .order_by(RiskDecision.created_at.desc())
-            .limit(1)
+        lifecycle = await get_open_lifecycle(session, symbol)
+        if lifecycle is not None:
+            return lifecycle
+        lifecycle = await ensure_lifecycle_for_legacy_position(
+            session,
+            symbol=symbol,
+            qty=fallback_qty,
+            avg_price=fallback_avg_price,
         )
-        return (await session.execute(stmt)).scalar_one_or_none()
+        await session.commit()
+        return lifecycle
 
 
 async def check_stop_loss_positions(
@@ -134,19 +141,34 @@ async def check_stop_loss_positions(
     triggered: list[EvaluationResult] = []
     for row in rows:
         symbol = row.symbol.strip().upper()
-        qty = int(row.qty)
-        if qty <= 0:
+        if row.qty is None or row.qty <= 0:
             continue
 
         try:
-            stop_loss = await _resolve_stop_loss(symbol)
+            lifecycle = await _resolve_position_lifecycle(
+                symbol, fallback_qty=row.qty, fallback_avg_price=row.avg_price
+            )
         except Exception:
             logger.exception("STOP_LOSS_GUARD_LOOKUP_FAILED symbol=%s", symbol)
             continue
-        if stop_loss is None:
+        if lifecycle is None or lifecycle.status != "OPEN":
             logger.info(
-                "STOP_LOSS_GUARD_NO_OP symbol=%s reason=no_recorded_stop", symbol
+                "STOP_LOSS_GUARD_NO_OP symbol=%s reason=no_open_lifecycle", symbol
             )
+            continue
+        qty = lifecycle.current_qty
+        if qty is None or qty <= 0:
+            continue
+        stop_loss = lifecycle.active_stop_loss
+        if stop_loss is None or stop_loss <= 0:
+            logger.info(
+                "STOP_LOSS_GUARD_NO_OP symbol=%s reason=no_active_stop", symbol
+            )
+            continue
+        # Bot-owned qty is integer lots; a lifecycle carries Decimal precision
+        # only to support fractional-cost accounting upstream.
+        sell_qty = int(qty.to_integral_value())
+        if sell_qty <= 0:
             continue
 
         try:
@@ -164,36 +186,52 @@ async def check_stop_loss_positions(
         if last_price is None:
             logger.info("STOP_LOSS_GUARD_NO_OP symbol=%s reason=no_last_price", symbol)
             continue
-        last_price = float(last_price)
-        if last_price <= 0 or last_price > stop_loss:
+        last_price_d = to_decimal(last_price)
+        if last_price_d is None or last_price_d <= 0 or last_price_d > stop_loss:
             continue
 
         logger.warning(
             "STOP_LOSS_GUARD_TRIGGERED symbol=%s lastPrice=%s stopLoss=%s qty=%s",
             symbol,
-            last_price,
+            last_price_d,
             stop_loss,
-            qty,
+            sell_qty,
         )
+        try:
+            async with async_session_factory() as breach_session:
+                fresh_lifecycle = await get_open_lifecycle(breach_session, symbol)
+                if fresh_lifecycle is not None:
+                    await record_stop_breach(
+                        breach_session,
+                        fresh_lifecycle,
+                        source_request_id=None,
+                        reason=(
+                            f"lastPrice={last_price_d} <= stopLoss={stop_loss}"
+                        ),
+                    )
+                    await breach_session.commit()
+        except Exception:
+            logger.exception("STOP_LOSS_GUARD_BREACH_AUDIT_FAILED symbol=%s", symbol)
+
         response = SignalResponse(
             requestId=(
                 f"{symbol}-STOPLOSS-{datetime.now(timezone.utc):%Y%m%d%H%M%S%f}"
             ),
             symbol=symbol,
             action=SignalAction.SELL,
-            qty=qty,
+            qty=sell_qty,
             orderType=OrderType.LIMIT,
-            price=decimal_from_external(last_price),
+            price=decimal_from_external(float(last_price_d)),
             confidenceScore=100.0,
             riskScore=100.0,
             allowOrder=True,
             requiresConfirmation=False,
             reason=(
-                f"Stop-loss guard: lastPrice={last_price} <= stopLoss={stop_loss}, "
+                f"Stop-loss guard: lastPrice={last_price_d} <= stopLoss={stop_loss}, "
                 "deterministic exit independent of AI"
             ),
             entryRange=None,
-            stopLoss=decimal_from_external(stop_loss),
+            stopLoss=decimal_from_external(float(stop_loss)),
             targetPrice=None,
         )
         triggered.append(

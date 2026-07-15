@@ -6,6 +6,8 @@ point for DB-backed runtime config.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -230,6 +232,37 @@ async def get_portfolio_scan_interval_minutes(session: AsyncSession) -> int:
             await get_admin_config_value(session, "portfolioScanIntervalMinutes")
         )
     return int(settings.portfolio_scan_interval_minutes)
+
+
+@dataclass(frozen=True)
+class FeeConfig:
+    commission_bps: Decimal
+    exchange_fee_bps: Decimal
+    other_fee_bps: Decimal
+    minimum_commission_tl: Decimal
+
+
+async def get_fee_config(session: AsyncSession) -> FeeConfig:
+    """Transaction-cost rates used for fill cost calculation (Task 1.2).
+
+    All four fields default to "0", so an unconfigured system computes zero
+    cost on every fill exactly as before this feature existed.
+    """
+    values = {
+        key: await get_admin_config_value(session, key)
+        for key in (
+            "commissionBps",
+            "exchangeFeeBps",
+            "otherFeeBps",
+            "minimumCommissionTl",
+        )
+    }
+    return FeeConfig(
+        commission_bps=Decimal(values["commissionBps"]),
+        exchange_fee_bps=Decimal(values["exchangeFeeBps"]),
+        other_fee_bps=Decimal(values["otherFeeBps"]),
+        minimum_commission_tl=Decimal(values["minimumCommissionTl"]),
+    )
 
 
 async def build_runtime_risk_config(session: AsyncSession) -> RiskConfig:

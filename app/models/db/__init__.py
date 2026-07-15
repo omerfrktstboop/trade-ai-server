@@ -28,3 +28,7 @@ from app.models.db.research_candidate import (  # noqa: F401
     ResearchCandidateEvent,
 )
 from app.models.db.trade_watchlist_symbol import TradeWatchlistSymbol  # noqa: F401
+from app.models.db.order_fill import OrderFill  # noqa: F401
+from app.models.db.position_lifecycle import PositionLifecycle  # noqa: F401
+from app.models.db.position_stop_event import PositionStopEvent  # noqa: F401
+from app.models.db.decision_outcome import DecisionOutcome  # noqa: F401

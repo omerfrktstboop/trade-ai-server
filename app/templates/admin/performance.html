@@ -1,5 +1,56 @@
 {% extends "admin/base.html" %}{% block title %}Performance{% endblock %}{% block page_title %}Performance Report{% endblock %}{% block content %}
 <form class="card mb-24" method="get"><select name="range"><option value="24h">24h</option><option value="7d" selected>7d</option><option value="30d">30d</option></select> <input name="symbol" value="{{ symbol }}" placeholder="Symbol"><button>Apply</button></form>
 {% if error %}<div class="status status-danger mb-24">Report unavailable: {{ error }}</div>{% endif %}
-<div class="stat-grid"><div class="card"><div class="card-header">Decisions</div><div class="card-value">{{ report.totalDecisions }}</div></div><div class="card"><div class="card-header">Allowed</div><div class="card-value">{{ report.allowedOrders }}</div></div><div class="card"><div class="card-header">Blocked</div><div class="card-value">{{ report.blockedDecisions }}</div></div><div class="card"><div class="card-header">Filled</div><div class="card-value">{{ report.filledOrders }}</div></div><div class="card"><div class="card-header">Rejected</div><div class="card-value">{{ report.rejectedOrders }}</div></div><div class="card"><div class="card-header">Estimated PnL</div><div class="card-value">{{ report.estimatedRealizedPnl }}</div></div><div class="card"><div class="card-header">Top block</div><div class="card-value">{{ report.topBlockReason }}</div></div></div>
+
+<div class="stat-grid"><div class="card"><div class="card-header">Decisions</div><div class="card-value">{{ report.totalDecisions }}</div></div><div class="card"><div class="card-header">Allowed</div><div class="card-value">{{ report.allowedOrders }}</div></div><div class="card"><div class="card-header">Blocked</div><div class="card-value">{{ report.blockedDecisions }}</div></div><div class="card"><div class="card-header">Filled</div><div class="card-value">{{ report.filledOrders }}</div></div><div class="card"><div class="card-header">Rejected</div><div class="card-value">{{ report.rejectedOrders }}</div></div><div class="card"><div class="card-header">Estimated PnL (deneysel)</div><div class="card-value">{{ report.estimatedRealizedPnl }}</div></div><div class="card"><div class="card-header">Top block</div><div class="card-value">{{ report.topBlockReason }}</div></div></div>
+
+<div class="card mb-24 mt-24">
+  <div class="section-title mb-8">Gerçek Fill Defterinden Kâr/Zarar</div>
+  <p class="text-muted text-sm mb-16">Kaynak: <span class="badge badge-neutral">{{ report.pnlSource }}</span> — FILL_LEDGER: gerçek fill verisinden hesaplandı. ORDER_LOG_FALLBACK: henüz kapanmış lifecycle yok, eski emir bazlı tahmin gösteriliyor. UNAVAILABLE: hiç veri yok.</p>
+  <div class="stat-grid">
+    <div class="card"><div class="card-header">Kapanan İşlem</div><div class="card-value">{{ report.totalClosedTrades }}</div></div>
+    <div class="card"><div class="card-header">Kazanan / Kaybeden</div><div class="card-value">{{ report.winningTrades }} / {{ report.losingTrades }}</div></div>
+    <div class="card"><div class="card-header">Kazanma Oranı</div><div class="card-value">{{ report.winRate if report.winRate is not none else '-' }}%</div></div>
+    <div class="card"><div class="card-header">Brüt Kâr/Zarar (TL)</div><div class="card-value">{{ report.grossRealizedPnl if report.grossRealizedPnl is not none else '-' }}</div></div>
+    <div class="card"><div class="card-header">Toplam Maliyet (TL)</div><div class="card-value">{{ report.totalTransactionCost if report.totalTransactionCost is not none else '-' }}</div></div>
+    <div class="card"><div class="card-header">Net Kâr/Zarar (TL)</div><div class="card-value">{{ report.netRealizedPnl if report.netRealizedPnl is not none else '-' }}</div></div>
+    <div class="card"><div class="card-header">Ortalama Kazanç / Kayıp</div><div class="card-value">{{ report.averageWin if report.averageWin is not none else '-' }} / {{ report.averageLoss if report.averageLoss is not none else '-' }}</div></div>
+    <div class="card"><div class="card-header">Kazanç/Kayıp Oranı</div><div class="card-value">{{ report.avgWinLossRatio if report.avgWinLossRatio is not none else '-' }}</div></div>
+    <div class="card"><div class="card-header">Profit Factor</div><div class="card-value">{{ report.profitFactor if report.profitFactor is not none else '-' }}</div></div>
+    <div class="card"><div class="card-header">En İyi / En Kötü İşlem</div><div class="card-value">{{ report.bestTrade if report.bestTrade is not none else '-' }} / {{ report.worstTrade if report.worstTrade is not none else '-' }}</div></div>
+    <div class="card"><div class="card-header">Toplam BUY/SELL Kayması (TL)</div><div class="card-value">{{ report.totalBuySlippageTl if report.totalBuySlippageTl is not none else '-' }} / {{ report.totalSellSlippageTl if report.totalSellSlippageTl is not none else '-' }}</div></div>
+    <div class="card"><div class="card-header">Ortalama Kayma (TL)</div><div class="card-value">{{ report.averageSlippageTl if report.averageSlippageTl is not none else '-' }}</div></div>
+    <div class="card"><div class="card-header">Açık Pozisyon</div><div class="card-value">{{ report.openPositionCount }}</div></div>
+    <div class="card"><div class="card-header">Gerçekleşmemiş Kâr/Zarar</div><div class="card-value">{{ report.unrealizedPnl if report.unrealizedPnl is not none else 'UNAVAILABLE' }}</div></div>
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="section-title mb-8">Karar Sonuç Takibi (Outcome Labeler)</div>
+  <div class="stat-grid">
+    <div class="card"><div class="card-header">Bekleyen</div><div class="card-value">{{ report.outcomePendingCount }}</div></div>
+    <div class="card"><div class="card-header">Kısmi</div><div class="card-value">{{ report.outcomePartialCount }}</div></div>
+    <div class="card"><div class="card-header">Tamamlanan</div><div class="card-value">{{ report.outcomeCompleteCount }}</div></div>
+    <div class="card"><div class="card-header">Ulaşılamaz</div><div class="card-value">{{ report.outcomeUnavailableCount }}</div></div>
+    <div class="card"><div class="card-header">Belirsiz (Aynı Anda Hit)</div><div class="card-value">{{ report.outcomeAmbiguousCount }}</div></div>
+    <div class="card"><div class="card-header">Ortalama MFE (%)</div><div class="card-value">{{ report.averageMfePct if report.averageMfePct is not none else '-' }}</div></div>
+    <div class="card"><div class="card-header">Ortalama MAE (%)</div><div class="card-value">{{ report.averageMaePct if report.averageMaePct is not none else '-' }}</div></div>
+    <div class="card"><div class="card-header">Önce Target / Önce Stop</div><div class="card-value">{{ report.targetBeforeStopRatio if report.targetBeforeStopRatio is not none else '-' }}% / {{ report.stopBeforeTargetRatio if report.stopBeforeTargetRatio is not none else '-' }}%</div></div>
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="section-title mb-8">Strateji Versiyonuna Göre Sonuçlar</div>
+  <div class="table-container"><table><thead><tr><th>Strateji Versiyonu</th><th>İşlem</th><th>Net Kâr/Zarar (TL)</th></tr></thead><tbody>
+  {% for key, value in report.resultsByStrategyVersion.items() %}<tr><td>{{ key }}</td><td>{{ value.count }}</td><td>{{ value.netPnl if value.netPnl is not none else '-' }}</td></tr>{% else %}<tr class="empty-row"><td colspan="3">No records</td></tr>{% endfor %}
+  </tbody></table></div>
+</div>
+
+<div class="card mb-24">
+  <div class="section-title mb-8">Son Kapanan İşlemler</div>
+  <div class="table-container"><table><thead><tr><th>Sembol</th><th>Açılış</th><th>Kapanış</th><th>Ort. Giriş</th><th>Ort. Çıkış</th><th>Adet</th><th>Brüt</th><th>Maliyet</th><th>Net</th><th>Stop</th><th>Hedef</th><th>Kapanış Nedeni</th><th>Strateji</th><th>Profil</th></tr></thead><tbody>
+  {% for t in report.recentClosedTrades %}<tr><td>{{ t.symbol }}</td><td>{{ t.openedAt }}</td><td>{{ t.closedAt }}</td><td>{{ t.averageEntryPrice }}</td><td>{{ t.averageExitPrice }}</td><td>{{ t.quantity }}</td><td>{{ t.grossPnl }}</td><td>{{ t.totalCost }}</td><td>{{ t.netPnl }}</td><td>{{ t.stopLoss }}</td><td>{{ t.targetPrice }}</td><td>{{ t.closeReason or '-' }}</td><td>{{ t.strategyVersion }}</td><td>{{ t.profileCode }}</td></tr>{% else %}<tr class="empty-row"><td colspan="14">No records</td></tr>{% endfor %}
+  </tbody></table></div>
+</div>
+
 <div class="table-container mt-24"><table><thead><tr><th>Request</th><th>Symbol</th><th>Action</th><th>Allow</th><th>Confidence</th><th>Reason</th></tr></thead><tbody>{% for row in report.latestDecisions %}<tr><td><a class="log-link" href="/admin/logs/{{ row.request_id }}">{{ row.request_id }}</a></td><td>{{ row.symbol }}</td><td>{{ row.action }}</td><td>{{ row.allow_order }}</td><td>{{ row.confidence }}</td><td>{{ row.reason }}</td></tr>{% else %}<tr class="empty-row"><td colspan="6">No records</td></tr>{% endfor %}</tbody></table></div>{% endblock %}

@@ -204,6 +204,9 @@ async def persist_evaluation(
                     mode=req.mode.value,
                 )
             )
+            from app.services.outcome_tracking import create_decision_outcome
+
+            await create_decision_outcome(session, req, payload, raw_ai, response)
             await session.commit()
 
     except Exception:

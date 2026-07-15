@@ -32,8 +32,10 @@ from app.services.admin_config.validation import (
     _serialize_value,
 )
 from app.services.admin_config.store import (
+    FeeConfig,
     build_runtime_risk_config,
     get_admin_config_value,
+    get_fee_config,
     get_manual_approval_allow_orders,
     get_portfolio_scan_interval_minutes,
     get_scanner_allow_orders,
@@ -65,8 +67,10 @@ __all__ = [
     "_parse_bool",
     "_requires_confirmation",
     "_serialize_value",
+    "FeeConfig",
     "build_runtime_risk_config",
     "get_admin_config_value",
+    "get_fee_config",
     "get_manual_approval_allow_orders",
     "get_portfolio_scan_interval_minutes",
     "get_scanner_allow_orders",

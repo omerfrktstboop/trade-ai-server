@@ -66,6 +66,11 @@ os.environ["ADMIN_PASSWORD"] = "admin-change-me"
 # tradingMode'un default'u DEFAULT_MODE'dan türetilir; üretim .env'i
 # demo_live'a çekmiş olabilir — testler PAPER varsayımıyla yazıldı.
 os.environ["DEFAULT_MODE"] = "paper"
+# Üretim .env'i günün erken saatine sabitlenmiş bir trading cutoff içerebilir
+# (ops ihtiyacı); testler bunun yerine kod varsayılanını (17:30) bekler, yoksa
+# gerçek saatten bağımsız olarak "trading cutoff passed" ile tüm emir testleri
+# rastgele kırılır.
+os.environ["RISK_DISABLE_TRADING_AFTER"] = "17:30"
 
 
 @pytest.fixture(autouse=True)

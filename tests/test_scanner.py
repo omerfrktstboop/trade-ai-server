@@ -158,6 +158,7 @@ class TestScannerTick:
     async def test_due_symbols_evaluated_in_paper(
         self, evaluated_symbols, runtime_stubs, caplog
     ):
+        caplog.set_level("INFO", logger=scanner_module.__name__)
         fake = FakeGateway()
         scanner = SymbolScanner(gateway=make_gateway_client(fake))
 

@@ -44,8 +44,19 @@ async def _set_scan_universe(symbols: str | None = None) -> None:
             await session.execute(
                 select(SystemConfig).where(SystemConfig.key == "scanUniverseSymbols")
             )
-        ).scalar_one()
-        row.value = symbols
+        ).scalar_one_or_none()
+        if row is None:
+            # SystemConfig rows are created lazily (see admin_config.get_admin_config_value's
+            # fail-open default); a fresh init_db() does not pre-seed them.
+            session.add(
+                SystemConfig(
+                    key="scanUniverseSymbols",
+                    value=symbols,
+                    value_type="string",
+                )
+            )
+        else:
+            row.value = symbols
         await session.commit()
 
 
@@ -92,6 +103,10 @@ def _movers(items, *, gainers=(), losers=(), volume_leaders=()):
 
 
 def _item(symbol, change_pct, volume):
+    # Trend-pre-score is fail-closed for missing technical fields (no partial
+    # credit), so a "healthy candidate" fixture must supply EMA/RSI/quote-age
+    # data to clear DiscoveryPolicy.minimum_trend_score (60) — matching what a
+    # real Matriks snapshot would include.
     return {
         "symbol": symbol,
         "lastPrice": 100.0,
@@ -99,6 +114,10 @@ def _item(symbol, change_pct, volume):
         "volume": volume,
         "sessionTurnoverTl": volume,
         "volumeSemantic": "CUMULATIVE_SESSION_TURNOVER_TL",
+        "ema20": 98.0,
+        "ema50": 95.0,
+        "rsi": 60.0,
+        "quoteAgeSeconds": 5,
     }
 
 

@@ -73,6 +73,7 @@ async def _seed_candidate(
                     "spreadPct": 0.20,
                     "depthReliable": True,
                     "priceAboveEma20": True,
+                    "emaTrendAligned": True,
                     "ema20Slope": 0.5,
                     "limitLocked": False,
                 },
@@ -133,7 +134,9 @@ class TestPromotion:
 
     async def test_two_spaced_passes_promote(self):
         await _seed_candidate()
-        first = datetime(2026, 7, 14, 7, 0, tzinfo=UTC)
+        # Anchored to "now" (not a fixed date) so the promoted watchlist row's
+        # TTL-based expires_at never drifts into the past as real time advances.
+        first = datetime.now(UTC) - timedelta(minutes=30)
         await apply_research_result("GARAN", _result(), policy=_policy(), now=first)
         promoted = await apply_research_result(
             "GARAN", _result(), policy=_policy(), now=first + timedelta(minutes=11)
@@ -152,7 +155,9 @@ class TestPromotion:
 
     async def test_second_pass_before_minimum_interval_does_not_promote(self):
         await _seed_candidate()
-        first = datetime(2026, 7, 14, 7, 0, tzinfo=UTC)
+        # Anchored to "now" (not a fixed date) so the promoted watchlist row's
+        # TTL-based expires_at never drifts into the past as real time advances.
+        first = datetime.now(UTC) - timedelta(minutes=30)
         await apply_research_result("GARAN", _result(), policy=_policy(), now=first)
         assert not await apply_research_result(
             "GARAN", _result(), policy=_policy(), now=first + timedelta(minutes=9)

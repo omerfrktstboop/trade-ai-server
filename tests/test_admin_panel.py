@@ -418,7 +418,7 @@ class TestAdminDashboard:
         auth_headers: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ):
-        from app.routers import admin
+        from app.routers.admin import dashboard as admin_dashboard
 
         class SnapshotGateway:
             async def health(self):
@@ -430,7 +430,7 @@ class TestAdminDashboard:
             async def get_positions(self):
                 return {"positions": []}
 
-        monkeypatch.setattr(admin, "gateway_client", SnapshotGateway())
+        monkeypatch.setattr(admin_dashboard, "gateway_client", SnapshotGateway())
 
         async def seed():
             async with async_session_factory() as session:
@@ -469,14 +469,14 @@ class TestAdminDashboard:
         auth_headers: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ):
-        from app.routers import admin
+        from app.routers.admin import dashboard as admin_dashboard
         from app.services.matriks_gateway import GatewayUnavailable
 
         class UnavailableGateway:
             async def health(self):
                 raise GatewayUnavailable("offline")
 
-        monkeypatch.setattr(admin, "gateway_client", UnavailableGateway())
+        monkeypatch.setattr(admin_dashboard, "gateway_client", UnavailableGateway())
         response = client.get("/api/admin/bot-status", headers=auth_headers)
 
         assert response.status_code == 200

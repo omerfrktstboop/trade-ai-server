@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db import OrderLog
 from app.services.fill_ledger import record_fill_delta
+from app.services.measurement_repair import enqueue_repair_job
 from app.services.order_state_machine import FINAL, transition
 from app.services.position_lifecycle_engine import apply_fill_to_lifecycle
 
@@ -106,13 +107,30 @@ async def apply_callback(
                 )
                 if fill is not None:
                     await apply_fill_to_lifecycle(session, row, fill)
-        except Exception:
+        except Exception as exc:
             # The fill ledger/lifecycle is measurement-only - a SAVEPOINT
             # isolates it so a failure here never blocks or corrupts the
-            # authoritative OrderLog callback from committing.
+            # authoritative OrderLog callback from committing. Without a
+            # repair job, the next callback for the same order reports the
+            # same cumulative filled_qty and computes delta_qty=0, so this
+            # exact gap could never be recovered from a future callback.
             logger.exception(
                 "FILL_LEDGER_UPDATE_FAILED request_id=%s", row.request_id
             )
+            try:
+                await enqueue_repair_job(
+                    session,
+                    repair_type="FILL_RECONCILIATION",
+                    last_error=repr(exc),
+                    request_id=row.request_id,
+                    order_log_id=row.id,
+                    symbol=row.symbol,
+                )
+            except Exception:
+                logger.exception(
+                    "MEASUREMENT_REPAIR_JOB_ENQUEUE_FAILED request_id=%s",
+                    row.request_id,
+                )
 
     await session.commit()
     return row, changed

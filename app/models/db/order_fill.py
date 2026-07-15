@@ -52,6 +52,13 @@ class OrderFill(Base):
     # retry recomputes the same key and is rejected by the unique constraint.
     fill_event_key: Mapped[str] = mapped_column(String(128), nullable=False)
 
+    # CALLBACK_DELTA: created inline from a gateway order-result callback.
+    # RECONCILIATION: created later by measurement_reconciliation.py to
+    # recover a fill delta that the callback-time SAVEPOINT lost (Task 1.1).
+    fill_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="CALLBACK_DELTA"
+    )
+
     filled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -1,11 +1,11 @@
-"""Background symbol scanner — eski bot'un OnTimer/ScanDueSymbols döngüsünün
+"""Background symbol scanner - eski bot'un OnTimer/ScanDueSymbols döngüsünün
 server tarafındaki karşılığı (full-inversion Phase 2).
 
 Lifespan'de başlar, her tick'te (default 60 sn):
 
 1. ``SCANNER_ENABLED`` kapalıysa hiç başlamaz.
 2. Kill switch açıksa turu atlar (AI çağrısı ve karar üretimi yok).
-3. Gateway'e ulaşılamıyorsa (Matriks kapalı) turu atlar — hata fırlatmaz.
+3. Gateway'e ulaşılamıyorsa (Matriks kapalı) turu atlar - hata fırlatmaz.
 4. Research discovery, pozisyon anlık görüntüsünden bağımsız market-data ile çalışır.
 5. İşlem kesim saati (cutoff) geçmişse veya pozisyonlar yüklenmemişse trade
    değerlendirmesi atlanır.
@@ -13,11 +13,11 @@ Lifespan'de başlar, her tick'te (default 60 sn):
    olan) ``evaluator.evaluate_symbol`` ile değerlendirir.
 
 Emir yolu (Phase 2): ``SCANNER_ALLOW_ORDERS=false`` (default) iken tüm
-kararlar PAPER'a sabitlenir — Phase 1 davranışının aynısı. ``true`` iken mod
+kararlar PAPER'a sabitlenir - Phase 1 davranışının aynısı. ``true`` iken mod
 admin panelin ``tradingMode`` override'ından gelir ve yalnızca **DEMO_LIVE**
 kararları gateway'e emir olarak gönderilir; REAL_LIVE/LIVE bu fazda kod
 seviyesinde bloklu. Senkron emir sonuçları ``order_logs``'a yazılır; nihai
-borsa durumu gateway'in OnOrderUpdate → /api/order-result raporuyla gelir.
+borsa durumu gateway'in OnOrderUpdate -> /api/order-result raporuyla gelir.
 """
 
 from __future__ import annotations
@@ -257,7 +257,7 @@ class SymbolScanner:
             await notify_risk_block("Kill switch açık; scanner turu atlandı")
             return []
 
-        # ── Gateway sağlık kontrolü — Matriks kapalıysa tur atlanır ────────
+        # ── Gateway sağlık kontrolü - Matriks kapalıysa tur atlanır ────────
         try:
             gateway_health = await self._gateway.health()
         except (GatewayUnavailable, GatewayError):
@@ -331,7 +331,7 @@ class SymbolScanner:
                 continue
 
             try:
-                # SCANNER_ALLOW_ORDERS=false → PAPER'a sabit (Phase 1 davranışı).
+                # SCANNER_ALLOW_ORDERS=false -> PAPER'a sabit (Phase 1 davranışı).
                 result = await evaluate_symbol(
                     symbol,
                     mode=_configured_default_mode(),
@@ -374,7 +374,7 @@ class SymbolScanner:
             await self._maybe_send_order(result)
             await record_trade_watchlist_decision(result)
 
-        # ── Otonom keşif (movers → watchlist) + portföy re-evaluasyonu ────
+        # ── Otonom keşif (movers -> watchlist) + portföy re-evaluasyonu ────
         # Discovery yukarıda trade readiness kapılarından bağımsız çalıştı.
         # Gateway tur ortasında düştüyse research/portföy tekrar denenmez.
         if not gateway_down_mid_cycle:
@@ -506,7 +506,7 @@ class SymbolScanner:
         ``bot_positions``ta lot bulunan her sembol LLM'e pozisyon bağlamıyla
         gider (evaluator ``positionContext`` ekler; prompt kural 16: kar al /
         zarar kes / tut). Normal tarama zaten pozisyonlu sembolleri kapsıyor
-        olabilir — bu döngü, izleme listesinden çıkmış (ör. watchlist'ten
+        olabilir - bu döngü, izleme listesinden çıkmış (ör. watchlist'ten
         alınmış sonra pasifleşmiş) pozisyonların da yönetimsiz kalmamasını
         garanti eder.
         """
@@ -540,7 +540,7 @@ class SymbolScanner:
             if self._stop_event.is_set():
                 break
             # Normal tarama bu sembolü zaten yakın zamanda değerlendirdiyse
-            # (aynı tick dahil) tekrarlamak sadece token yakar — atla.
+            # (aynı tick dahil) tekrarlamak sadece token yakar - atla.
             last_scan = self._last_scan_by_symbol.get(symbol)
             if last_scan is not None and (now - last_scan) < interval:
                 continue
@@ -567,7 +567,7 @@ class SymbolScanner:
             if result is None:
                 continue
 
-            # Normal tarama zamanlayıcısını da tazele — aynı tick içinde
+            # Normal tarama zamanlayıcısını da tazele - aynı tick içinde
             # sembol ikinci kez değerlendirilmesin.
             self._last_scan_by_symbol[symbol] = now
             response = result.response

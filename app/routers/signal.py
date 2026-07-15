@@ -1,9 +1,9 @@
-﻿"""Signal evaluation endpoint â€” protected by Bearer token.
+"""Signal evaluation endpoint - protected by Bearer token.
 
 Flow::
 
-    SignalRequest  â†’  AiProvider.decide()  â†’  RiskEngine  â†’  SignalResponse
-                       â†“                         â†“                â†“
+    SignalRequest  ->  AiProvider.decide()  ->  RiskEngine  ->  SignalResponse
+                       |                         |                |
                    AiDecision               RiskDecision    market_snapshots
 
 This is the single-shot, caller-supplies-the-data endpoint, kept for manual
@@ -11,7 +11,7 @@ testing and debugging. The live trading path no longer goes through HTTP at
 all: ``app/services/scanner.py`` pulls market data from the Matriks gateway
 and calls ``app/services/evaluator.py`` in-process.
 
-Every pipeline helper below lives in the evaluator â€” this module is a thin
+Every pipeline helper below lives in the evaluator - this module is a thin
 HTTP wrapper around it.
 """
 
@@ -81,14 +81,14 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
         await persist_evaluation(body, payload, raw, response)
         return response
 
-    # â”€â”€ 1. Fetch external context (news + admin-entered fundamentals â€”
+    # == 1. Fetch external context (news + admin-entered fundamentals -
     # fund/broker flow context generation stays disabled until a real data
     # source is wired up; see app/services/fund_scanner.py and
     # app/services/broker_flow_service.py)
     news_context = await get_news_context([body.symbol])
     fundamentals_context = await get_fundamentals_context([body.symbol])
 
-    # â”€â”€ 2. Build payload for the AI provider â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # == 2. Build payload for the AI provider ==============================
     payload = build_payload(
         body,
         news_context,
@@ -96,17 +96,17 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
         active_config=runtime_engine.config,
     )
 
-    # â”€â”€ 3. Ask provider â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # == 3. Ask provider ===================================================
     ai_context = build_ai_decision_context(body, news_context=news_context)
     raw = await _provider.decide(ai_context)
 
-    # â”€â”€ 4. Wire into RiskDecision + apply risk engine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # == 4. Wire into RiskDecision + apply risk engine =====================
     decision = dict_to_risk_decision(raw, body)
     body = await with_resolved_daily_trade_count(body)
     response = runtime_engine.evaluate(body, decision)
     await persist_sizing_audit(body, runtime_engine)
 
-    # â”€â”€ 5. Persist to JSON-lines log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # == 5. Persist to JSON-lines log ======================================
     log_signal_evaluation(
         request_id=body.request_id,
         symbol=body.symbol,
@@ -115,7 +115,7 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
         response=response.model_dump(by_alias=True, mode="json"),
     )
 
-    # â”€â”€ 6. Persist to the database â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # == 6. Persist to the database ========================================
     await persist_evaluation(body, payload, raw, response)
 
     return response

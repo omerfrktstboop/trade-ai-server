@@ -51,6 +51,7 @@ from app.services.admin_config import (
 )
 from app.services.ai_provider import get_ai_provider_status
 from app.services.block_reason_classifier import classify_block_reason
+from app.services.cash_reservation import calculate_backend_reserved_cash
 from app.services.daily_trade_count import get_today_trade_counts
 from app.services.fundamentals_service import (
     NUMERIC_FIELDS as FUNDAMENTAL_NUMERIC_FIELDS,
@@ -2017,6 +2018,75 @@ async def _status_strip_context(
     }
 
 
+async def _recent_block_reasons(session: Any, limit: int = 10) -> list[dict[str, Any]]:
+    """Last N blocked (allow_order=False) risk decisions, most recent first."""
+    stmt = (
+        select(RiskDecision)
+        .where(RiskDecision.allow_order.is_(False))
+        .order_by(RiskDecision.created_at.desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    return [
+        {
+            "symbol": row.symbol,
+            "action": row.action,
+            "reason": row.reason,
+            "category": classify_block_reason(row.reason),
+            "created_at": row.created_at,
+        }
+        for row in rows
+    ]
+
+
+async def _open_positions_pnl() -> dict[str, Any]:
+    """Open bot_positions with a fresh-snapshot unrealized P&L per symbol.
+
+    Best-effort: a single symbol's snapshot failing does not drop the others
+    or the whole dashboard - it's shown with pnl=None instead.
+    """
+    try:
+        async with async_session_factory() as session:
+            rows = (
+                (await session.execute(select(BotPosition).where(BotPosition.qty > 0)))
+                .scalars()
+                .all()
+            )
+    except Exception as exc:
+        logger.warning("Open positions P&L query failed: %s", exc)
+        return {"positions": [], "total_pnl": None, "error": str(exc)}
+
+    positions: list[dict[str, Any]] = []
+    total_pnl = 0.0
+    total_known = 0
+    for row in rows:
+        current_price = None
+        pnl = None
+        try:
+            snapshot = await gateway_client.get_snapshot(row.symbol)
+            current_price = (snapshot.get("payload") or {}).get("lastPrice")
+        except Exception:
+            current_price = None
+        if current_price is not None and row.avg_price is not None:
+            pnl = (float(current_price) - float(row.avg_price)) * float(row.qty)
+            total_pnl += pnl
+            total_known += 1
+        positions.append(
+            {
+                "symbol": row.symbol,
+                "qty": row.qty,
+                "avg_price": row.avg_price,
+                "current_price": current_price,
+                "pnl": pnl,
+            }
+        )
+    return {
+        "positions": positions,
+        "total_pnl": total_pnl if total_known else None,
+        "error": None,
+    }
+
+
 async def _dashboard_context() -> dict[str, Any]:
     """Load dashboard data defensively so operational visibility survives DB issues."""
     try:
@@ -2027,6 +2097,8 @@ async def _dashboard_context() -> dict[str, Any]:
             latest_risk = await _latest(session, RiskDecision, 20)
             latest_orders = await _latest(session, OrderLog, 20)
             latest_account = await _latest(session, AccountNormalizationAudit, 1)
+            recent_block_reasons = await _recent_block_reasons(session, 10)
+            active_cash_reservation_tl = await calculate_backend_reserved_cash(session)
             status_ctx = await _status_strip_context(
                 session, configs=configs, profile=active_profile
             )
@@ -2039,6 +2111,8 @@ async def _dashboard_context() -> dict[str, Any]:
         latest_risk = []
         latest_orders = []
         latest_account = []
+        recent_block_reasons = []
+        active_cash_reservation_tl = None
         status_ctx = {
             "status_mode": "UNKNOWN",
             "status_kill_switch": False,
@@ -2053,6 +2127,13 @@ async def _dashboard_context() -> dict[str, Any]:
         "configs": configs,
         "active_profile": active_profile,
         "today_trade_count": today_trade_count,
+        "today_order_limit": (
+            active_profile.max_orders_per_day if active_profile else None
+        ),
+        "active_cash_reservation_tl": active_cash_reservation_tl,
+        "recent_block_reasons": recent_block_reasons,
+        "open_positions_pnl": await _open_positions_pnl(),
+        "ai_provider_status": get_ai_provider_status(),
         "latest_risk": latest_risk,
         "latest_orders": latest_orders,
         "latest_account_normalization": latest_account[0] if latest_account else None,

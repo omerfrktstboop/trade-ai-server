@@ -26,8 +26,8 @@
 
   <div class="card">
     <div class="card-header">Bugünkü İşlem Sayısı</div>
-    <div class="card-value">{{ today_trade_count }}</div>
-    <div class="mt-16" style="font-size:12px;color:var(--text-muted)">Bugün kaydedilen işlem adedi</div>
+    <div class="card-value">{{ today_trade_count }}{% if today_order_limit %}<span style="font-size:16px;color:var(--text-muted)"> / {{ today_order_limit }}</span>{% endif %}</div>
+    <div class="mt-16" style="font-size:12px;color:var(--text-muted)">Bugün kaydedilen işlem adedi / günlük limit</div>
   </div>
 
   <div class="card">
@@ -38,8 +38,82 @@
     </div>
     <div class="mt-16" style="font-size:12px;color:var(--text-muted)"><a href="/admin/trade-profiles" class="log-link">Profilleri yönet →</a></div>
   </div>
+
+  <div class="card">
+    <div class="card-header">Aktif Nakit Rezervi</div>
+    <div class="card-value">{{ active_cash_reservation_tl | round(2) if active_cash_reservation_tl is not none else '—' }}</div>
+    <div class="mt-16" style="font-size:12px;color:var(--text-muted)">Bekleyen BUY emirleri için ayrılmış TL</div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Açık Pozisyon K/Z</div>
+    <div class="card-value" style="color:{% if open_positions_pnl.total_pnl and open_positions_pnl.total_pnl > 0 %}var(--success){% elif open_positions_pnl.total_pnl and open_positions_pnl.total_pnl < 0 %}var(--danger){% endif %}">
+      {{ open_positions_pnl.total_pnl | round(2) if open_positions_pnl.total_pnl is not none else '—' }}
+    </div>
+    <div class="mt-16" style="font-size:12px;color:var(--text-muted)">{{ open_positions_pnl.positions | length }} açık pozisyon, anlık toplam K/Z</div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">AI Sağlığı</div>
+    <div class="card-value" style="color:{% if ai_provider_status.isDegraded %}var(--danger){% else %}var(--success){% endif %}">
+      {% if ai_provider_status.isDegraded %}⚠️ DEGRADED{% else %}✅ OK{% endif %}
+    </div>
+    <div class="mt-16" style="font-size:12px;color:var(--text-muted)">{{ ai_provider_status.providerName }}, ardışık hata: {{ ai_provider_status.consecutiveFailures }}</div>
+  </div>
 </div>
 {% endif %}
+
+<div class="mb-24">
+  <div class="flex-between mb-16">
+    <h2 class="section-title">Açık Pozisyonlar (anlık K/Z)</h2>
+    <a class="log-link" href="/admin/positions">Tüm pozisyonlar →</a>
+  </div>
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Sembol</th><th>Adet</th><th>Ort. Fiyat</th><th>Güncel Fiyat</th><th>K/Z</th></tr></thead>
+      <tbody>
+        {% for row in open_positions_pnl.positions %}
+        <tr>
+          <td><strong>{{ row.symbol }}</strong></td>
+          <td class="mono">{{ row.qty }}</td>
+          <td class="mono">{{ row.avg_price }}</td>
+          <td class="mono">{{ row.current_price if row.current_price is not none else '—' }}</td>
+          <td class="mono" style="color:{% if row.pnl and row.pnl > 0 %}var(--success){% elif row.pnl and row.pnl < 0 %}var(--danger){% endif %}">
+            {{ row.pnl | round(2) if row.pnl is not none else '—' }}
+          </td>
+        </tr>
+        {% else %}
+        <tr class="empty-row"><td colspan="5">Açık pozisyon yok</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="mb-24">
+  <div class="flex-between mb-16">
+    <h2 class="section-title">Son 10 Blok Nedeni</h2>
+    <a class="log-link" href="/admin/why-blocked">Tüm blok geçmişi →</a>
+  </div>
+  <div class="table-container">
+    <table>
+      <thead><tr><th>Sembol</th><th>Karar</th><th>Kategori</th><th>Neden</th><th>Zaman</th></tr></thead>
+      <tbody>
+        {% for row in recent_block_reasons %}
+        <tr>
+          <td><strong>{{ row.symbol }}</strong></td>
+          <td><span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span></td>
+          <td class="text-muted">{{ row.category }}</td>
+          <td class="text-muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;" title="{{ row.reason }}">{{ row.reason }}</td>
+          <td class="mono text-muted">{{ row.created_at | local_time }}</td>
+        </tr>
+        {% else %}
+        <tr class="empty-row"><td colspan="5">Blok kaydı yok</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 
 <div class="mb-24">
   <div class="flex-between mb-16"><h2 class="section-title">Bot Status</h2><a class="log-link" href="/api/admin/bot-status">JSON</a></div>

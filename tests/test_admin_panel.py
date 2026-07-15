@@ -412,6 +412,57 @@ class TestAdminDashboard:
         assert "Aktif Trade Profile" in resp.text
         assert "NORMAL" in resp.text
 
+    def test_dashboard_shows_open_positions_pnl_and_block_reasons(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from app.routers import admin
+
+        class SnapshotGateway:
+            async def health(self):
+                return {"positionsLoaded": True}
+
+            async def get_snapshot(self, symbol: str):
+                return {"payload": {"lastPrice": 110.0}}
+
+            async def get_positions(self):
+                return {"positions": []}
+
+        monkeypatch.setattr(admin, "gateway_client", SnapshotGateway())
+
+        async def seed():
+            async with async_session_factory() as session:
+                session.add(BotPosition(symbol="THYAO", qty=10, avg_price=100.0))
+                session.add(
+                    RiskDecision(
+                        request_id="dash-block-1",
+                        symbol="AKBNK",
+                        action="BUY",
+                        confidence=40.0,
+                        risk_score=60.0,
+                        allow_order=False,
+                        reason="confidence below minimum threshold",
+                        order_type="NONE",
+                        qty=0,
+                        mode="PAPER",
+                    )
+                )
+                await session.commit()
+
+        asyncio.run(seed())
+
+        resp = client.get("/admin", headers=auth_headers)
+
+        assert resp.status_code == 200
+        assert "Açık Pozisyonlar" in resp.text
+        assert "THYAO" in resp.text
+        assert "100.0" in resp.text  # (110 - 100) * 10 unrealized P&L
+        assert "Son 10 Blok Nedeni" in resp.text
+        assert "AKBNK" in resp.text
+        assert "AI Sağlığı" in resp.text
+
     def test_bot_status_is_safe_when_gateway_is_unavailable(
         self,
         client: TestClient,

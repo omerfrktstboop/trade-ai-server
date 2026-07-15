@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Index, Integer, Numeric, String, func
+from sqlalchemy import Boolean, DateTime, Index, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -77,6 +77,26 @@ class PositionLifecycle(Base):
     prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     config_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     profile_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # VERIFIED | PARTIAL | BACKFILL_UNAVAILABLE | RECONCILED | MANUAL_REVIEW
+    # (Task 7). Can only ever get "worse" after opening - a lifecycle that
+    # starts BACKFILL_UNAVAILABLE never becomes VERIFIED/RECONCILED, since
+    # its buy-cost history is permanently unknown regardless of later real
+    # fills applied to it.
+    data_quality: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="VERIFIED"
+    )
+    is_backfilled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    backfill_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # True only when the lifecycle's full buy-cost basis is real fill data
+    # (FILL_LEDGER or RECONCILIATION) - performance_report.py's strategy
+    # metrics (profit factor, win rate, ...) only include pnl_verified=true
+    # closed lifecycles by default (Task 8).
+    pnl_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # FILL_LEDGER | LEGACY_POSITION_BACKFILL | RECONCILIATION
+    measurement_source: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="FILL_LEDGER"
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

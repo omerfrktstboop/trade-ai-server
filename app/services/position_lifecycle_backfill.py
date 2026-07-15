@@ -105,6 +105,11 @@ async def ensure_lifecycle_for_legacy_position(
         prompt_version=PROMPT_VERSION,
         config_hash=BACKFILL_UNAVAILABLE,
         profile_code=BACKFILL_UNAVAILABLE,
+        data_quality=BACKFILL_UNAVAILABLE,
+        is_backfilled=True,
+        backfill_reason="pre_existing_position_without_recorded_fills",
+        pnl_verified=False,
+        measurement_source="LEGACY_POSITION_BACKFILL",
     )
     session.add(lifecycle)
     await session.flush()

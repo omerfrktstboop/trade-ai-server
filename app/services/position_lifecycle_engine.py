@@ -141,6 +141,16 @@ async def record_stop_breach(
     await session.flush()
 
 
+def _maybe_downgrade_data_quality(lifecycle: PositionLifecycle, fill: OrderFill) -> None:
+    """A lifecycle's data_quality only ever gets worse after opening (Task
+    7). A reconciliation-sourced fill applied to an otherwise clean lifecycle
+    means some of its history had to be recovered rather than recorded
+    inline; a legacy-backfilled lifecycle (unknown buy-cost history) stays
+    BACKFILL_UNAVAILABLE forever regardless of later real fills."""
+    if fill.fill_source == "RECONCILIATION" and lifecycle.data_quality == "VERIFIED":
+        lifecycle.data_quality = "RECONCILED"
+
+
 async def apply_fill_to_lifecycle(
     session: AsyncSession, row: OrderLog, fill: OrderFill
 ) -> PositionLifecycle | None:
@@ -195,6 +205,14 @@ async def _apply_buy_fill(
                 prompt_version=PROMPT_VERSION,
                 config_hash=row.config_version,
                 profile_code=row.profile_code,
+                data_quality=(
+                    "RECONCILED" if fill.fill_source == "RECONCILIATION" else "VERIFIED"
+                ),
+                is_backfilled=False,
+                pnl_verified=True,
+                measurement_source=(
+                    "RECONCILIATION" if fill.fill_source == "RECONCILIATION" else "FILL_LEDGER"
+                ),
             )
             try:
                 async with session.begin_nested():
@@ -223,6 +241,7 @@ async def _apply_buy_fill(
             await session.flush()
             return candidate
 
+        _maybe_downgrade_data_quality(lifecycle, fill)
         old_qty = lifecycle.current_qty or Decimal("0")
         old_avg = lifecycle.average_entry_price or Decimal("0")
         new_qty = old_qty + fill.fill_qty
@@ -307,6 +326,7 @@ async def _apply_sell_fill(
         )
         return None
 
+    _maybe_downgrade_data_quality(lifecycle, fill)
     sold_qty = fill.fill_qty
     if lifecycle.current_qty is not None and sold_qty > lifecycle.current_qty:
         sold_qty = lifecycle.current_qty

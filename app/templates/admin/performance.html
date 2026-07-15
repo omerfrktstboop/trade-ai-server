@@ -6,14 +6,16 @@
 
 <div class="card mb-24 mt-24">
   <div class="section-title mb-8">Gerçek Fill Defterinden Kâr/Zarar</div>
-  <p class="text-muted text-sm mb-16">Kaynak: <span class="badge badge-neutral">{{ report.pnlSource }}</span> — FILL_LEDGER: gerçek fill verisinden hesaplandı. ORDER_LOG_FALLBACK: henüz kapanmış lifecycle yok, eski emir bazlı tahmin gösteriliyor. UNAVAILABLE: hiç veri yok.</p>
+  <p class="text-muted text-sm mb-16">Kaynak: <span class="badge badge-neutral">{{ report.pnlSource }}</span> — FILL_LEDGER: gerçek fill verisinden hesaplandı. ORDER_LOG_FALLBACK: henüz kapanmış lifecycle yok, eski emir bazlı tahmin gösteriliyor. UNAVAILABLE: hiç veri yok. Aşağıdaki strateji metrikleri (kazanma oranı, profit factor, ortalama kazanç/kayıp, en iyi/en kötü işlem) yalnızca <strong>doğrulanmış (pnl_verified=true)</strong> kapanan işlemlerden hesaplanır.</p>
   <div class="stat-grid">
-    <div class="card"><div class="card-header">Kapanan İşlem</div><div class="card-value">{{ report.totalClosedTrades }}</div></div>
-    <div class="card"><div class="card-header">Kazanan / Kaybeden</div><div class="card-value">{{ report.winningTrades }} / {{ report.losingTrades }}</div></div>
-    <div class="card"><div class="card-header">Kazanma Oranı</div><div class="card-value">{{ report.winRate if report.winRate is not none else '-' }}%</div></div>
-    <div class="card"><div class="card-header">Brüt Kâr/Zarar (TL)</div><div class="card-value">{{ report.grossRealizedPnl if report.grossRealizedPnl is not none else '-' }}</div></div>
+    <div class="card"><div class="card-header">Kapanan İşlem (Doğrulanmış / Doğrulanmamış)</div><div class="card-value">{{ report.verifiedClosedTradeCount }} / {{ report.unverifiedClosedTradeCount }}</div></div>
+    <div class="card"><div class="card-header">Reconciled / Manual Review İşlem</div><div class="card-value">{{ report.reconciledTradeCount }} / {{ report.manualReviewTradeCount }}</div></div>
+    <div class="card"><div class="card-header">Kazanan / Kaybeden (doğrulanmış)</div><div class="card-value">{{ report.winningTrades }} / {{ report.losingTrades }}</div></div>
+    <div class="card"><div class="card-header">Kazanma Oranı (doğrulanmış)</div><div class="card-value">{{ report.winRate if report.winRate is not none else '-' }}%</div></div>
+    <div class="card"><div class="card-header">Doğrulanmış Brüt K/Z (TL)</div><div class="card-value">{{ report.verifiedGrossPnl if report.verifiedGrossPnl is not none else '-' }}</div></div>
     <div class="card"><div class="card-header">Toplam Maliyet (TL)</div><div class="card-value">{{ report.totalTransactionCost if report.totalTransactionCost is not none else '-' }}</div></div>
-    <div class="card"><div class="card-header">Net Kâr/Zarar (TL)</div><div class="card-value">{{ report.netRealizedPnl if report.netRealizedPnl is not none else '-' }}</div></div>
+    <div class="card"><div class="card-header">Doğrulanmış Net K/Z (TL)</div><div class="card-value">{{ report.verifiedNetPnl if report.verifiedNetPnl is not none else '-' }}</div></div>
+    <div class="card"><div class="card-header">Doğrulanmamış Tahmini K/Z (TL)</div><div class="card-value">{{ report.unverifiedEstimatedPnl if report.unverifiedEstimatedPnl is not none else '-' }}</div></div>
     <div class="card"><div class="card-header">Ortalama Kazanç / Kayıp</div><div class="card-value">{{ report.averageWin if report.averageWin is not none else '-' }} / {{ report.averageLoss if report.averageLoss is not none else '-' }}</div></div>
     <div class="card"><div class="card-header">Kazanç/Kayıp Oranı</div><div class="card-value">{{ report.avgWinLossRatio if report.avgWinLossRatio is not none else '-' }}</div></div>
     <div class="card"><div class="card-header">Profit Factor</div><div class="card-value">{{ report.profitFactor if report.profitFactor is not none else '-' }}</div></div>
@@ -22,6 +24,8 @@
     <div class="card"><div class="card-header">Ortalama Kayma (TL)</div><div class="card-value">{{ report.averageSlippageTl if report.averageSlippageTl is not none else '-' }}</div></div>
     <div class="card"><div class="card-header">Açık Pozisyon</div><div class="card-value">{{ report.openPositionCount }}</div></div>
     <div class="card"><div class="card-header">Gerçekleşmemiş Kâr/Zarar</div><div class="card-value">{{ report.unrealizedPnl if report.unrealizedPnl is not none else 'UNAVAILABLE' }}</div></div>
+    <div class="card"><div class="card-header">Eksik Fill Sayısı</div><div class="card-value">{{ report.missingFillCount }}</div></div>
+    <div class="card"><div class="card-header">Bekleyen / Başarısız Repair Job</div><div class="card-value">{{ report.pendingRepairJobCount }} / {{ report.failedRepairJobCount }}</div></div>
   </div>
 </div>
 
@@ -33,6 +37,7 @@
     <div class="card"><div class="card-header">Tamamlanan</div><div class="card-value">{{ report.outcomeCompleteCount }}</div></div>
     <div class="card"><div class="card-header">Ulaşılamaz</div><div class="card-value">{{ report.outcomeUnavailableCount }}</div></div>
     <div class="card"><div class="card-header">Belirsiz (Aynı Anda Hit)</div><div class="card-value">{{ report.outcomeAmbiguousCount }}</div></div>
+    <div class="card"><div class="card-header">Veri Boşluğu (DATA_GAP)</div><div class="card-value">{{ report.outcomeDataGapCount }}</div></div>
     <div class="card"><div class="card-header">Ortalama MFE (%)</div><div class="card-value">{{ report.averageMfePct if report.averageMfePct is not none else '-' }}</div></div>
     <div class="card"><div class="card-header">Ortalama MAE (%)</div><div class="card-value">{{ report.averageMaePct if report.averageMaePct is not none else '-' }}</div></div>
     <div class="card"><div class="card-header">Önce Target / Önce Stop</div><div class="card-value">{{ report.targetBeforeStopRatio if report.targetBeforeStopRatio is not none else '-' }}% / {{ report.stopBeforeTargetRatio if report.stopBeforeTargetRatio is not none else '-' }}%</div></div>
@@ -48,8 +53,8 @@
 
 <div class="card mb-24">
   <div class="section-title mb-8">Son Kapanan İşlemler</div>
-  <div class="table-container"><table><thead><tr><th>Sembol</th><th>Açılış</th><th>Kapanış</th><th>Ort. Giriş</th><th>Ort. Çıkış</th><th>Adet</th><th>Brüt</th><th>Maliyet</th><th>Net</th><th>Stop</th><th>Hedef</th><th>Kapanış Nedeni</th><th>Strateji</th><th>Profil</th></tr></thead><tbody>
-  {% for t in report.recentClosedTrades %}<tr><td>{{ t.symbol }}</td><td>{{ t.openedAt }}</td><td>{{ t.closedAt }}</td><td>{{ t.averageEntryPrice }}</td><td>{{ t.averageExitPrice }}</td><td>{{ t.quantity }}</td><td>{{ t.grossPnl }}</td><td>{{ t.totalCost }}</td><td>{{ t.netPnl }}</td><td>{{ t.stopLoss }}</td><td>{{ t.targetPrice }}</td><td>{{ t.closeReason or '-' }}</td><td>{{ t.strategyVersion }}</td><td>{{ t.profileCode }}</td></tr>{% else %}<tr class="empty-row"><td colspan="14">No records</td></tr>{% endfor %}
+  <div class="table-container"><table><thead><tr><th>Sembol</th><th>Açılış</th><th>Kapanış</th><th>Ort. Giriş</th><th>Ort. Çıkış</th><th>Adet</th><th>Brüt</th><th>Maliyet</th><th>Net</th><th>Stop</th><th>Hedef</th><th>Kapanış Nedeni</th><th>Strateji</th><th>Profil</th><th>Veri Kalitesi</th></tr></thead><tbody>
+  {% for t in report.recentClosedTrades %}<tr><td>{{ t.symbol }}</td><td>{{ t.openedAt }}</td><td>{{ t.closedAt }}</td><td>{{ t.averageEntryPrice }}</td><td>{{ t.averageExitPrice }}</td><td>{{ t.quantity }}</td><td>{{ t.grossPnl }}</td><td>{{ t.totalCost }}</td><td>{{ t.netPnl }}</td><td>{{ t.stopLoss }}</td><td>{{ t.targetPrice }}</td><td>{{ t.closeReason or '-' }}</td><td>{{ t.strategyVersion }}</td><td>{{ t.profileCode }}</td><td><span class="badge {{ 'badge-buy' if t.pnlVerified else 'badge-wait' }}">{{ t.dataQuality }}</span></td></tr>{% else %}<tr class="empty-row"><td colspan="15">No records</td></tr>{% endfor %}
   </tbody></table></div>
 </div>
 

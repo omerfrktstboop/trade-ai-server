@@ -21,6 +21,7 @@ from sqlalchemy import select
 from app.db.session import async_session_factory
 from app.models.db import (
     DecisionOutcome,
+    MeasurementRepairJob,
     OrderFill,
     OrderLog,
     PositionLifecycle,
@@ -125,6 +126,16 @@ async def build_performance_report(
                     event.position_lifecycle_id, event.reason
                 )
 
+        # Repair-job counts are a live operational snapshot, not scoped to
+        # the report's date range - a stuck job from last week is still
+        # relevant right now (Task 8).
+        repair_status_counts = Counter(
+            row[0]
+            for row in (
+                await session.execute(select(MeasurementRepairJob.status))
+            ).all()
+        )
+
     actions = Counter(row.action for row in risks)
     categories = Counter(
         classify_block_reason(row.reason) for row in risks if not row.allow_order
@@ -135,6 +146,7 @@ async def build_performance_report(
     ledger = _build_ledger_summary(closed_lifecycles, outcomes_by_request)
     slippage = _slippage_summary(fills)
     outcome_summary = _outcome_summary(outcomes)
+    missing_fill_count = _count_missing_fills(orders, fills)
     unrealized_pnl, unrealized_available, unrealized_unavailable = (
         await _open_position_unrealized_pnl(open_lifecycles, gateway)
     )
@@ -179,10 +191,31 @@ async def build_performance_report(
         "recentClosedTrades": _recent_closed_trades(
             closed_lifecycles, close_reason_by_lifecycle
         ),
+        "missingFillCount": missing_fill_count,
+        "pendingRepairJobCount": repair_status_counts.get("PENDING", 0)
+        + repair_status_counts.get("PROCESSING", 0),
+        "failedRepairJobCount": repair_status_counts.get("FAILED", 0)
+        + repair_status_counts.get("MANUAL_REVIEW", 0),
         **ledger,
         **slippage,
         **outcome_summary,
     }
+
+
+def _count_missing_fills(orders: list[OrderLog], fills: list[OrderFill]) -> int:
+    """Orders with real filled_qty progress but a short OrderFill total -
+    exactly what measurement_reconciliation.py looks for (Task 8)."""
+    recorded_by_order: dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
+    for fill in fills:
+        recorded_by_order[fill.order_log_id] += fill.fill_qty
+    missing = 0
+    for order in orders:
+        filled_qty = to_decimal(order.filled_qty)
+        if filled_qty is None or filled_qty <= 0:
+            continue
+        if recorded_by_order.get(order.id, Decimal("0")) < filled_qty:
+            missing += 1
+    return missing
 
 
 def _recent_closed_trades(
@@ -222,6 +255,8 @@ def _recent_closed_trades(
                 "closeReason": close_reason_by_lifecycle.get(lc.id),
                 "strategyVersion": lc.strategy_version,
                 "profileCode": lc.profile_code,
+                "dataQuality": lc.data_quality,
+                "pnlVerified": lc.pnl_verified,
             }
         )
     return trades
@@ -240,6 +275,7 @@ def _outcome_summary(outcomes: list[DecisionOutcome]) -> dict[str, Any]:
         "outcomeCompleteCount": status_counts.get("COMPLETE", 0),
         "outcomeUnavailableCount": status_counts.get("UNAVAILABLE", 0),
         "outcomeAmbiguousCount": status_counts.get("AMBIGUOUS", 0),
+        "outcomeDataGapCount": status_counts.get("DATA_GAP", 0),
         "averageMfePct": _f(sum(mfe_values) / len(mfe_values)) if mfe_values else None,
         "averageMaePct": _f(sum(mae_values) / len(mae_values)) if mae_values else None,
         "targetBeforeStopRatio": (
@@ -256,11 +292,23 @@ def _build_ledger_summary(
     outcomes_by_request: dict[str, DecisionOutcome],
 ) -> dict[str, Any]:
     total = len(closed_lifecycles)
-    wins = [lc for lc in closed_lifecycles if (lc.net_realized_pnl_tl or Decimal("0")) > 0]
-    losses = [lc for lc in closed_lifecycles if (lc.net_realized_pnl_tl or Decimal("0")) < 0]
+    # Task 8: strategy metrics (win rate, profit factor, avg win/loss, best/
+    # worst trade) are computed only from pnl_verified=true lifecycles by
+    # default - a backfilled position's unknown buy-cost history must never
+    # silently distort them.
+    verified = [lc for lc in closed_lifecycles if lc.pnl_verified]
+    unverified = [lc for lc in closed_lifecycles if not lc.pnl_verified]
+    reconciled_count = sum(1 for lc in closed_lifecycles if lc.data_quality == "RECONCILED")
+    manual_review_count = sum(
+        1 for lc in closed_lifecycles if lc.data_quality == "MANUAL_REVIEW"
+    )
 
-    gross_pnl = sum((lc.gross_realized_pnl_tl or Decimal("0")) for lc in closed_lifecycles)
-    net_pnl = sum((lc.net_realized_pnl_tl or Decimal("0")) for lc in closed_lifecycles)
+    wins = [lc for lc in verified if (lc.net_realized_pnl_tl or Decimal("0")) > 0]
+    losses = [lc for lc in verified if (lc.net_realized_pnl_tl or Decimal("0")) < 0]
+
+    verified_gross_pnl = sum((lc.gross_realized_pnl_tl or Decimal("0")) for lc in verified)
+    verified_net_pnl = sum((lc.net_realized_pnl_tl or Decimal("0")) for lc in verified)
+    unverified_net_pnl = sum((lc.net_realized_pnl_tl or Decimal("0")) for lc in unverified)
     total_cost = sum(
         (lc.total_buy_cost_tl or Decimal("0")) + (lc.total_sell_cost_tl or Decimal("0"))
         for lc in closed_lifecycles
@@ -273,8 +321,8 @@ def _build_ledger_summary(
     # profit_factor = sum(gains) / abs(sum(losses)); never a fake infinity
     # when there are no losses (Task 2) - report None instead.
     profit_factor = float(win_sum / abs(loss_sum)) if losses else None
-    best_trade = max((lc.net_realized_pnl_tl for lc in closed_lifecycles), default=None)
-    worst_trade = min((lc.net_realized_pnl_tl for lc in closed_lifecycles), default=None)
+    best_trade = max((lc.net_realized_pnl_tl for lc in verified), default=None)
+    worst_trade = min((lc.net_realized_pnl_tl for lc in verified), default=None)
 
     by_strategy: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"count": 0, "netPnl": Decimal("0")}
@@ -320,12 +368,19 @@ def _build_ledger_summary(
 
     return {
         "totalClosedTrades": total,
+        "verifiedClosedTradeCount": len(verified),
+        "unverifiedClosedTradeCount": len(unverified),
+        "reconciledTradeCount": reconciled_count,
+        "manualReviewTradeCount": manual_review_count,
         "winningTrades": len(wins),
         "losingTrades": len(losses),
-        "winRate": round(len(wins) / total * 100, 2) if total else None,
-        "grossRealizedPnl": _f(gross_pnl) if total else None,
+        "winRate": round(len(wins) / len(verified) * 100, 2) if verified else None,
+        "grossRealizedPnl": _f(verified_gross_pnl) if verified else None,
         "totalTransactionCost": _f(total_cost) if total else None,
-        "netRealizedPnl": _f(net_pnl) if total else None,
+        "netRealizedPnl": _f(verified_net_pnl) if verified else None,
+        "verifiedGrossPnl": _f(verified_gross_pnl) if verified else None,
+        "verifiedNetPnl": _f(verified_net_pnl) if verified else None,
+        "unverifiedEstimatedPnl": _f(unverified_net_pnl) if unverified else None,
         "averageWin": _f(avg_win),
         "averageLoss": _f(avg_loss),
         "avgWinLossRatio": avg_win_loss_ratio,

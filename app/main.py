@@ -21,7 +21,7 @@ from app.routers.health import router as health_router
 from app.routers.gateway_config import router as gateway_config_router
 from app.routers.order_result import router as order_result_router
 from app.routers.signal import router as signal_router
-from app.routers.signals import router as signals_router
+from app.routers.signal_history import router as signal_history_router
 
 
 @asynccontextmanager
@@ -93,7 +93,7 @@ app.include_router(gateway_config_router, prefix="/api")
 # Protected (Bearer token required)
 app.include_router(signal_router, prefix="/api")
 app.include_router(order_result_router, prefix="/api")
-app.include_router(signals_router, prefix="/api")
+app.include_router(signal_history_router, prefix="/api")
 app.include_router(admin_api_router, prefix="/api/admin")
 app.include_router(admin_router, prefix="/admin")
 

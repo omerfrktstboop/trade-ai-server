@@ -57,7 +57,9 @@ async def load_research_policy(session: AsyncSession | None = None) -> ResearchP
         values = {item.key: item.value for item in await list_admin_configs(session)}
         return ResearchPolicy(
             discovery_interval_minutes=max(1, int(values["discoveryIntervalMinutes"])),
-            max_candidates_per_cycle=max(1, int(values["maxResearchCandidatesPerCycle"])),
+            max_candidates_per_cycle=max(
+                1, int(values["maxResearchCandidatesPerCycle"])
+            ),
             max_active_symbols=max(1, int(values["maxActiveResearchSymbols"])),
             max_concurrent_evaluations=max(
                 1, int(values["maxConcurrentResearchEvaluations"])
@@ -152,7 +154,11 @@ async def run_research_cycle(
             await apply_research_result(symbol, result, policy=policy)
             return symbol
 
-    evaluated = [item for item in await asyncio.gather(*(evaluate_one(c) for c in snapshots)) if item]
+    evaluated = [
+        item
+        for item in await asyncio.gather(*(evaluate_one(c) for c in snapshots))
+        if item
+    ]
     return evaluated
 
 
@@ -281,7 +287,9 @@ async def apply_research_result(
                 )
             )
         ).scalar_one_or_none()
-        if (watch is None or not watch.is_active) and active_count >= policy.max_trade_watchlist_size:
+        if (
+            watch is None or not watch.is_active
+        ) and active_count >= policy.max_trade_watchlist_size:
             candidate.rejection_reason = "PROMOTION_WATCHLIST_CAPACITY_REACHED"
             await session.commit()
             return False
@@ -352,7 +360,11 @@ def _promotion_verdict(
         return False, "PROMOTION_RISK_SCORE_ABOVE_MAXIMUM", None
     if trend_score is None or trend_score < policy.minimum_trend_score:
         return False, "PROMOTION_TREND_SCORE_BELOW_MINIMUM", None
-    if response.entry_range is None or response.stop_loss is None or response.target_price is None:
+    if (
+        response.entry_range is None
+        or response.stop_loss is None
+        or response.target_price is None
+    ):
         return False, "PROMOTION_PRICE_LEVELS_MISSING", None
     reward_risk = _reward_risk_ratio(
         response.entry_range.max, response.stop_loss, response.target_price
@@ -527,19 +539,24 @@ async def maintain_trade_watchlist(declined_symbols: set[str]) -> list[str]:
                 hours=policy.trade_watchlist_ttl_hours
             ):
                 reason = "last successful evaluation older than TTL"
-            elif candidate.ai_research_score is not None and candidate.ai_research_score < 60:
+            elif (
+                candidate.ai_research_score is not None
+                and candidate.ai_research_score < 60
+            ):
                 reason = "research score below 60"
             elif summary and summary.get("priceAboveEma20") is False:
                 reason = "price fell below EMA20"
-            elif _float_or_none(summary.get("ema20Slope")) is not None and float(
-                summary["ema20Slope"]
-            ) < 0:
+            elif (
+                _float_or_none(summary.get("ema20Slope")) is not None
+                and float(summary["ema20Slope"]) < 0
+            ):
                 reason = "EMA20 slope turned negative"
             elif float(candidate.volume_tl or 0) < policy.minimum_volume_tl:
                 reason = "volume support lost"
-            elif _float_or_none(summary.get("spreadPct")) is not None and float(
-                summary["spreadPct"]
-            ) > policy.maximum_spread_pct:
+            elif (
+                _float_or_none(summary.get("spreadPct")) is not None
+                and float(summary["spreadPct"]) > policy.maximum_spread_pct
+            ):
                 reason = "spread deteriorated"
             if reason:
                 await _remove_watchlist_row(session, row, reason)
@@ -578,9 +595,9 @@ async def get_pipeline_counts() -> dict[str, int]:
     async with async_session_factory() as session:
         candidate_rows = (
             await session.execute(
-                select(ResearchCandidate.status, func.count(ResearchCandidate.id)).group_by(
-                    ResearchCandidate.status
-                )
+                select(
+                    ResearchCandidate.status, func.count(ResearchCandidate.id)
+                ).group_by(ResearchCandidate.status)
             )
         ).all()
         status_counts = {str(status): int(count) for status, count in candidate_rows}
@@ -643,7 +660,11 @@ def _float_or_none(value: Any) -> float | None:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    return parsed if parsed == parsed and parsed not in (float("inf"), float("-inf")) else None
+    return (
+        parsed
+        if parsed == parsed and parsed not in (float("inf"), float("-inf"))
+        else None
+    )
 
 
 def _as_utc(value: datetime | None) -> datetime:

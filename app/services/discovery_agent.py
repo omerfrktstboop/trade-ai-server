@@ -78,6 +78,7 @@ class DiscoveryScanResult(list[str]):
         self.rejection_reason_counts = rejection_reason_counts or {}
         self.unavailable_signals = unavailable_signals or {}
 
+
 @dataclass(frozen=True)
 class DiscoveryPolicy:
     minimum_trend_score: float = 60.0
@@ -200,7 +201,10 @@ async def run_discovery_scan(
             sources.setdefault(symbol, set()).add("MOMENTUM_30M")
         if (_to_float(item.get("changePct60m")) or 0) > 1:
             sources.setdefault(symbol, set()).add("MOMENTUM_60M")
-        if relative_volume_available and (_to_float(item.get("relativeVolume")) or 0) >= 1.5:
+        if (
+            relative_volume_available
+            and (_to_float(item.get("relativeVolume")) or 0) >= 1.5
+        ):
             sources.setdefault(symbol, set()).add("RELATIVE_VOLUME")
         if item.get("breakout20Bar") is True:
             sources.setdefault(symbol, set()).add("BREAKOUT_20_BAR")
@@ -247,8 +251,7 @@ async def run_discovery_scan(
 
         if not weekly_available and weekly_metric_count:
             ranking_input_counts["WEEKLY_GAINER"] = sum(
-                "WEEKLY_GAINER" in symbol_sources
-                for symbol_sources in sources.values()
+                "WEEKLY_GAINER" in symbol_sources for symbol_sources in sources.values()
             )
             unavailable_signals.pop("WEEKLY_MOMENTUM", None)
             historical_used = True
@@ -293,11 +296,11 @@ async def run_discovery_scan(
             )
             continue
         expanded_sources = sorted(
-            candidate_sources | _derived_sources(
+            candidate_sources
+            | _derived_sources(
                 verdict,
                 allow_relative_volume=(
-                    relative_volume_available
-                    or historical_relative_volume_available
+                    relative_volume_available or historical_relative_volume_available
                 ),
             )
         )
@@ -372,6 +375,7 @@ async def run_discovery_scan(
         unavailable_signals=unavailable_signals,
     )
 
+
 async def _screen(
     gw: MatriksGatewayClient,
     symbol: str,
@@ -385,7 +389,10 @@ async def _screen(
         return None, "DISCOVERY_LIMIT_LOCKED"
     if abs(change_pct) >= policy.maximum_change_pct:
         return None, "DISCOVERY_DAILY_CHANGE_LIMIT"
-    if weekly_change_pct is not None and weekly_change_pct >= policy.maximum_weekly_change_pct:
+    if (
+        weekly_change_pct is not None
+        and weekly_change_pct >= policy.maximum_weekly_change_pct
+    ):
         return None, "DISCOVERY_WEEKLY_CHANGE_LIMIT"
     if volume_tl < policy.minimum_volume_tl:
         return None, "DISCOVERY_VOLUME_BELOW_MINIMUM"
@@ -424,8 +431,12 @@ async def _screen(
     combined["volumeTl"] = volume_tl
     combined["spreadPct"] = spread_pct
     combined["askBidRatio"] = wall_ratio
-    combined["quoteAgeSeconds"] = _first_float(snapshot_payload.get("quoteAgeSeconds"), item.get("quoteAgeSeconds"))
-    combined["snapshotAgeSeconds"] = _first_float(snapshot_payload.get("snapshotAgeSeconds"), snapshot_payload.get("ageSeconds"))
+    combined["quoteAgeSeconds"] = _first_float(
+        snapshot_payload.get("quoteAgeSeconds"), item.get("quoteAgeSeconds")
+    )
+    combined["snapshotAgeSeconds"] = _first_float(
+        snapshot_payload.get("snapshotAgeSeconds"), snapshot_payload.get("ageSeconds")
+    )
     if _is_stale(combined, policy):
         return None, "DISCOVERY_STALE_DATA"
     score, components = calculate_trend_pre_score(combined, policy)
@@ -471,7 +482,11 @@ def calculate_trend_pre_score(
     ema20_slope = _to_float(data.get("ema20Slope"))
     rsi = _to_float(data.get("rsi") or data.get("rsi14"))
     spread = _to_float(data.get("spreadPct"))
-    quote_age = _first_float(data.get("quoteAgeSeconds"), data.get("snapshotAgeSeconds"), data.get("ageSeconds"))
+    quote_age = _first_float(
+        data.get("quoteAgeSeconds"),
+        data.get("snapshotAgeSeconds"),
+        data.get("ageSeconds"),
+    )
     limit_locked = _is_limit_locked(data, change, policy)
     overextended = change >= policy.maximum_change_pct or (
         weekly_change is not None and weekly_change >= policy.maximum_weekly_change_pct
@@ -479,8 +494,14 @@ def calculate_trend_pre_score(
 
     score = 0.0
     if weekly_change is not None:
-        score += 15 if 2 <= weekly_change < 10 else (8 if 0 < weekly_change < policy.maximum_weekly_change_pct else 0)
-    score += 15 if 1 <= change < 5 else (7 if 0 < change < policy.maximum_change_pct else 0)
+        score += (
+            15
+            if 2 <= weekly_change < 10
+            else (8 if 0 < weekly_change < policy.maximum_weekly_change_pct else 0)
+        )
+    score += (
+        15 if 1 <= change < 5 else (7 if 0 < change < policy.maximum_change_pct else 0)
+    )
     if volume >= policy.minimum_volume_tl:
         score += 15 + (5 if volume >= policy.minimum_volume_tl * 2 else 0)
     score += 12 if relative_volume is not None and relative_volume >= 1.5 else 2
@@ -490,10 +511,18 @@ def calculate_trend_pre_score(
         or (ema20_slope is not None and ema20_slope > 0)
     )
     score += 12 if trend_aligned else 0
-    score += 10 if rsi is not None and 52 <= rsi <= 70 else (4 if rsi is not None and 70 < rsi <= 75 else 0)
+    score += (
+        10
+        if rsi is not None and 52 <= rsi <= 70
+        else (4 if rsi is not None and 70 < rsi <= 75 else 0)
+    )
     score -= 10 if rsi is not None and rsi > 75 else 0
     score += 6 if spread is not None and spread <= policy.maximum_spread_pct else 0
-    score += 5 if quote_age is not None and 0 <= quote_age <= policy.maximum_quote_age_seconds else 0
+    score += (
+        5
+        if quote_age is not None and 0 <= quote_age <= policy.maximum_quote_age_seconds
+        else 0
+    )
     score += 5 if data.get("breakout20Bar") is True else 0
     score += 5 if str(data.get("macdState") or "").upper() in {"BUY", "BULLISH"} else 0
     score -= 40 if limit_locked else 0
@@ -506,7 +535,9 @@ def calculate_trend_pre_score(
         "changePct60m": _to_float(data.get("changePct60m")),
         "volumeTl": volume,
         "relativeVolume": relative_volume,
-        "priceAboveEma20": bool(price is not None and ema20 is not None and price > ema20),
+        "priceAboveEma20": bool(
+            price is not None and ema20 is not None and price > ema20
+        ),
         "emaTrendAligned": trend_aligned,
         "quoteAgeSeconds": quote_age,
         "limitLocked": limit_locked,
@@ -530,9 +561,7 @@ def _turnover_ranking_available(capabilities: dict[str, Any]) -> bool:
     )
 
 
-def _historical_shortlist(
-    items: dict[str, dict[str, Any]], limit: int
-) -> list[str]:
+def _historical_shortlist(items: dict[str, dict[str, Any]], limit: int) -> list[str]:
     """Select a bounded configured-universe list before requesting bars."""
     return sorted(
         items,
@@ -574,7 +603,9 @@ async def _fetch_historical_bars(
         return symbol, response
 
     if misses:
-        for symbol, response in await asyncio.gather(*(fetch(symbol) for symbol in misses)):
+        for symbol, response in await asyncio.gather(
+            *(fetch(symbol) for symbol in misses)
+        ):
             if response is None:
                 continue
             payloads[symbol] = response
@@ -590,10 +621,14 @@ def _historical_bar_metrics(
     normalized_period = period.strip().upper().replace("_", "")
     if normalized_period not in {"DAY", "DAILY", "D1", "1D"}:
         reason = "HISTORICAL_BARS_PERIOD_NOT_DAILY"
-        return None, None, {
-            "WEEKLY_MOMENTUM": reason,
-            "RELATIVE_VOLUME": reason,
-        }
+        return (
+            None,
+            None,
+            {
+                "WEEKLY_MOMENTUM": reason,
+                "RELATIVE_VOLUME": reason,
+            },
+        )
 
     bars = [
         bar
@@ -628,15 +663,13 @@ def _historical_bar_metrics(
             and latest_volume > 0
             and all(volume is not None and volume > 0 for volume in baseline)
         ):
-            average_volume = sum(volume for volume in baseline if volume is not None) / len(
-                baseline
-            )
+            average_volume = sum(
+                volume for volume in baseline if volume is not None
+            ) / len(baseline)
             if average_volume > 0:
                 relative_volume = round(latest_volume / average_volume, 4)
     if relative_volume is None:
-        reasons["RELATIVE_VOLUME"] = (
-            "HISTORICAL_RELATIVE_VOLUME_BASELINE_INSUFFICIENT"
-        )
+        reasons["RELATIVE_VOLUME"] = "HISTORICAL_RELATIVE_VOLUME_BASELINE_INSUFFICIENT"
     return weekly_change, relative_volume, reasons
 
 
@@ -815,7 +848,13 @@ async def list_active_watchlist_symbols() -> list[str]:
                 await session.execute(
                     select(ResearchCandidate.symbol).where(
                         ResearchCandidate.status.in_(
-                            ("DETECTED", "RESEARCH_PENDING", "RESEARCHED", "QUALIFIED", "PROMOTED")
+                            (
+                                "DETECTED",
+                                "RESEARCH_PENDING",
+                                "RESEARCHED",
+                                "QUALIFIED",
+                                "PROMOTED",
+                            )
                         )
                     )
                 )
@@ -825,7 +864,10 @@ async def list_active_watchlist_symbols() -> list[str]:
         )
     return sorted(str(symbol).upper() for symbol in rows)
 
-def _is_limit_locked(data: dict[str, Any], change_pct: float, policy: DiscoveryPolicy) -> bool:
+
+def _is_limit_locked(
+    data: dict[str, Any], change_pct: float, policy: DiscoveryPolicy
+) -> bool:
     return bool(
         data.get("limitLocked") is True
         or data.get("isLimitLocked") is True
@@ -836,8 +878,14 @@ async def list_active_watchlist_symbols() -> list[str]:
 
 
 def _is_stale(data: dict[str, Any], policy: DiscoveryPolicy) -> bool:
-    age = _first_float(data.get("quoteAgeSeconds"), data.get("snapshotAgeSeconds"), data.get("ageSeconds"))
+    age = _first_float(
+        data.get("quoteAgeSeconds"),
+        data.get("snapshotAgeSeconds"),
+        data.get("ageSeconds"),
+    )
     return age is not None and (age < 0 or age > policy.maximum_quote_age_seconds)
+
+
 def _ask_bid_ratio(depth: dict[str, Any]) -> float | None:
     payload = depth.get("payload") or depth
     analysis = payload.get("depthAnalysis") or payload.get("analysis") or {}
@@ -872,4 +920,8 @@ def _to_float(value: Any) -> float | None:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    return parsed if parsed == parsed and parsed not in (float("inf"), float("-inf")) else None
+    return (
+        parsed
+        if parsed == parsed and parsed not in (float("inf"), float("-inf"))
+        else None
+    )

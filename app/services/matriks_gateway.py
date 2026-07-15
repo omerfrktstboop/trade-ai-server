@@ -111,7 +111,11 @@ class MatriksGatewayClient:
         """
         response = await self.get_capabilities()
         capabilities = response.get("capabilities")
-        rankings = capabilities.get("marketRankings") if isinstance(capabilities, dict) else None
+        rankings = (
+            capabilities.get("marketRankings")
+            if isinstance(capabilities, dict)
+            else None
+        )
         required_rankings = (
             "weeklyGainers",
             "turnoverLeaders",

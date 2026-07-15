@@ -23,7 +23,9 @@ class OrderCashReservation(Base):
     __tablename__ = "order_cash_reservations"
     __table_args__ = (
         UniqueConstraint("request_id", name="uq_order_cash_reservations_request_id"),
-        CheckConstraint("reserved_qty >= 0", name="ck_cash_reservation_qty_nonnegative"),
+        CheckConstraint(
+            "reserved_qty >= 0", name="ck_cash_reservation_qty_nonnegative"
+        ),
         CheckConstraint(
             "remaining_qty >= 0 AND remaining_qty <= reserved_qty",
             name="ck_cash_reservation_remaining_qty",
@@ -41,9 +43,7 @@ class OrderCashReservation(Base):
     reserved_qty: Mapped[int] = mapped_column(Integer, nullable=False)
     remaining_qty: Mapped[int] = mapped_column(Integer, nullable=False)
     limit_price: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
-    reserved_amount_tl: Mapped[Decimal] = mapped_column(
-        Numeric(28, 10), nullable=False
-    )
+    reserved_amount_tl: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

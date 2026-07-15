@@ -140,7 +140,9 @@ def runtime_stubs(monkeypatch):
     )
     monkeypatch.setattr(scanner_module, "get_active_profile", fake_profile)
     monkeypatch.setattr(scanner_module, "list_pending_override_symbols", fake_overrides)
-    monkeypatch.setattr(scanner_module, "list_trade_eligible_symbols", fake_trade_symbols)
+    monkeypatch.setattr(
+        scanner_module, "list_trade_eligible_symbols", fake_trade_symbols
+    )
     monkeypatch.setattr(SymbolScanner, "_run_discovery", no_discovery)
     monkeypatch.setattr(SymbolScanner, "_run_research", no_research)
     monkeypatch.setattr(SymbolScanner, "_refresh_pipeline_status", no_refresh)
@@ -257,12 +259,16 @@ class TestScannerLifecycleLogs:
             return ["AKBNK"]
 
         monkeypatch.setattr(scanner_module, "run_research_cycle", fake_research)
-        monkeypatch.setattr(scanner_module, "maintain_trade_watchlist", fake_maintenance)
+        monkeypatch.setattr(
+            scanner_module, "maintain_trade_watchlist", fake_maintenance
+        )
         caplog.set_level("INFO", logger=scanner_module.__name__)
 
         await scanner._run_research(set())
 
-        assert "RESEARCH_COMPLETED evaluatedCount=1 watchlistRemovedCount=1" in caplog.text
+        assert (
+            "RESEARCH_COMPLETED evaluatedCount=1 watchlistRemovedCount=1" in caplog.text
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -388,7 +394,9 @@ class TestScannerGates:
         monkeypatch.setattr(SymbolScanner, "_run_research", fake_research)
         monkeypatch.setattr(SymbolScanner, "_refresh_pipeline_status", fake_refresh)
         monkeypatch.setattr(SymbolScanner, "_run_order_timeout_check", fake_timeout)
-        monkeypatch.setattr(scanner_module, "notify_gateway_event", fake_gateway_notification)
+        monkeypatch.setattr(
+            scanner_module, "notify_gateway_event", fake_gateway_notification
+        )
         fake = FakeGateway()
         fake.positions_loaded = False
         scanner = SymbolScanner(gateway=make_gateway_client(fake))

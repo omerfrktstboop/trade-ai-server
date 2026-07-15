@@ -126,9 +126,7 @@ def test_reservation_policy_config_rejects_unknown_values():
         == "BROKER_ALREADY_DEDUCTED"
     )
     with pytest.raises(ValueError):
-        _serialize_value(
-            "accountReservationHandling", "guess", "reservation_handling"
-        )
+        _serialize_value("accountReservationHandling", "guess", "reservation_handling")
 
 
 def test_risk_increasing_trade_profile_changes_require_confirmation():

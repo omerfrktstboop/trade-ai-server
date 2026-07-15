@@ -36,3 +36,6 @@ htmlcov/
 logs/
 *.log
 *.db
+
+# AI planning artefacts (not production code)
+.hermes/

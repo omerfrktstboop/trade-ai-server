@@ -182,14 +182,10 @@ class SymbolScanner:
                 else None
             ),
             "lastResearchRunAt": (
-                self._last_research_run.isoformat()
-                if self._last_research_run
-                else None
+                self._last_research_run.isoformat() if self._last_research_run else None
             ),
             "lastPromotionAt": (
-                self._last_promotion_at.isoformat()
-                if self._last_promotion_at
-                else None
+                self._last_promotion_at.isoformat() if self._last_promotion_at else None
             ),
             **self._pipeline_counts,
             **self._ranking_status,
@@ -482,9 +478,7 @@ class SymbolScanner:
                 latest_promotion = (
                     await session.execute(
                         select(TradeWatchlistSymbol.eligible_at)
-                        .where(
-                            TradeWatchlistSymbol.source == "RESEARCH_PROMOTION"
-                        )
+                        .where(TradeWatchlistSymbol.source == "RESEARCH_PROMOTION")
                         .order_by(TradeWatchlistSymbol.eligible_at.desc())
                         .limit(1)
                     )

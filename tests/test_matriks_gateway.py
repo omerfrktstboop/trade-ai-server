@@ -103,6 +103,8 @@ class TestMarketRankingCapabilities:
         assert capabilities["turnoverLeaders"]["available"] is False
         assert capabilities["relativeVolumeLeaders"]["available"] is False
         await client.close()
+
+
 # Auth
 # ═══════════════════════════════════════════════════════════════════════════════
 

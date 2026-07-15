@@ -277,7 +277,9 @@ class TestDeepSeekDecide:
 
         with patch("aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value = _mock_session(resp)
-            result = await provider.decide(COMPACT_CONTEXT | {"technical": {"rsi": 22.0}})
+            result = await provider.decide(
+                COMPACT_CONTEXT | {"technical": {"rsi": 22.0}}
+            )
 
         assert result["action"] == "BUY"
         assert result["confidence"] == 85.5
@@ -302,7 +304,9 @@ class TestDeepSeekDecide:
 
         with patch("aiohttp.ClientSession") as mock_cls:
             mock_cls.return_value = _mock_session(resp)
-            result = await provider.decide(COMPACT_CONTEXT | {"symbol": "AKBNK", "technical": {"rsi": 78.0}})
+            result = await provider.decide(
+                COMPACT_CONTEXT | {"symbol": "AKBNK", "technical": {"rsi": 78.0}}
+            )
 
         assert result["action"] == "SELL"
         assert result["confidence"] == 90.0
@@ -447,7 +451,11 @@ class TestDeepSeekDecide:
                 {
                     "schemaVersion": "ai-decision-context-v1",
                     "symbol": "TUPRS",
-                    "period": {"requested": "MIN5", "actual": "MIN5", "mismatch": False},
+                    "period": {
+                        "requested": "MIN5",
+                        "actual": "MIN5",
+                        "mismatch": False,
+                    },
                     "evaluationPurpose": "TRADE_EVALUATION",
                     "dataQuality": {"quoteReliable": True},
                     "price": {"last": 205.0},

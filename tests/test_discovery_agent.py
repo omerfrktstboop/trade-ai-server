@@ -165,9 +165,7 @@ class TestScreening:
         async with async_session_factory() as session:
             candidate = (
                 await session.execute(
-                    select(ResearchCandidate).where(
-                        ResearchCandidate.symbol == "GARAN"
-                    )
+                    select(ResearchCandidate).where(ResearchCandidate.symbol == "GARAN")
                 )
             ).scalar_one()
         assert candidate.status == "RESEARCH_PENDING"
@@ -285,9 +283,7 @@ class TestHistoricalBarsFallback:
         assert gw.bar_calls == ["GARAN"]
 
     async def test_daily_bars_supply_weekly_and_relative_volume_rankings(self):
-        movers = _movers(
-            [_item("GARAN", 3.0, 500_000_000)], gainers=["GARAN"]
-        )
+        movers = _movers([_item("GARAN", 3.0, 500_000_000)], gainers=["GARAN"])
         movers["rankingCapabilities"] = {
             "nativeMarketWide": False,
             "weeklyGainers": {"available": False},
@@ -306,9 +302,7 @@ class TestHistoricalBarsFallback:
         assert result.unavailable_signals == {}
 
     async def test_insufficient_volume_baseline_never_invents_relative_volume(self):
-        weekly, relative_volume, reasons = _historical_bar_metrics(
-            _daily_bars(count=6)
-        )
+        weekly, relative_volume, reasons = _historical_bar_metrics(_daily_bars(count=6))
 
         assert weekly is not None
         assert relative_volume is None
@@ -317,9 +311,7 @@ class TestHistoricalBarsFallback:
         )
 
     async def test_historical_bars_are_reused_within_ttl(self):
-        movers = _movers(
-            [_item("GARAN", 3.0, 500_000_000)], gainers=["GARAN"]
-        )
+        movers = _movers([_item("GARAN", 3.0, 500_000_000)], gainers=["GARAN"])
         gw = FakeGateway(movers, bars_by_symbol={"GARAN": _daily_bars()})
 
         await run_discovery_scan(gw)

@@ -159,18 +159,12 @@ async def gateway_runtime_config() -> dict:
     if market_index_symbol:
         symbols.add(market_index_symbol)
     symbols.update(
-        s.strip().upper()
-        for s in values["scanUniverseSymbols"].split(",")
-        if s.strip()
+        s.strip().upper() for s in values["scanUniverseSymbols"].split(",") if s.strip()
     )
     symbols.update(str(s).strip().upper() for s in research_candidates)
     symbols.update(eligible_symbols)
     instrument_types = {
-        symbol: (
-            "INDEX"
-            if _is_index_symbol(symbol, market_index_symbol)
-            else "EQUITY"
-        )
+        symbol: ("INDEX" if _is_index_symbol(symbol, market_index_symbol) else "EQUITY")
         for symbol in symbols
     }
     locked_qty: dict[str, float] = {}

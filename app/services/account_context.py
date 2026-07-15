@@ -23,9 +23,7 @@ from app.services.effective_risk_config import decimal_from_external
 from app.services.position_sizing import AccountSizingContext
 
 
-ReservationHandling = Literal[
-    "BROKER_ALREADY_DEDUCTED", "BACKEND_DEDUCTED", "UNKNOWN"
-]
+ReservationHandling = Literal["BROKER_ALREADY_DEDUCTED", "BACKEND_DEDUCTED", "UNKNOWN"]
 
 
 async def get_account_reservation_handling(
@@ -33,9 +31,7 @@ async def get_account_reservation_handling(
 ) -> ReservationHandling:
     row = (
         await session.execute(
-            select(SystemConfig).where(
-                SystemConfig.key == "accountReservationHandling"
-            )
+            select(SystemConfig).where(SystemConfig.key == "accountReservationHandling")
         )
     ).scalar_one_or_none()
     value = "UNKNOWN" if row is None else str(row.value).strip().upper()
@@ -206,7 +202,9 @@ _NORMALIZER_REGISTRY: dict[str, type[BaseAccountNormalizer]] = {
 }
 
 
-def register_broker_normalizer(normalizer: type[BrokerSpecificAccountNormalizer]) -> None:
+def register_broker_normalizer(
+    normalizer: type[BrokerSpecificAccountNormalizer],
+) -> None:
     """Register a target-verified broker strategy without changing adapter flow."""
     for provider in normalizer.provider_names:
         _NORMALIZER_REGISTRY[provider.upper()] = normalizer
@@ -289,13 +287,17 @@ class MatriksAccountContextAdapter:
         account_payload = raw_account.get("account")
         if not isinstance(account_payload, dict):
             account_payload = raw_account
-        provider = str(
-            raw_account.get("sourceProvider")
-            or raw_account.get("provider")
-            or account_payload.get("sourceProvider")
-            or account_payload.get("provider")
-            or "UNKNOWN"
-        ).strip().upper()
+        provider = (
+            str(
+                raw_account.get("sourceProvider")
+                or raw_account.get("provider")
+                or account_payload.get("sourceProvider")
+                or account_payload.get("provider")
+                or "UNKNOWN"
+            )
+            .strip()
+            .upper()
+        )
         normalizer_type = _NORMALIZER_REGISTRY.get(
             provider, UnknownBrokerAccountNormalizer
         )
@@ -460,9 +462,7 @@ async def fetch_fresh_account_inputs(
     )
     if not isinstance(raw_account, dict) or not raw_account.get("ok", True):
         raise ValueError("gateway account payload is unavailable")
-    if not isinstance(positions_wrapper, dict) or not positions_wrapper.get(
-        "ok", True
-    ):
+    if not isinstance(positions_wrapper, dict) or not positions_wrapper.get("ok", True):
         raise ValueError("gateway positions payload is unavailable")
     if not isinstance(orders_wrapper, dict) or not orders_wrapper.get("ok", True):
         raise ValueError("gateway active-orders payload is unavailable")

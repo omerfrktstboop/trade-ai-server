@@ -75,7 +75,8 @@ def normalize_snapshot_payload(payload: dict[str, Any]) -> dict[str, Any]:
     volume_semantic = str(normalized.get("volumeSemantic") or "").upper()
     explicit_turnover = (
         normalized.get("sessionTurnoverTl") is not None
-        or total_vol_semantic in {"SESSION_TURNOVER_TL", "CUMULATIVE_SESSION_TURNOVER_TL"}
+        or total_vol_semantic
+        in {"SESSION_TURNOVER_TL", "CUMULATIVE_SESSION_TURNOVER_TL"}
         or volume_semantic in {"SESSION_TURNOVER_TL", "CUMULATIVE_SESSION_TURNOVER_TL"}
     )
 
@@ -92,7 +93,10 @@ def normalize_snapshot_payload(payload: dict[str, Any]) -> dict[str, Any]:
     # no longer receive a value known to be cumulative TL turnover.
     normalized["volume"] = bar_volume if bar_volume is not None else 0
 
-    if normalized.get("sessionTurnoverTl") is None and normalized.get("totalVol") is not None:
+    if (
+        normalized.get("sessionTurnoverTl") is None
+        and normalized.get("totalVol") is not None
+    ):
         normalized["sessionTurnoverTl"] = normalized.get("totalVol")
     if normalized.get("symbolTrendRegime") is None and normalized.get("marketRegime"):
         normalized["symbolTrendRegime"] = normalized.get("marketRegime")

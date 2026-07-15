@@ -58,12 +58,8 @@ def test_backend_reservation_is_deducted_exactly_once_by_policy():
     context, _ = normalize(policy="BACKEND_DEDUCTED", reserved="1000.25")
     assert context.effective_available_cash_tl == Decimal("49000.7376543210")
 
-    broker_context, _ = normalize(
-        policy="BROKER_ALREADY_DEDUCTED", reserved="1000.25"
-    )
-    assert broker_context.effective_available_cash_tl == Decimal(
-        "50000.9876543210"
-    )
+    broker_context, _ = normalize(policy="BROKER_ALREADY_DEDUCTED", reserved="1000.25")
+    assert broker_context.effective_available_cash_tl == Decimal("50000.9876543210")
 
 
 def test_t1_t2_and_credit_are_never_promoted_to_cash():
@@ -112,9 +108,7 @@ def test_unknown_broker_and_unknown_reservation_policy_fail_closed():
     assert context.account_data_reliable is False
     assert "unknown broker/provider mapping" in audit.unreliable_reasons
 
-    unknown_context, unknown_audit = normalize(
-        account_payload(), policy="UNKNOWN"
-    )
+    unknown_context, unknown_audit = normalize(account_payload(), policy="UNKNOWN")
     assert unknown_context.effective_available_cash_tl is None
     assert unknown_audit.account_data_reliable is False
 
@@ -148,9 +142,7 @@ def test_stale_and_negative_account_data_fail_closed():
 
 
 def test_position_exposure_uses_fresh_prices_and_missing_price_blocks_buy():
-    adapter = MatriksAccountContextAdapter(
-        reservation_handling="BACKEND_DEDUCTED"
-    )
+    adapter = MatriksAccountContextAdapter(reservation_handling="BACKEND_DEDUCTED")
     positions = [
         {"symbol": "THYAO", "accountNetQty": 10},
         {"symbol": "AKBNK", "accountNetQty": 5},

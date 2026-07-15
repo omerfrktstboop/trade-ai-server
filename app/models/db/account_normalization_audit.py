@@ -31,9 +31,7 @@ class AccountNormalizationAudit(Base):
     backend_reserved_cash_tl: Mapped[Decimal] = mapped_column(
         Numeric(28, 10), nullable=False
     )
-    effective_available_cash_tl: Mapped[Decimal | None] = mapped_column(
-        Numeric(28, 10)
-    )
+    effective_available_cash_tl: Mapped[Decimal | None] = mapped_column(Numeric(28, 10))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

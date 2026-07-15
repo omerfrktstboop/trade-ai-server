@@ -183,9 +183,7 @@ async def _transient_reserved_cash(
 ) -> Decimal:
     if account_age_seconds is None:
         return Decimal("0")
-    cutoff = datetime.now(timezone.utc) - timedelta(
-        seconds=float(account_age_seconds)
-    )
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=float(account_age_seconds))
     total = (
         await session.execute(
             select(func.sum(OrderCashReservation.reserved_amount_tl)).where(

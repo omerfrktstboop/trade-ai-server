@@ -61,15 +61,17 @@ def test_ai_decision_context_rejects_forbidden_full_snapshot_and_nonfinite_value
 def test_ai_decision_context_rejects_raw_urls_and_retains_compact_news_only():
     context = AiDecisionContext.model_validate(
         _context(
-            events={"news": {
-                "items": [
-                    {
-                        "headline": "Earnings improve",
-                        "summary": "Quarterly margin expanded.",
-                        "sentiment": "POSITIVE",
-                    }
-                ]
-            }}
+            events={
+                "news": {
+                    "items": [
+                        {
+                            "headline": "Earnings improve",
+                            "summary": "Quarterly margin expanded.",
+                            "sentiment": "POSITIVE",
+                        }
+                    ]
+                }
+            }
         )
     )
     assert context.events is not None
@@ -78,5 +80,11 @@ def test_ai_decision_context_rejects_raw_urls_and_retains_compact_news_only():
 
     with pytest.raises(ValidationError, match="url"):
         AiDecisionContext.model_validate(
-            _context(events={"news": {"items": [{"headline": "Earnings improve", "url": "https://x"}]}})
+            _context(
+                events={
+                    "news": {
+                        "items": [{"headline": "Earnings improve", "url": "https://x"}]
+                    }
+                }
+            )
         )

@@ -669,9 +669,7 @@ async def admin_config_update(request: Request) -> Any:
 
     try:
         async with async_session_factory() as session:
-            values = {
-                key: form[key] for key in public_config_keys() if key in form
-            }
+            values = {key: form[key] for key in public_config_keys() if key in form}
             await set_admin_config_values(
                 session,
                 values,

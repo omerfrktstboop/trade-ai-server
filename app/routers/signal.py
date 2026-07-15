@@ -119,4 +119,3 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
     await persist_evaluation(body, payload, raw, response)
 
     return response
-

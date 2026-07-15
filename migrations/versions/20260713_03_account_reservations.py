@@ -112,9 +112,7 @@ def upgrade() -> None:
             sa.Column("account_data_age_seconds", sa.Numeric(20, 8)),
             sa.Column("margin_buying_enabled", sa.Boolean(), nullable=False),
             sa.Column("broker_reported_buying_power_tl", sa.Numeric(28, 10)),
-            sa.Column(
-                "backend_reserved_cash_tl", sa.Numeric(28, 10), nullable=False
-            ),
+            sa.Column("backend_reserved_cash_tl", sa.Numeric(28, 10), nullable=False),
             sa.Column("effective_available_cash_tl", sa.Numeric(28, 10)),
             sa.Column(
                 "created_at",
@@ -166,9 +164,7 @@ def downgrade() -> None:
     if "account_reservation_scopes" in tables:
         op.drop_table("account_reservation_scopes")
     if "trade_profiles" in tables:
-        columns = {
-            column["name"] for column in inspector.get_columns("trade_profiles")
-        }
+        columns = {column["name"] for column in inspector.get_columns("trade_profiles")}
         if "allow_margin_buying" in columns:
             with op.batch_alter_table("trade_profiles") as batch:
                 batch.drop_column("allow_margin_buying")

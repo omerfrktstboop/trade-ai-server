@@ -217,8 +217,7 @@ async def _verify_upgrade_and_concurrent_upsert() -> None:
         leaked = (
             await session.execute(
                 select(OrderCashReservation).where(
-                    OrderCashReservation.request_id
-                    == "postgres-rollback-reservation"
+                    OrderCashReservation.request_id == "postgres-rollback-reservation"
                 )
             )
         ).scalar_one_or_none()

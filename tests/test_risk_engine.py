@@ -134,9 +134,7 @@ class TestEmptyAllowListAllowsAll:
 
     def test_empty_allowed_symbols_does_not_promote_research_candidate(self):
         engine = RiskEngine(_cfg(allowed_symbols=""))
-        req = _make_request(
-            symbol="GARAN", mode=SignalMode.LIVE, tradeEligible=False
-        )
+        req = _make_request(symbol="GARAN", mode=SignalMode.LIVE, tradeEligible=False)
         resp = engine.evaluate(req, _make_buy_decision())
         assert resp.allow_order is False
         assert resp.qty == 0
@@ -685,7 +683,7 @@ class TestBuyPreflight:
         req = _make_request(mode=SignalMode.LIVE)
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=102.0),
-            stop_loss=93.0,   # risk = 9
+            stop_loss=93.0,  # risk = 9
             target_price=110.0,  # reward = 8 → R/G ≈ 0.89
         )
         resp = engine.evaluate(req, dec)
@@ -699,7 +697,7 @@ class TestBuyPreflight:
         req = _make_request(mode=SignalMode.LIVE)
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=102.0),
-            stop_loss=94.0,   # risk = 8
+            stop_loss=94.0,  # risk = 8
             target_price=114.0,  # reward = 12 → R/G = 1.5
         )
         resp = engine.evaluate(req, dec)

@@ -154,9 +154,7 @@ class RiskEngine:
         )
         if not self.config.is_symbol_allowed(request.symbol) and not liquidation_sell:
             if self.config.is_symbol_declined(request.symbol):
-                gate_reason = (
-                    f"symbol {request.symbol} is on the decline blacklist"
-                )
+                gate_reason = f"symbol {request.symbol} is on the decline blacklist"
             else:
                 gate_reason = (
                     f"symbol {request.symbol} is not in the allowed order list"
@@ -164,8 +162,7 @@ class RiskEngine:
             return self._research_only(
                 request,
                 decision,
-                f"Research-only: {gate_reason} — analysis kept, order "
-                f"dispatch blocked",
+                f"Research-only: {gate_reason} — analysis kept, order dispatch blocked",
             )
 
         # A manual allow-list controls the outer trade universe, but it never

@@ -104,11 +104,8 @@ def validate_order_preflight(
     if abs(parsed_limit - reference) / reference * Decimal("100") > MAX_PRICE_DRIFT_PCT:
         return "limit price drift exceeds order-time threshold"
 
-    if (
-        positions.get("confidence") not in {"HIGH", "MEDIUM"}
-        or not _valid_age(
-            positions.get("snapshotAgeSeconds"), MAX_POSITION_AGE_SECONDS
-        )
+    if positions.get("confidence") not in {"HIGH", "MEDIUM"} or not _valid_age(
+        positions.get("snapshotAgeSeconds"), MAX_POSITION_AGE_SECONDS
     ):
         return "position snapshot is stale or unreliable"
     if health.get("configStale") is not False:

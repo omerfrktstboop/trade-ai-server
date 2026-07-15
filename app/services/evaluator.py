@@ -84,6 +84,7 @@ def _json_safe(value: Any) -> Any:
     """Return a JSON-compatible copy for DB JSON columns."""
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
+
 # Static fallback engine used when runtime configuration cannot be loaded.
 _static_effective_config = EffectiveRiskConfigResolver().resolve(
     environment_limits=EnvironmentRiskLimits.from_environment(),
@@ -245,8 +246,6 @@ def build_payload(
     return payload
 
 
-
-
 def build_ai_decision_context(
     req: SignalRequest,
     *,
@@ -293,14 +292,24 @@ def build_ai_decision_context(
         events["brokerFlow"] = {
             "smartMoneyFlow": broker_entry.get("smartMoneyFlow"),
             "netSmartLot": broker_entry.get("netSmartLot"),
-            "topBuyer": (top_buyers[0].get("name") if top_buyers and isinstance(top_buyers[0], dict) else None),
-            "topSeller": (top_sellers[0].get("name") if top_sellers and isinstance(top_sellers[0], dict) else None),
+            "topBuyer": (
+                top_buyers[0].get("name")
+                if top_buyers and isinstance(top_buyers[0], dict)
+                else None
+            ),
+            "topSeller": (
+                top_sellers[0].get("name")
+                if top_sellers and isinstance(top_sellers[0], dict)
+                else None
+            ),
         }
     if isinstance(kap_entry, dict) and kap_entry:
         risk_events = kap_entry.get("riskEvents24h") or []
         events["kap"] = {
             "blockingRisk": kap_entry.get("hasBlockingRisk"),
-            "activeRiskCount": len(risk_events) if isinstance(risk_events, list) else None,
+            "activeRiskCount": len(risk_events)
+            if isinstance(risk_events, list)
+            else None,
             "unknownDateRisk": kap_entry.get("hasUnknownDateRisk"),
         }
 
@@ -310,17 +319,19 @@ def build_ai_decision_context(
         if req.depth_reliable is False:
             depth["signal"] = "UNAVAILABLE"
         else:
-            depth.update({
-                "spreadPct": req.spread_pct,
-                "buyPressure": min(
-                    1.0, max(0.0, (req.depth_buy_pressure_score or 0.0) / 100.0)
-                ),
-                "signal": req.depth_order_book_signal,
-                "bidAskRatio": req.depth_bid_ask_ratio_top5,
-                "nearestBidWallDistancePct": req.depth_nearest_bid_wall_distance_pct,
-                "nearestAskWallDistancePct": req.depth_nearest_ask_wall_distance_pct,
-                "wallConcentrationRisk": req.depth_wall_concentration_risk,
-            })
+            depth.update(
+                {
+                    "spreadPct": req.spread_pct,
+                    "buyPressure": min(
+                        1.0, max(0.0, (req.depth_buy_pressure_score or 0.0) / 100.0)
+                    ),
+                    "signal": req.depth_order_book_signal,
+                    "bidAskRatio": req.depth_bid_ask_ratio_top5,
+                    "nearestBidWallDistancePct": req.depth_nearest_bid_wall_distance_pct,
+                    "nearestAskWallDistancePct": req.depth_nearest_ask_wall_distance_pct,
+                    "wallConcentrationRisk": req.depth_wall_concentration_risk,
+                }
+            )
 
     position: dict[str, Any] | None = None
     if req.bot_position_qty > 0:
@@ -331,28 +342,60 @@ def build_ai_decision_context(
             "lockedLongTerm": req.locked_long_term_qty > 0,
         }
 
-    context = AiDecisionContext.model_validate({
-        "symbol": symbol,
-        "period": {"requested": req.requested_timeframe or req.timeframe, "actual": req.actual_bar_period, "mismatch": req.timeframe_mismatch},
-        "profile": profile,
-        "evaluationPurpose": req.evaluation_purpose,
-        "dataQuality": {"quoteAgeSec": req.quote_age_seconds, "ohlcvAgeSec": req.ohlcv_age_seconds, "depthAgeSec": req.depth_age_seconds, "quoteReliable": req.quote_reliable, "ohlcReliable": req.ohlc_reliable},
-        "price": {"last": req.last_price, "open": req.open, "high": req.high, "low": req.low},
-        "market": {"barVolume": req.bar_volume, "sessionTurnoverTl": req.session_turnover_tl, "macroMarketRegime": macro_market_regime, "symbolTrendRegime": req.symbol_trend_regime or req.market_regime},
-        "technical": {
-            "rsi": req.rsi, "ema20": req.ema20, "ema50": req.ema50,
-            "macd": req.macd, "macdSignal": req.macd_signal, "atr": req.atr,
-            "natr": req.natr, "adx": req.adx, "obvSlope": req.obv_slope,
-            "vwapDistancePct": req.vwap_distance_pct, "alphaTrendSignal": req.alpha_trend_signal,
-            "indicatorConsensus": req.indicator_consensus, "indicatorConsensusRatio": req.indicator_consensus_ratio,
-            "indicatorBuyCount": req.indicator_buy_count, "indicatorSellCount": req.indicator_sell_count,
-            "indicatorNeutralCount": req.indicator_neutral_count,
-        },
-        "depth": depth,
-        "position": position,
-        "events": events or None,
-    })
+    context = AiDecisionContext.model_validate(
+        {
+            "symbol": symbol,
+            "period": {
+                "requested": req.requested_timeframe or req.timeframe,
+                "actual": req.actual_bar_period,
+                "mismatch": req.timeframe_mismatch,
+            },
+            "profile": profile,
+            "evaluationPurpose": req.evaluation_purpose,
+            "dataQuality": {
+                "quoteAgeSec": req.quote_age_seconds,
+                "ohlcvAgeSec": req.ohlcv_age_seconds,
+                "depthAgeSec": req.depth_age_seconds,
+                "quoteReliable": req.quote_reliable,
+                "ohlcReliable": req.ohlc_reliable,
+            },
+            "price": {
+                "last": req.last_price,
+                "open": req.open,
+                "high": req.high,
+                "low": req.low,
+            },
+            "market": {
+                "barVolume": req.bar_volume,
+                "sessionTurnoverTl": req.session_turnover_tl,
+                "macroMarketRegime": macro_market_regime,
+                "symbolTrendRegime": req.symbol_trend_regime or req.market_regime,
+            },
+            "technical": {
+                "rsi": req.rsi,
+                "ema20": req.ema20,
+                "ema50": req.ema50,
+                "macd": req.macd,
+                "macdSignal": req.macd_signal,
+                "atr": req.atr,
+                "natr": req.natr,
+                "adx": req.adx,
+                "obvSlope": req.obv_slope,
+                "vwapDistancePct": req.vwap_distance_pct,
+                "alphaTrendSignal": req.alpha_trend_signal,
+                "indicatorConsensus": req.indicator_consensus,
+                "indicatorConsensusRatio": req.indicator_consensus_ratio,
+                "indicatorBuyCount": req.indicator_buy_count,
+                "indicatorSellCount": req.indicator_sell_count,
+                "indicatorNeutralCount": req.indicator_neutral_count,
+            },
+            "depth": depth,
+            "position": position,
+            "events": events or None,
+        }
+    )
     return context.model_dump(exclude_none=True)
+
 
 def _build_depth_context(req: SignalRequest) -> dict[str, Any]:
     if req.depth_reliable is False:
@@ -935,9 +978,7 @@ def snapshot_to_signal_request(
         atrPeriod=_payload_get(payload, "atrPeriod"),
         atrTimeframe=_payload_get(payload, "atrTimeframe"),
         volatilityMetricSource=_payload_get(payload, "volatilityMetricSource"),
-        closeChangeVolatilityProxy=_payload_get(
-            payload, "closeChangeVolatilityProxy"
-        ),
+        closeChangeVolatilityProxy=_payload_get(payload, "closeChangeVolatilityProxy"),
         adx=_payload_get(payload, "adx"),
         obvSlope=_payload_get(payload, "obvSlope"),
         vwapDistancePct=_payload_get(payload, "vwapDistancePct"),
@@ -1119,10 +1160,7 @@ async def evaluate_symbol(
         symbol, root_payload, request_id=request_id, mode=mode
     )
 
-
-    sig_req = sig_req.model_copy(
-        update={"evaluation_purpose": evaluation_purpose}
-    )
+    sig_req = sig_req.model_copy(update={"evaluation_purpose": evaluation_purpose})
 
     # == 4. Runtime kontroller ============================================
     sig_req, runtime_engine, kill_switch_enabled = await with_runtime_controls(sig_req)
@@ -1317,9 +1355,7 @@ async def evaluate_symbol(
         decision_created_utc=decision_created_utc,
         evaluation_purpose=evaluation_purpose,
         research_score=(
-            _safe_float(raw.get("research_score"))
-            if "research_score" in raw
-            else None
+            _safe_float(raw.get("research_score")) if "research_score" in raw else None
         ),
         raw_action=decision.action,
     )
@@ -1418,7 +1454,9 @@ async def _bot_average_cost_from_fill_ledger(symbol: str) -> Decimal | None:
         if filled <= 0:
             continue
         if str(order.action).upper() == "BUY":
-            price_raw = order.avg_price or order.rounded_limit_price or order.limit_price
+            price_raw = (
+                order.avg_price or order.rounded_limit_price or order.limit_price
+            )
             if not price_raw:
                 continue
             price = Decimal(str(price_raw))
@@ -1440,7 +1478,3 @@ def _log_evaluation(req: SignalRequest, response: SignalResponse) -> None:
         request=req.model_dump(by_alias=True, exclude={"mode"}, mode="json"),
         response=response.model_dump(by_alias=True, mode="json"),
     )
-
-
-
-

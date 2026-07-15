@@ -123,7 +123,11 @@ class TestPromotion:
         assert promoted is False
         assert await list_trade_eligible_symbols() == []
         async with async_session_factory() as session:
-            row = (await session.execute(select(ResearchCandidate).where(ResearchCandidate.symbol == "GARAN"))).scalar_one()
+            row = (
+                await session.execute(
+                    select(ResearchCandidate).where(ResearchCandidate.symbol == "GARAN")
+                )
+            ).scalar_one()
         assert row.status == "QUALIFIED"
         assert row.consecutive_pass_count == 1
 
@@ -137,7 +141,13 @@ class TestPromotion:
         assert promoted is True
         assert await list_trade_eligible_symbols() == ["GARAN"]
         async with async_session_factory() as session:
-            watchlist = (await session.execute(select(TradeWatchlistSymbol).where(TradeWatchlistSymbol.symbol == "GARAN"))).scalar_one()
+            watchlist = (
+                await session.execute(
+                    select(TradeWatchlistSymbol).where(
+                        TradeWatchlistSymbol.symbol == "GARAN"
+                    )
+                )
+            ).scalar_one()
         assert watchlist.is_active is True
 
     async def test_second_pass_before_minimum_interval_does_not_promote(self):
@@ -149,7 +159,11 @@ class TestPromotion:
         )
         assert await list_trade_eligible_symbols() == []
         async with async_session_factory() as session:
-            row = (await session.execute(select(ResearchCandidate).where(ResearchCandidate.symbol == "GARAN"))).scalar_one()
+            row = (
+                await session.execute(
+                    select(ResearchCandidate).where(ResearchCandidate.symbol == "GARAN")
+                )
+            ).scalar_one()
         assert row.consecutive_pass_count == 1
         assert row.rejection_reason == "PROMOTION_PASSES_NOT_TIME_SPACED"
 

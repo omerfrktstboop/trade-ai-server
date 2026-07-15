@@ -153,9 +153,14 @@ async def test_two_concurrent_buys_cannot_use_the_same_cash():
         rows = (await session.execute(select(OrderCashReservation))).scalars().all()
         assert len(rows) == 1
         assert rows[0].reserved_amount_tl == Decimal("100")
-        assert len(
-            (await session.execute(select(AccountNormalizationAudit))).scalars().all()
-        ) == 2
+        assert (
+            len(
+                (await session.execute(select(AccountNormalizationAudit)))
+                .scalars()
+                .all()
+            )
+            == 2
+        )
 
 
 async def test_same_request_id_cannot_create_two_cash_reservations():

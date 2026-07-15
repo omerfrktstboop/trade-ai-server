@@ -13,7 +13,6 @@ from app.models.db import (
     ResearchCandidate,
     SystemConfig,
     WatchlistQualityScore,
-    WatchlistSymbol,
 )
 from app.services.discovery_agent import (
     _HISTORICAL_BARS_CACHE,
@@ -243,7 +242,7 @@ class TestScreening:
 
         assert added == ["BIG"]
         async with async_session_factory() as session:
-            rows = (await session.execute(select(WatchlistSymbol))).scalars().all()
+            rows = (await session.execute(select(ResearchCandidate))).scalars().all()
         assert len(rows) == 1
 
 
@@ -280,9 +279,9 @@ class TestFailOpenAndUpsert:
         await run_discovery_scan(gw2)
 
         async with async_session_factory() as session:
-            rows = (await session.execute(select(WatchlistSymbol))).scalars().all()
+            rows = (await session.execute(select(ResearchCandidate))).scalars().all()
         assert len(rows) == 1
-        assert rows[0].change_pct == 5.1
+        assert rows[0].change_pct_daily == 5.1
 
 
 class TestHistoricalBarsFallback:

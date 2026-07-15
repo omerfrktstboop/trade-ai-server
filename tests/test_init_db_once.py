@@ -68,7 +68,6 @@ async def test_yes_creates_schema_seeds_profiles_and_is_idempotent(tmp_path):
             "watchlist_quality_scores",
             "ai_lessons_learned",
             "trade_profiles",
-            "watchlist_symbols",
             "research_candidates",
             "research_candidate_events",
             "trade_watchlist_symbols",

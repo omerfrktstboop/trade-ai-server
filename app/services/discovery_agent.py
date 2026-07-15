@@ -2,9 +2,7 @@
 
 Discovery never grants order permission.  It ranks the broad, data-only scan
 universe with Matriks movers/snapshot data and persists candidates for the
-separate AI research pipeline.  The legacy ``watchlist_symbols`` tables are
-still mirrored for backwards-compatible admin reports, but the order scanner
-does not consume them.
+separate AI research pipeline.
 """
 
 from __future__ import annotations
@@ -16,14 +14,13 @@ from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from app.db.session import async_session_factory
 from app.models.db import (
     ResearchCandidate,
     ResearchCandidateEvent,
     WatchlistQualityScore,
-    WatchlistSymbol,
 )
 from app.services.admin_config import list_admin_configs
 from app.services.matriks_gateway import (
@@ -758,30 +755,6 @@ async def _upsert_candidates(
                     )
                 )
 
-            # Legacy research report mirror. It is deliberately not an order list.
-            legacy = (
-                await session.execute(
-                    select(WatchlistSymbol).where(WatchlistSymbol.symbol == symbol)
-                )
-            ).scalar_one_or_none()
-            if legacy is None:
-                session.add(
-                    WatchlistSymbol(
-                        symbol=symbol,
-                        source=",".join(sources),
-                        reason=verdict.reason,
-                        change_pct=row.change_pct_daily,
-                        volume=row.volume_tl,
-                        is_active=True,
-                    )
-                )
-            else:
-                legacy.source = ",".join(sources)
-                legacy.reason = verdict.reason
-                legacy.change_pct = row.change_pct_daily
-                legacy.volume = row.volume_tl
-                legacy.is_active = True
-                legacy.last_seen_at = now
             score_row = (
                 await session.execute(
                     select(WatchlistQualityScore).where(
@@ -830,12 +803,6 @@ async def _expire_stale_candidates() -> None:
                     event_type="EXPIRED",
                     details={"reason": "candidate TTL elapsed"},
                 )
-            )
-        if rows:
-            await session.execute(
-                update(WatchlistSymbol)
-                .where(WatchlistSymbol.symbol.in_([row.symbol for row in rows]))
-                .values(is_active=False)
             )
         await session.commit()
 

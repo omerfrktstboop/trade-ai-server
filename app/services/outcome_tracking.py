@@ -21,7 +21,12 @@ from app.models.signal import SignalRequest, SignalResponse
 from app.services.block_reason_classifier import classify_block_reason
 from app.services.evaluation.parsing import _safe_action
 from app.services.fill_ledger import to_decimal
-from app.services.strategy_provenance import PROMPT_VERSION, STRATEGY_VERSION
+from app.services.strategy_provenance import (
+    DECISION_CONTEXT_SCHEMA_VERSION,
+    PROMPT_VERSION,
+    STRATEGY_VERSION,
+    resolve_ai_provider_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +71,7 @@ async def create_decision_outcome(
             classify_block_reason(response.reason) if not response.allow_order else None
         )
         decision_source = str(payload.get("decisionSource") or "system-gate")
+        ai_provider, ai_model = resolve_ai_provider_model()
 
         values = dict(
             request_id=req.request_id,
@@ -85,6 +91,9 @@ async def create_decision_outcome(
             decision_at=datetime.now(timezone.utc),
             strategy_version=STRATEGY_VERSION,
             prompt_version=PROMPT_VERSION,
+            decision_context_schema_version=DECISION_CONTEXT_SCHEMA_VERSION,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
             profile_code=payload.get("profileCode"),
             config_hash=payload.get("configHash"),
             discovery_sources=discovery_sources,

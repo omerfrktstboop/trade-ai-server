@@ -62,8 +62,13 @@ class DecisionOutcome(Base):
 
     strategy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    decision_context_schema_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     profile_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     config_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    ai_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    ai_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     discovery_sources: Mapped[list | None] = mapped_column(JSON, nullable=True)
     market_regime: Mapped[str | None] = mapped_column(String(32), nullable=True)

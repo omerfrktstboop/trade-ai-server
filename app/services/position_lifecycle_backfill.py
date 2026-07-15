@@ -24,7 +24,12 @@ from app.models.signal import SignalAction
 from app.services.fill_ledger import to_decimal
 from app.services.position_lifecycle_engine import get_open_lifecycle
 from app.models.db import PositionLifecycle
-from app.services.strategy_provenance import PROMPT_VERSION, STRATEGY_VERSION
+from app.services.strategy_provenance import (
+    DECISION_CONTEXT_SCHEMA_VERSION,
+    PROMPT_VERSION,
+    STRATEGY_VERSION,
+    resolve_ai_provider_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +92,7 @@ async def ensure_lifecycle_for_legacy_position(
     avg_price_d = to_decimal(avg_price)
 
     stop = await _legacy_stop_heuristic(session, symbol)
+    ai_provider, ai_model = resolve_ai_provider_model()
     lifecycle = PositionLifecycle(
         symbol=symbol,
         status="OPEN",
@@ -103,8 +109,12 @@ async def ensure_lifecycle_for_legacy_position(
         active_target_price=None,
         strategy_version=STRATEGY_VERSION,
         prompt_version=PROMPT_VERSION,
+        decision_context_schema_version=DECISION_CONTEXT_SCHEMA_VERSION,
         config_hash=BACKFILL_UNAVAILABLE,
         profile_code=BACKFILL_UNAVAILABLE,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        decision_source=None,
         data_quality=BACKFILL_UNAVAILABLE,
         is_backfilled=True,
         backfill_reason="pre_existing_position_without_recorded_fills",

@@ -16,9 +16,21 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.db import OrderFill, OrderLog, PositionLifecycle, PositionStopEvent, RiskDecision
+from app.models.db import (
+    DecisionOutcome,
+    OrderFill,
+    OrderLog,
+    PositionLifecycle,
+    PositionStopEvent,
+    RiskDecision,
+)
 from app.services.fill_ledger import to_decimal
-from app.services.strategy_provenance import PROMPT_VERSION, STRATEGY_VERSION
+from app.services.strategy_provenance import (
+    DECISION_CONTEXT_SCHEMA_VERSION,
+    PROMPT_VERSION,
+    STRATEGY_VERSION,
+    resolve_ai_provider_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +104,19 @@ async def _resolve_decision_stop_target(
     if target_price is not None and target_price <= 0:
         target_price = None
     return stop_loss, target_price
+
+
+async def _resolve_decision_source(session: AsyncSession, request_id: str) -> str | None:
+    """decision_source (llm/cache/preflight-gate/system-gate) recorded on
+    the DecisionOutcome created for this same request_id at evaluation-persist
+    time (Task 5) - not re-derived here, just cross-referenced (Task 9)."""
+    return (
+        await session.execute(
+            select(DecisionOutcome.decision_source).where(
+                DecisionOutcome.request_id == request_id
+            )
+        )
+    ).scalar_one_or_none()
 
 
 async def _record_stop_event(
@@ -183,6 +208,8 @@ async def _apply_buy_fill(
     decision_stop, decision_target = await _resolve_decision_stop_target(
         session, fill.request_id
     )
+    decision_source = await _resolve_decision_source(session, fill.request_id)
+    ai_provider, ai_model = resolve_ai_provider_model()
     for attempt in range(1, _MAX_OPEN_INSERT_ATTEMPTS + 1):
         lifecycle = await get_open_lifecycle(session, symbol, for_update=True)
 
@@ -203,8 +230,12 @@ async def _apply_buy_fill(
                 active_target_price=decision_target,
                 strategy_version=STRATEGY_VERSION,
                 prompt_version=PROMPT_VERSION,
+                decision_context_schema_version=DECISION_CONTEXT_SCHEMA_VERSION,
                 config_hash=row.config_version,
                 profile_code=row.profile_code,
+                ai_provider=ai_provider,
+                ai_model=ai_model,
+                decision_source=decision_source,
                 data_quality=(
                     "RECONCILED" if fill.fill_source == "RECONCILIATION" else "VERIFIED"
                 ),

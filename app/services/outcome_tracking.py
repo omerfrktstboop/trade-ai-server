@@ -65,7 +65,17 @@ async def create_decision_outcome(
         # input used (_safe_action), so it reflects what the AI/system-gate/
         # cache actually produced before RiskEngine gating - never guessed,
         # never re-derived from the (possibly gated) final response (Task 5).
-        raw_ai_action = _safe_action(raw_ai.get("action")).value
+        # When the raw payload carries no action at all (a system/preflight
+        # gate that never called the LLM), raw_ai_action stays None rather
+        # than being fabricated as WAIT (Fix 8) - a genuine AI WAIT then
+        # remains distinguishable via (raw_ai_action="WAIT", decision_source
+        # in {llm, cache}) vs a gate WAIT (raw_ai_action=None,
+        # decision_source in {system-gate, preflight-gate}).
+        raw_ai_action = (
+            _safe_action(raw_ai.get("action")).value
+            if raw_ai.get("action") is not None
+            else None
+        )
         final_action = response.action.value
         block_reason = (
             classify_block_reason(response.reason) if not response.allow_order else None

@@ -44,13 +44,30 @@ class MarketObservation(Base):
     low: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
     close: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
 
-    bar_period: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # NOT NULL with explicit sentinels (UNKNOWN_PERIOD / UNKNOWN_SOURCE) so
+    # the dedup unique key below actually works - a NULL never equals another
+    # NULL in SQL, which would silently defeat the constraint (Fix 7).
+    bar_period: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="UNKNOWN_PERIOD"
+    )
     bar_closed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Real gateway bar boundaries when derivable (barEventUtc +
+    # actualBarPeriodSeconds); None when the gateway did not report them. Used
+    # by the outcome labeler to tell a bar that started *after* the decision
+    # (usable as full OHLC) from the decision-crossing bar (Fix 4).
+    bar_start_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    bar_end_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     quote_reliable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     ohlc_reliable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     quote_age_seconds: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     ohlcv_age_seconds: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
-    price_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    price_source: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="UNKNOWN_SOURCE"
+    )
 
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(

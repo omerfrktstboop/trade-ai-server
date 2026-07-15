@@ -275,6 +275,12 @@ async def get_stop_guard_maximum_quote_age_seconds(session: AsyncSession) -> int
     return int(await get_admin_config_value(session, "stopGuardMaximumQuoteAgeSeconds"))
 
 
+async def get_market_session_close_time(session: AsyncSession) -> str:
+    """HH:MM session close used for EOD outcome measurement (Fix 6) -
+    deliberately separate from disableTradingAfter (the order cutoff)."""
+    return await get_admin_config_value(session, "marketSessionCloseTime")
+
+
 async def build_runtime_risk_config(session: AsyncSession) -> RiskConfig:
     """Build RiskConfig from the active trade profile + DB-backed admin
     config, falling back to code defaults where neither applies.

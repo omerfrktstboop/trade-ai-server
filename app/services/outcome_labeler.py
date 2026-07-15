@@ -9,13 +9,13 @@ observation at/after target_time within outcomeMaximumObservationDelaySeconds
 (admin config, default 120s). A horizon whose window has no reliable
 observation stays exactly None - with a reason code - until either a later
 run finds one or the window is old enough to be treated as a permanent data
-gap. EOD reuses the same window-selection logic against the session's
-configured cutoff instant instead of a decision+N-minutes offset. MFE/MAE
-are recomputed from every reliable OHLC observation since decision_at (using
-high for the favorable extreme, low for the adverse one) - never from a
-single lastPrice tick. Target/stop-first is determined by scanning every
-reliable observation in chronological order for the first time each
-condition (high>=target, low<=stop) becomes true.
+gap. EOD reuses the same window-selection logic against the marketSessionCloseTime
+instant (Fix 6), which is separate from the order cutoff (disableTradingAfter).
+MFE/MAE and target/stop-first are computed from trustworthy post-decision
+price points within a bounded window (Fix 4/5): a bar that verifiably started
+at/after the decision contributes full OHLC, the decision-crossing/unknown
+bar contributes only its reliable tick, and nothing past EOD is counted, so
+the next session's prices can never bleed into a prior decision's excursions.
 
 Callable as:
     python -m app.services.outcome_labeler
@@ -38,6 +38,7 @@ from app.db.session import async_session_factory
 from app.models.db import DecisionOutcome, MarketObservation
 from app.services.admin_config import (
     build_runtime_risk_config,
+    get_market_session_close_time,
     get_outcome_maximum_observation_delay_seconds,
 )
 
@@ -50,6 +51,7 @@ HORIZONS_MINUTES: tuple[tuple[str, int], ...] = (
     ("future_return_60m", 60),
 )
 ALL_RETURN_FIELDS = tuple(name for name, _ in HORIZONS_MINUTES) + ("future_return_eod",)
+_MAX_HORIZON_MINUTES = max(minutes for _, minutes in HORIZONS_MINUTES)
 
 # Past this age, a horizon that never found a qualifying observation is
 # treated as a permanent gap (DATA_GAP) rather than retried forever.
@@ -125,17 +127,60 @@ async def _select_observation_in_window(
     return None, "NO_OBSERVATION_IN_WINDOW"
 
 
-def _eod_target_time(decision_at: datetime, timezone_name: str, cutoff: str) -> datetime | None:
+def _eod_target_time(
+    decision_at: datetime, timezone_name: str, session_close: str
+) -> datetime | None:
+    """The session-close instant on the decision's own calendar day (Fix 6),
+    derived from marketSessionCloseTime - deliberately NOT disableTradingAfter
+    (the order cutoff), which can be much earlier than the actual close."""
     try:
         tz = ZoneInfo(timezone_name)
-        hour, minute = map(int, cutoff.split(":"))
+        hour, minute = map(int, session_close.split(":"))
     except (ValueError, KeyError):
         return None
     local_decision = decision_at.astimezone(tz)
-    local_cutoff = local_decision.replace(
+    local_close = local_decision.replace(
         hour=hour, minute=minute, second=0, microsecond=0
     )
-    return local_cutoff.astimezone(timezone.utc)
+    return local_close.astimezone(timezone.utc)
+
+
+def _measurement_end(
+    decision_at: datetime, eod_target_time: datetime | None
+) -> datetime:
+    """Upper bound for MFE/MAE and target/stop scanning (Fix 5): never past
+    EOD, so the next session's prices can never bleed into a prior decision's
+    excursions. When EOD is unknown, the last numeric horizon is the cap."""
+    last_horizon_end = decision_at + timedelta(minutes=_MAX_HORIZON_MINUTES)
+    if eod_target_time is not None:
+        return max(last_horizon_end, eod_target_time)
+    return last_horizon_end
+
+
+def _extract_extremes(
+    row: MarketObservation, decision_at: datetime
+) -> tuple[Decimal, Decimal] | None:
+    """Return (high_candidate, low_candidate) for one observation, or None if
+    it cannot contribute a trustworthy post-decision price (Fix 4).
+
+    A bar that verifiably *started at/after* the decision is used as full
+    OHLC. The decision-crossing bar (started before decision) and any bar
+    with an unknown start are NOT used as OHLC - their high/low may reflect
+    pre-decision movement - so only their reliable last-price tick is used,
+    contributing a single point that is both the high and low candidate.
+    """
+    bar_start = _aware(row.bar_start_at) if row.bar_start_at is not None else None
+    if (
+        bar_start is not None
+        and bar_start >= decision_at
+        and row.ohlc_reliable
+        and row.high is not None
+        and row.low is not None
+    ):
+        return row.high, row.low
+    if row.quote_reliable and row.last_price is not None:
+        return row.last_price, row.last_price
+    return None
 
 
 async def _resolve_due_horizons(
@@ -185,59 +230,77 @@ async def _resolve_due_horizons(
     return updated, reasons
 
 
-async def _update_mfe_mae(session, outcome: DecisionOutcome) -> None:
-    """Recomputed from every reliable OHLC observation since decision_at
-    (Task 4.3) - never from a single labeler-run-time lastPrice tick."""
-    stmt = select(MarketObservation).where(
-        MarketObservation.symbol == outcome.symbol,
-        MarketObservation.observed_at >= outcome.decision_at,
-        MarketObservation.ohlc_reliable.is_(True),
+async def _observations_for_excursion(
+    session, outcome: DecisionOutcome, decision_at: datetime, measurement_end: datetime
+) -> list[MarketObservation]:
+    """Observations strictly inside (decision_at, measurement_end], ordered.
+    The upper bound is the Fix 5 measurement end; the per-row post-decision
+    check happens in _extract_extremes."""
+    stmt = (
+        select(MarketObservation)
+        .where(
+            MarketObservation.symbol == outcome.symbol,
+            MarketObservation.observed_at >= decision_at,
+            MarketObservation.observed_at <= measurement_end,
+        )
+        .order_by(MarketObservation.observed_at.asc())
     )
-    rows = (await session.execute(stmt)).scalars().all()
-    highs = [row.high for row in rows if row.high is not None]
-    lows = [row.low for row in rows if row.low is not None]
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def _update_mfe_mae(
+    session, outcome: DecisionOutcome, decision_at: datetime, measurement_end: datetime
+) -> None:
+    """Recomputed each pass from every trustworthy post-decision price point
+    within the bounded window (Fix 4/5) - full OHLC for bars that started
+    after the decision, reliable tick otherwise - never a single labeler-
+    run-time lastPrice, and never past EOD."""
+    rows = await _observations_for_excursion(
+        session, outcome, decision_at, measurement_end
+    )
+    highs: list[Decimal] = []
+    lows: list[Decimal] = []
+    for row in rows:
+        extremes = _extract_extremes(row, decision_at)
+        if extremes is None:
+            continue
+        highs.append(extremes[0])
+        lows.append(extremes[1])
     if highs:
         outcome.mfe_pct = _forward_return_pct(outcome.decision_price, max(highs))
     if lows:
         outcome.mae_pct = _forward_return_pct(outcome.decision_price, min(lows))
 
 
-async def _update_target_stop_order(session, outcome: DecisionOutcome) -> None:
-    """Scans every reliable OHLC observation since decision_at in
-    chronological order for the first time target/stop become true (Task
-    4.4) - a full deterministic re-scan each pass, so it is naturally
-    idempotent and never assumes "last price above target" means target was
-    *first* touched just now."""
+async def _update_target_stop_order(
+    session, outcome: DecisionOutcome, decision_at: datetime, measurement_end: datetime
+) -> None:
+    """Scans trustworthy post-decision price points in chronological order
+    for the first time target/stop become true (Task 4.4) within the bounded
+    window - full OHLC for post-decision bars, reliable tick for the
+    decision-crossing/unknown bar (Fix 4). Deterministic full re-scan each
+    pass, so it is naturally idempotent."""
     if outcome.decision_action != "BUY":
         return
     if outcome.target_price is None and outcome.stop_loss is None:
         return
 
-    stmt = (
-        select(MarketObservation)
-        .where(
-            MarketObservation.symbol == outcome.symbol,
-            MarketObservation.observed_at >= outcome.decision_at,
-            MarketObservation.ohlc_reliable.is_(True),
-        )
-        .order_by(MarketObservation.observed_at.asc())
+    rows = await _observations_for_excursion(
+        session, outcome, decision_at, measurement_end
     )
-    rows = (await session.execute(stmt)).scalars().all()
 
     target_hit_at: datetime | None = None
     stop_hit_at: datetime | None = None
     ambiguous = False
     for row in rows:
+        extremes = _extract_extremes(row, decision_at)
+        if extremes is None:
+            continue
+        high_candidate, low_candidate = extremes
         target_hit = (
-            outcome.target_price is not None
-            and row.high is not None
-            and row.high >= outcome.target_price
+            outcome.target_price is not None and high_candidate >= outcome.target_price
         )
-        stop_hit = (
-            outcome.stop_loss is not None
-            and row.low is not None
-            and row.low <= outcome.stop_loss
-        )
+        stop_hit = outcome.stop_loss is not None and low_candidate <= outcome.stop_loss
         if target_hit and stop_hit and target_hit_at is None and stop_hit_at is None:
             target_hit_at = row.observed_at
             stop_hit_at = row.observed_at
@@ -277,10 +340,12 @@ async def label_pending_outcomes() -> LabelerStats:
             max_delay_seconds = await get_outcome_maximum_observation_delay_seconds(
                 session
             )
+            session_close_time = await get_market_session_close_time(session)
         except Exception:
             logger.exception("OUTCOME_LABELER_RUNTIME_CONFIG_FAILED")
             runtime_config = None
             max_delay_seconds = 120
+            session_close_time = "18:00"
 
         rows = (
             (
@@ -307,8 +372,9 @@ async def label_pending_outcomes() -> LabelerStats:
             eod_target_time = None
             if runtime_config is not None:
                 eod_target_time = _eod_target_time(
-                    decision_at, runtime_config.timezone, runtime_config.disable_trading_after
+                    decision_at, runtime_config.timezone, session_close_time
                 )
+            measurement_end = _measurement_end(decision_at, eod_target_time)
 
             updated, reasons = await _resolve_due_horizons(
                 session,
@@ -320,9 +386,11 @@ async def label_pending_outcomes() -> LabelerStats:
             )
             stats.updated_fields += len(updated)
 
-            await _update_mfe_mae(session, outcome)
+            await _update_mfe_mae(session, outcome, decision_at, measurement_end)
             if outcome.outcome_status != "AMBIGUOUS":
-                await _update_target_stop_order(session, outcome)
+                await _update_target_stop_order(
+                    session, outcome, decision_at, measurement_end
+                )
                 if outcome.outcome_status == "AMBIGUOUS":
                     stats.ambiguous += 1
 

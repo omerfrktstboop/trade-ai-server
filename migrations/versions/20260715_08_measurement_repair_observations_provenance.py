@@ -252,42 +252,12 @@ def upgrade() -> None:
                 )
             )
 
-        # ── Task 2: partial unique index - one OPEN lifecycle per symbol ──
-        existing_indexes = {idx["name"] for idx in inspector.get_indexes("position_lifecycles")}
-        if "uq_position_lifecycle_open_symbol" not in existing_indexes:
-            duplicate_rows = bind.execute(
-                sa.text(
-                    "SELECT symbol FROM position_lifecycles WHERE status = 'OPEN' "
-                    "GROUP BY symbol HAVING COUNT(*) > 1"
-                )
-            ).fetchall()
-            if duplicate_rows:
-                duplicate_symbols = [row[0] for row in duplicate_rows]
-                logger.warning(
-                    "MIGRATION_PRECHECK_DUPLICATE_OPEN_LIFECYCLES: %d symbol(s) have "
-                    "more than one OPEN position_lifecycle row - marking them "
-                    "MANUAL_REVIEW and skipping the unique index this run "
-                    "(re-run this migration after resolving them): %s",
-                    len(duplicate_symbols),
-                    duplicate_symbols,
-                )
-                for symbol in duplicate_symbols:
-                    bind.execute(
-                        sa.text(
-                            "UPDATE position_lifecycles SET data_quality = "
-                            "'MANUAL_REVIEW' WHERE status = 'OPEN' AND symbol = :symbol"
-                        ),
-                        {"symbol": symbol},
-                    )
-            else:
-                op.create_index(
-                    "uq_position_lifecycle_open_symbol",
-                    "position_lifecycles",
-                    ["symbol"],
-                    unique=True,
-                    postgresql_where=sa.text("status = 'OPEN'"),
-                    sqlite_where=sa.text("status = 'OPEN'"),
-                )
+        # NOTE: the partial unique open-lifecycle index is NOT created here.
+        # An earlier version of this migration silently skipped the index (and
+        # marked rows MANUAL_REVIEW) when duplicates existed, which let the
+        # revision report success while leaving the constraint absent (Fix 1).
+        # Index creation now lives in 20260715_09, which hard-fails on
+        # duplicates instead of silently skipping.
 
 
 def downgrade() -> None:
@@ -296,9 +266,8 @@ def downgrade() -> None:
     tables = set(inspector.get_table_names())
 
     if "position_lifecycles" in tables:
-        existing_indexes = {idx["name"] for idx in inspector.get_indexes("position_lifecycles")}
-        if "uq_position_lifecycle_open_symbol" in existing_indexes:
-            op.drop_index("uq_position_lifecycle_open_symbol", table_name="position_lifecycles")
+        # The partial unique index is owned by 20260715_09 (created there,
+        # dropped in its downgrade) - this revision no longer manages it.
         columns = {c["name"] for c in inspector.get_columns("position_lifecycles")}
         drop_cols = [
             name

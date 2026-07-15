@@ -459,6 +459,14 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "30",
         "Stop-loss bekçisinin bir fiyatı tetikleyici kabul edebileceği en fazla yaş (sn).",
     ),
+    "marketSessionCloseTime": ConfigDefinition(
+        "marketSessionCloseTime",
+        "time",
+        "18:00",
+        "Seans kapanış saati (HH:MM). EOD getirisi bu saatteki doğrulanmış son "
+        "seans fiyatından hesaplanır; işlem kesim saatinden (disableTradingAfter) "
+        "bağımsızdır.",
+    ),
 }
 
 RISKY_CONFIG_KEYS = {
@@ -671,6 +679,7 @@ CONFIG_SECTION_DEFINITIONS = (
         keys=(
             "outcomeMaximumObservationDelaySeconds",
             "stopGuardMaximumQuoteAgeSeconds",
+            "marketSessionCloseTime",
         ),
     ),
 )
@@ -748,6 +757,7 @@ CONFIG_LABELS: dict[str, str] = {
     "minimumCommissionTl": "En Düşük Komisyon Tutarı (TL)",
     "outcomeMaximumObservationDelaySeconds": "Outcome Gözlem Azami Gecikmesi (sn)",
     "stopGuardMaximumQuoteAgeSeconds": "Stop Guard Azami Fiyat Yaşı (sn)",
+    "marketSessionCloseTime": "Seans Kapanış Saati (EOD)",
 }
 
 

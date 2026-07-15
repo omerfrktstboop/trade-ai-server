@@ -69,6 +69,7 @@ from app.services.order_ledger import mark_send_result, mark_send_started, reser
 from app.services.order_preflight import parse_finite_decimal, validate_order_preflight
 from app.services.position_sizing import TradeSizingContext
 from app.services.signal_override import list_pending_override_symbols
+from app.services.market_observation_collector import market_observation_collector
 from app.services.stop_loss_guard import check_stop_loss_positions, stop_loss_guard
 from app.services.trade_profile import get_active_profile
 from app.services.research_pipeline import (
@@ -301,6 +302,12 @@ class SymbolScanner:
         # Research discovery is forced PAPER market-data work, so it must run
         # before account/trading gates and can never enter trade/order paths.
         await self._run_research(runtime_cfg._declined_set())
+        # Bounded, market-data-only observation collection for outcome
+        # measurement. Runs here (before the trading/cutoff gates) so a symbol
+        # awaiting forward-return measurement is still observed after the
+        # order cutoff, and so it can never sit on the order path. Fully
+        # rate-limited and swallowed on failure (Fix 3).
+        await self._run_observation_collector()
         # Trading duration intentionally excludes discovery and research work.
         trading_started = monotonic()
 
@@ -444,6 +451,15 @@ class SymbolScanner:
         for result in triggered:
             await self._maybe_send_order(result)
             stop_loss_guard.mark_triggered(result.response.symbol)
+
+    async def _run_observation_collector(self) -> None:
+        """Bounded market-data-only observation collection (Fix 3). Never
+        raises and never enters the order path - it only records
+        MarketObservation rows the outcome labeler later reads."""
+        try:
+            await market_observation_collector.run(self._gateway)
+        except Exception:
+            logger.exception("OBSERVATION_COLLECTOR_RUN_FAILED")
 
     async def _run_discovery(self) -> None:
         """Run low-cost movers screening and create research-only candidates."""

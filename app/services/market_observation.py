@@ -7,7 +7,7 @@ failure here must never affect evaluation or order dispatch.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -22,6 +22,8 @@ from app.services.fill_ledger import to_decimal
 logger = logging.getLogger(__name__)
 
 SERVER_OBSERVED_AT = "SERVER_OBSERVED_AT"
+UNKNOWN_PERIOD = "UNKNOWN_PERIOD"
+UNKNOWN_SOURCE = "UNKNOWN_SOURCE"
 
 # Preference order: tick-level quote event, then bar event, then the
 # snapshot-assembly timestamp - all real gateway-reported times, before
@@ -29,19 +31,38 @@ SERVER_OBSERVED_AT = "SERVER_OBSERVED_AT"
 _TIMESTAMP_FIELDS = ("quoteEventUtc", "barEventUtc", "snapshotBuiltUtc")
 
 
+def _parse_utc(raw: Any) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 def _resolve_observed_at(payload: dict[str, Any]) -> tuple[datetime, str]:
     for field in _TIMESTAMP_FIELDS:
-        raw = payload.get(field)
-        if not raw:
-            continue
-        try:
-            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed, field
+        parsed = _parse_utc(payload.get(field))
+        if parsed is not None:
+            return parsed, field
     return datetime.now(timezone.utc), SERVER_OBSERVED_AT
+
+
+def _resolve_bar_bounds(
+    payload: dict[str, Any],
+) -> tuple[datetime | None, datetime | None]:
+    """Real bar start/end when the gateway reported both a bar event time and
+    a period length; (None, None) otherwise - never guessed (Fix 4)."""
+    bar_start = _parse_utc(payload.get("barEventUtc"))
+    if bar_start is None:
+        return None, None
+    period_seconds = to_decimal(payload.get("actualBarPeriodSeconds"))
+    if period_seconds is None or period_seconds <= 0:
+        return bar_start, None
+    return bar_start, bar_start + timedelta(seconds=int(period_seconds))
 
 
 def _bar_prefixed(payload: dict[str, Any], key: str) -> Decimal | None:
@@ -65,7 +86,13 @@ async def record_market_observation(
     any persistence failure - this is a measurement side-channel."""
     try:
         observed_at, observed_at_source = _resolve_observed_at(payload)
-        price_source = payload.get("priceSource")
+        bar_start_at, bar_end_at = _resolve_bar_bounds(payload)
+        # Coalesce to explicit sentinels so the dedup unique key is effective
+        # even when the gateway omits period/source (Fix 7).
+        bar_period = (
+            payload.get("actualBarPeriod") or payload.get("timeframe") or UNKNOWN_PERIOD
+        )
+        price_source = payload.get("priceSource") or UNKNOWN_SOURCE
         values = dict(
             symbol=symbol.strip().upper(),
             observed_at=observed_at,
@@ -75,8 +102,10 @@ async def record_market_observation(
             high=_bar_prefixed(payload, "high"),
             low=_bar_prefixed(payload, "low"),
             close=to_decimal(payload.get("barClose")),
-            bar_period=payload.get("actualBarPeriod") or payload.get("timeframe"),
+            bar_period=bar_period,
             bar_closed=payload.get("barClosed"),
+            bar_start_at=bar_start_at,
+            bar_end_at=bar_end_at,
             quote_reliable=payload.get("quoteReliable"),
             ohlc_reliable=payload.get("ohlcReliable"),
             quote_age_seconds=to_decimal(payload.get("quoteAgeSeconds")),

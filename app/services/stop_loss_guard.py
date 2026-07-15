@@ -268,7 +268,9 @@ async def check_stop_loss_positions(
         guard_payload = snapshot.get("payload") or {}
         await record_market_observation_standalone(symbol, guard_payload)
 
-        # Task 6.2: a stop may only be triggered by a fresh, reliable price.
+        # Task 6.2 / Fix 2: a stop may only be triggered by a fresh, reliable
+        # price. A missing quoteAgeSeconds is treated as untrustworthy, not as
+        # "age 0" - without a known age we cannot assert the quote is fresh.
         if not guard_payload.get("quoteReliable"):
             logger.info(
                 "STOP_LOSS_GUARD_NO_OP symbol=%s reason=STOP_GUARD_QUOTE_UNRELIABLE",
@@ -276,7 +278,15 @@ async def check_stop_loss_positions(
             )
             continue
         quote_age_seconds = to_decimal(guard_payload.get("quoteAgeSeconds"))
-        if quote_age_seconds is not None and quote_age_seconds > max_quote_age_seconds:
+        if quote_age_seconds is None or quote_age_seconds < 0:
+            logger.info(
+                "STOP_LOSS_GUARD_NO_OP symbol=%s reason=STOP_GUARD_QUOTE_STALE "
+                "quoteAgeSeconds=%s detail=missing_or_negative",
+                symbol,
+                quote_age_seconds,
+            )
+            continue
+        if quote_age_seconds > max_quote_age_seconds:
             logger.info(
                 "STOP_LOSS_GUARD_NO_OP symbol=%s reason=STOP_GUARD_QUOTE_STALE "
                 "quoteAgeSeconds=%s maxAllowed=%s",

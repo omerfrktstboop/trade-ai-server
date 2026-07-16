@@ -148,12 +148,15 @@ def _eod_target_time(
 def _measurement_end(
     decision_at: datetime, eod_target_time: datetime | None
 ) -> datetime:
-    """Upper bound for MFE/MAE and target/stop scanning (Fix 5): never past
-    EOD, so the next session's prices can never bleed into a prior decision's
-    excursions. When EOD is unknown, the last numeric horizon is the cap."""
+    """Upper bound for MFE/MAE and target/stop scanning (Fix 5): the earlier
+    of the last numeric horizon and EOD, so neither the next session's prices
+    nor observations past the last measured horizon can bleed into a prior
+    decision's excursions. When EOD is unknown, the last numeric horizon is
+    the cap. If EOD precedes the decision, the returned end is before
+    decision_at, which the caller treats as an unavailable measurement."""
     last_horizon_end = decision_at + timedelta(minutes=_MAX_HORIZON_MINUTES)
     if eod_target_time is not None:
-        return max(last_horizon_end, eod_target_time)
+        return min(last_horizon_end, eod_target_time)
     return last_horizon_end
 
 
@@ -375,6 +378,14 @@ async def label_pending_outcomes() -> LabelerStats:
                     decision_at, runtime_config.timezone, session_close_time
                 )
             measurement_end = _measurement_end(decision_at, eod_target_time)
+            if measurement_end < decision_at:
+                # EOD precedes the decision (e.g. recorded after the session
+                # close): there is no valid in-session window to measure, so
+                # mark it unavailable rather than measuring into the next
+                # session.
+                outcome.outcome_status = "UNAVAILABLE"
+                outcome.unavailable_reason = "EOD_BEFORE_DECISION"
+                continue
 
             updated, reasons = await _resolve_due_horizons(
                 session,

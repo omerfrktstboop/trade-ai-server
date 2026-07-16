@@ -20,6 +20,7 @@ from app.db.session import async_session_factory
 from app.models.db import (
     BotPosition,
     DecisionOutcome,
+    MarketObservation,
     OrderFill,
     PositionLifecycle,
     PositionStopEvent,
@@ -505,6 +506,10 @@ class TestDecisionOutcome:
 
 
 class TestOutcomeLabeler:
+    """Labeler artık gateway snapshot'ı DEĞİL, MarketObservation satırlarını
+    okur (Task 3/4 refactor'u). Testler gözlem satırları tohumlar ve
+    ``label_pending_outcomes()``'u argümansız çağırır."""
+
     async def _seed_outcome(
         self,
         request_id: str,
@@ -514,8 +519,15 @@ class TestOutcomeLabeler:
         target_price: float | None = 120.0,
         decision_action: str = "BUY",
         minutes_ago: int = 10,
-    ) -> None:
+    ) -> datetime:
+        decision_at = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
         async with async_session_factory() as session:
+            # EOD hedef anı testin koştuğu saate bağlı kalmasın: seans
+            # kapanışını gün sonuna sabitle ki measurement window her zaman
+            # decision_at'ten sonra bitsin.
+            await set_admin_config_value(
+                session, "marketSessionCloseTime", "23:59", changed_by="test"
+            )
             session.add(
                 DecisionOutcome(
                     request_id=request_id,
@@ -523,10 +535,32 @@ class TestOutcomeLabeler:
                     evaluation_purpose="TRADING",
                     decision_action=decision_action,
                     decision_price=Decimal(str(decision_price)),
-                    decision_at=datetime.now(timezone.utc) - timedelta(minutes=minutes_ago),
+                    decision_at=decision_at,
                     stop_loss=Decimal(str(stop_loss)) if stop_loss else None,
                     target_price=Decimal(str(target_price)) if target_price else None,
                     outcome_status="PENDING",
+                )
+            )
+            await session.commit()
+        return decision_at
+
+    async def _seed_observation(
+        self,
+        observed_at: datetime,
+        *,
+        last_price: float | None,
+        quote_reliable: bool = True,
+    ) -> None:
+        async with async_session_factory() as session:
+            session.add(
+                MarketObservation(
+                    symbol="THYAO",
+                    observed_at=observed_at,
+                    observed_at_source="TEST",
+                    last_price=Decimal(str(last_price)) if last_price is not None else None,
+                    quote_reliable=quote_reliable,
+                    ohlc_reliable=False,
+                    price_source="TEST",
                 )
             )
             await session.commit()
@@ -540,82 +574,102 @@ class TestOutcomeLabeler:
             ).scalar_one()
 
     async def test_due_horizon_filled_with_reliable_price(self):
-        await self._seed_outcome("out-1", minutes_ago=10)
-        fake = FakeGateway()
-        fake.snapshot_overrides["THYAO"] = {"lastPrice": 105.0, "quoteReliable": True}
-        await label_pending_outcomes(make_gateway_client(fake))
+        decision_at = await self._seed_outcome("out-1", minutes_ago=10)
+        # 5 dk ufku: target_time'dan 10 sn sonra güvenilir gözlem var.
+        await self._seed_observation(
+            decision_at + timedelta(minutes=5, seconds=10), last_price=105.0
+        )
+        await label_pending_outcomes()
         outcome = await self._get_outcome("out-1")
         assert outcome.future_return_5m == Decimal("5")
 
     async def test_horizon_not_due_yet_stays_none(self):
-        await self._seed_outcome("out-2", minutes_ago=1)
-        fake = FakeGateway()
-        fake.snapshot_overrides["THYAO"] = {"lastPrice": 105.0, "quoteReliable": True}
-        await label_pending_outcomes(make_gateway_client(fake))
+        decision_at = await self._seed_outcome("out-2", minutes_ago=1)
+        await self._seed_observation(
+            decision_at + timedelta(seconds=30), last_price=105.0
+        )
+        await label_pending_outcomes()
         outcome = await self._get_outcome("out-2")
         assert outcome.future_return_5m is None
 
     async def test_unreliable_price_leaves_fields_untouched(self):
-        await self._seed_outcome("out-3", minutes_ago=10)
-        fake = FakeGateway()
-        fake.snapshot_overrides["THYAO"] = {"quoteReliable": False}
-        await label_pending_outcomes(make_gateway_client(fake))
+        decision_at = await self._seed_outcome("out-3", minutes_ago=10)
+        # Pencerede gözlem VAR ama güvenilir değil → alan None kalır,
+        # durum PENDING kalır (QUOTE_UNRELIABLE kalıcı boşluk değildir).
+        await self._seed_observation(
+            decision_at + timedelta(minutes=5, seconds=10),
+            last_price=105.0,
+            quote_reliable=False,
+        )
+        await label_pending_outcomes()
         outcome = await self._get_outcome("out-3")
         assert outcome.future_return_5m is None
         assert outcome.outcome_status == "PENDING"
 
     async def test_mfe_mae_track_running_extrema(self):
-        await self._seed_outcome("out-4", minutes_ago=10)
-        fake = FakeGateway()
-        fake.snapshot_overrides["THYAO"] = {"lastPrice": 105.0, "quoteReliable": True}
-        await label_pending_outcomes(make_gateway_client(fake))
+        decision_at = await self._seed_outcome("out-4", minutes_ago=10)
+        await self._seed_observation(
+            decision_at + timedelta(minutes=5, seconds=10), last_price=105.0
+        )
+        await label_pending_outcomes()
         first = await self._get_outcome("out-4")
         assert first.mfe_pct == Decimal("5")
         assert first.mae_pct == Decimal("5")
-        # Re-run with a worse price - MAE should extend down, MFE stay.
-        fake.snapshot_overrides["THYAO"] = {"lastPrice": 95.0, "quoteReliable": True}
-        await label_pending_outcomes(make_gateway_client(fake))
+        # Daha kötü fiyatlı ikinci gözlem: MAE aşağı genişler, MFE kalır.
+        await self._seed_observation(
+            decision_at + timedelta(minutes=6), last_price=95.0
+        )
+        await label_pending_outcomes()
         second = await self._get_outcome("out-4")
         assert second.mfe_pct == Decimal("5")
         assert second.mae_pct == Decimal("-5")
 
     async def test_target_hit_before_stop(self):
-        await self._seed_outcome("out-5", minutes_ago=10, stop_loss=90.0, target_price=104.0)
-        fake = FakeGateway()
-        fake.snapshot_overrides["THYAO"] = {"lastPrice": 105.0, "quoteReliable": True}
-        await label_pending_outcomes(make_gateway_client(fake))
+        decision_at = await self._seed_outcome(
+            "out-5", minutes_ago=10, stop_loss=90.0, target_price=104.0
+        )
+        await self._seed_observation(
+            decision_at + timedelta(minutes=5, seconds=10), last_price=105.0
+        )
+        await label_pending_outcomes()
         outcome = await self._get_outcome("out-5")
         assert outcome.target_hit_before_stop is True
         assert outcome.target_hit_at is not None
 
     async def test_stop_hit_before_target(self):
-        await self._seed_outcome("out-6", minutes_ago=10, stop_loss=96.0, target_price=120.0)
-        fake = FakeGateway()
-        fake.snapshot_overrides["THYAO"] = {"lastPrice": 95.0, "quoteReliable": True}
-        await label_pending_outcomes(make_gateway_client(fake))
+        decision_at = await self._seed_outcome(
+            "out-6", minutes_ago=10, stop_loss=96.0, target_price=120.0
+        )
+        await self._seed_observation(
+            decision_at + timedelta(minutes=5, seconds=10), last_price=95.0
+        )
+        await label_pending_outcomes()
         outcome = await self._get_outcome("out-6")
         assert outcome.target_hit_before_stop is False
         assert outcome.stop_hit_at is not None
 
     async def test_simultaneous_target_and_stop_is_ambiguous(self):
-        # target below current price AND stop above current price at once -
-        # only possible to construct directly, not through normal trading,
-        # but the labeler must not guess an order in this degenerate case.
-        await self._seed_outcome("out-7", minutes_ago=10, stop_loss=110.0, target_price=90.0)
-        fake = FakeGateway()
-        fake.snapshot_overrides["THYAO"] = {"lastPrice": 100.0, "quoteReliable": True}
-        await label_pending_outcomes(make_gateway_client(fake))
+        # target mevcut fiyatın altında VE stop üstünde - normal işlemle
+        # oluşmaz ama labeler bu dejenere durumda sıra tahmin etmemeli.
+        decision_at = await self._seed_outcome(
+            "out-7", minutes_ago=10, stop_loss=110.0, target_price=90.0
+        )
+        await self._seed_observation(
+            decision_at + timedelta(minutes=5, seconds=10), last_price=100.0
+        )
+        await label_pending_outcomes()
         outcome = await self._get_outcome("out-7")
         assert outcome.outcome_status == "AMBIGUOUS"
         assert outcome.target_hit_before_stop is None
 
     async def test_wait_decision_gets_forward_return_no_target_stop_logic(self):
-        await self._seed_outcome(
+        decision_at = await self._seed_outcome(
             "out-8", minutes_ago=10, decision_action="WAIT", stop_loss=None, target_price=None
         )
-        fake = FakeGateway()
-        fake.snapshot_overrides["THYAO"] = {"lastPrice": 105.0, "quoteReliable": True}
-        await label_pending_outcomes(make_gateway_client(fake))
+        await self._seed_observation(
+            decision_at + timedelta(minutes=5, seconds=10), last_price=105.0
+        )
+        await label_pending_outcomes()
         outcome = await self._get_outcome("out-8")
         assert outcome.future_return_5m == Decimal("5")
         assert outcome.target_hit_before_stop is None

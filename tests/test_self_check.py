@@ -32,8 +32,16 @@ def isolated_self_check(monkeypatch):
     async def config(_session, _key):
         return "PAPER"
 
+    async def disabled(_session):
+        return False
+
     monkeypatch.setattr(self_check, "get_active_profile", profile)
     monkeypatch.setattr(self_check, "get_admin_config_value", config)
+    # Panel-over-env okuyucular gerçek session ister; sahte _Session yerine
+    # doğrudan kapalı değer döndür.
+    monkeypatch.setattr(self_check, "get_manual_approval_allow_orders", disabled)
+    monkeypatch.setattr(self_check, "get_scanner_allow_orders", disabled)
+    monkeypatch.setattr(self_check, "is_scanner_runtime_enabled", disabled)
     monkeypatch.setattr(self_check.settings, "app_env", AppEnv.DEVELOPMENT)
     monkeypatch.setattr(self_check.settings, "matriks_gateway_token", "")
     monkeypatch.setattr(self_check.settings, "manual_approval_allow_orders", False)

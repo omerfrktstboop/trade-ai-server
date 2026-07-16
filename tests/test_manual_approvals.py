@@ -86,6 +86,8 @@ async def _approval_with_config(**overrides):
         "botMode": "DEMO_LIVE",
         "botEnableDemoOrders": "true",
         "botDemoAccountConfirmed": "true",
+        # Panel-over-env anahtar: DB satırı env'i kalıcı olarak override eder.
+        "manualApprovalAllowOrders": "true",
     }
     values.update(overrides)
     async with async_session_factory() as session:
@@ -109,7 +111,7 @@ async def _approval_with_config(**overrides):
 @pytest.mark.parametrize(
     ("setting_enabled", "override", "expected_reason"),
     [
-        (False, {}, "MANUAL_APPROVAL_ALLOW_ORDERS"),
+        (False, {}, "manualApprovalAllowOrders"),
         (True, {"killSwitchEnabled": "true"}, "kill switch"),
         (True, {"tradingMode": "PAPER", "botMode": "PAPER"}, "not DEMO_LIVE"),
         (True, {"botEnableDemoOrders": "false"}, "not enabled"),
@@ -124,11 +126,10 @@ def test_approval_gates_do_not_call_gateway(
         await drop_all()
         await init_db()
         gateway = FakeGateway()
-        monkeypatch.setattr(
-            approvals_service.settings, "manual_approval_allow_orders", setting_enabled
-        )
         monkeypatch.setattr(approvals_service, "gateway_client", gateway)
-        row_id = await _approval_with_config(**override)
+        row_id = await _approval_with_config(
+            manualApprovalAllowOrders=str(setting_enabled).lower(), **override
+        )
         result = await approve_request(row_id, "admin")
         assert result.status == "REJECTED"
         assert expected_reason in result.admin_note
@@ -142,9 +143,6 @@ def test_approval_success_sends_only_demo_live_limit(monkeypatch):
         await drop_all()
         await init_db()
         gateway = FakeGateway()
-        monkeypatch.setattr(
-            approvals_service.settings, "manual_approval_allow_orders", True
-        )
         monkeypatch.setattr(approvals_service, "gateway_client", gateway)
         row_id = await _approval_with_config()
         result = await approve_request(row_id, "admin")

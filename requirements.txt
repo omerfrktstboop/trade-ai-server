@@ -14,3 +14,4 @@ aiosqlite
 tzdata
 jinja2
 python-multipart
+mcp>=1.2,<1.13  # >=1.13 starlette 1.x ister, fastapi 0.115 ile çakışır

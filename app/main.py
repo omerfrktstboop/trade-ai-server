@@ -1,7 +1,7 @@
 """FastAPI application entry point."""
 
 import sys
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
@@ -22,6 +22,17 @@ from app.routers.gateway_config import router as gateway_config_router
 from app.routers.order_result import router as order_result_router
 from app.routers.signal import router as signal_router
 from app.routers.signal_history import router as signal_history_router
+
+# MCP read-only tool sunucusu (v2). mcp paketi kurulamazsa sunucu mount
+# edilmez ama API'nin geri kalanı normal çalışır.
+_mcp_asgi_app = None
+_mcp_session_manager = None
+try:
+    from app.tools.mcp_app import build_mcp_asgi_app
+
+    _mcp_asgi_app, _mcp_session_manager = build_mcp_asgi_app()
+except Exception as _mcp_exc:  # pragma: no cover — opsiyonel bağımlılık
+    print(f"⚠️  MCP server unavailable: {_mcp_exc}")
 
 
 @asynccontextmanager
@@ -51,7 +62,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         order_synchronizer.start()
 
-    yield
+    async with AsyncExitStack() as stack:
+        if _mcp_session_manager is not None:
+            await stack.enter_async_context(_mcp_session_manager.run())
+            print("🧰 MCP read-only tool server mounted at /mcp.")
+        yield
     # Shutdown
     if settings.scanner_enabled:
         from app.services.scanner import scanner
@@ -96,6 +111,10 @@ app.include_router(order_result_router, prefix="/api")
 app.include_router(signal_history_router, prefix="/api")
 app.include_router(admin_api_router, prefix="/api/admin")
 app.include_router(admin_router, prefix="/admin")
+
+# MCP (admin token korumalı, read-only tool yüzeyi)
+if _mcp_asgi_app is not None:
+    app.mount("/mcp", _mcp_asgi_app)
 
 
 @app.get("/")

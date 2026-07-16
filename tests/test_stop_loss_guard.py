@@ -203,6 +203,24 @@ class TestScannerStopLossIntegration:
                         description="test account policy",
                     )
                 )
+                # v2 çift kapı: dispatch entegrasyon testleri AUTO_TRADE ister.
+                session.add(
+                    SystemConfig(
+                        key="systemMode",
+                        value="AUTO_TRADE",
+                        value_type="system_mode",
+                        description="test",
+                    )
+                )
+                # Cutoff testin koştuğu saate bağlı olmasın.
+                session.add(
+                    SystemConfig(
+                        key="disableTradingAfter",
+                        value="23:59",
+                        value_type="time",
+                        description="test",
+                    )
+                )
                 session.add(
                     TradeWatchlistSymbol(
                         symbol="THYAO",

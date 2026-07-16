@@ -33,16 +33,26 @@ from sqlalchemy import select
 from app.config import settings
 from app.core.risk_config import risk_config
 from app.db.session import async_session_factory
-from app.models.db import BotPosition, OrderLog, TradeWatchlistSymbol
+from app.models.db import (
+    BotPosition,
+    OrderLog,
+    PositionStopEvent,
+    RiskDecision,
+    TradeWatchlistSymbol,
+)
 from app.models.signal import OrderType, SignalAction, SignalMode
 from app.services.admin_config import (
     build_runtime_risk_config,
     get_admin_config_value,
+    get_ai_tool_calling_enabled,
     get_portfolio_scan_interval_minutes,
     get_scanner_allow_orders,
+    get_system_mode,
     is_kill_switch_enabled,
     is_scanner_runtime_enabled,
 )
+from app.services.account_watcher import account_watcher
+from app.services.ai_provider import get_default_provider
 from app.services.discovery_agent import run_discovery_scan
 from app.services.evaluator import EvaluationResult, evaluate_symbol
 from app.services.account_context import (
@@ -106,6 +116,33 @@ async def _orders_enabled() -> bool:
 # Aynı uyarıyı her tick'te loglamamak için susturma süresi.
 _WARN_SUPPRESS = timedelta(minutes=5)
 _ORDER_COOLDOWN = timedelta(minutes=15)
+
+
+async def _decision_audit_exists(request_id: str) -> bool:
+    """Dispatch öncesi audit doğrulaması (v2 ilke #6).
+
+    Normal değerlendirme yolu ``risk_decisions`` satırı yazar; stop-loss
+    bekçisi ise LLM'siz çalıştığı için ``position_stop_events``'e
+    STOP_BREACHED olayı yazar. İkisinden biri commit edilmiş olmalı.
+    """
+    async with async_session_factory() as session:
+        risk_row = (
+            await session.execute(
+                select(RiskDecision.id)
+                .where(RiskDecision.request_id == request_id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if risk_row is not None:
+            return True
+        stop_row = (
+            await session.execute(
+                select(PositionStopEvent.id)
+                .where(PositionStopEvent.source_request_id == request_id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return stop_row is not None
 
 
 class SymbolScanner:
@@ -293,6 +330,30 @@ class SymbolScanner:
             )
             await notify_gateway_event("ulaşılamıyor")
             return []
+
+        # v2 hesap izleyici (Faz 4): her tick'te kontrat sürümü + hesap
+        # kimliği/türü/oturumu izlenir; değişimde account_events yazılır ve
+        # REAL arming otomatik düşürülür. Sonuç burada sadece kayıt içindir —
+        # emir yolu kendi taze health'iyle ayrıca kontrol eder.
+        try:
+            async with async_session_factory() as session:
+                await account_watcher.check(gateway_health, session)
+                await session.commit()
+        except Exception:
+            logger.exception("Account watcher tick check failed")
+
+        # aiToolCallingEnabled panel anahtarı provider'a her tick yansıtılır
+        # (restart'sız aç/kapat). Sadece DeepSeek'te anlamlıdır.
+        try:
+            async with async_session_factory() as session:
+                tools_enabled = await get_ai_tool_calling_enabled(session)
+            provider = get_default_provider()
+            if getattr(provider, "tools_enabled", None) not in (None, tools_enabled):
+                logger.info("AI tool-calling flag changed -> %s", tools_enabled)
+            if hasattr(provider, "tools_enabled"):
+                provider.tools_enabled = tools_enabled
+        except Exception:
+            logger.exception("AI tool-calling flag sync failed")
 
         # Discovery yalnızca gateway market-data yüzeyine dayanır; account
         # positionsLoaded hazır olana kadar bekletilirse research evreni boş
@@ -662,6 +723,22 @@ class SymbolScanner:
             return
         if not await _orders_enabled() or not response.allow_order:
             return
+        # v2 çift kapı (Faz 4): systemMode=AUTO_TRADE değilse hiçbir emir
+        # gönderilmez. Eski mod kapıları aşağıda AYNEN durur — geçiş dönemi
+        # boyunca dispatch için ikisi birden açık olmalı (fail-closed AND).
+        try:
+            async with async_session_factory() as session:
+                system_mode = await get_system_mode(session)
+        except Exception:
+            logger.exception("systemMode read failed — blocking dispatch")
+            return
+        if system_mode != "AUTO_TRADE":
+            logger.info(
+                "Order blocked: systemMode=%s (OBSERVE_ONLY) requestId=%s",
+                system_mode,
+                response.request_id,
+            )
+            return
         if response.action not in (SignalAction.BUY, SignalAction.SELL):
             return
         if response.order_type != OrderType.LIMIT:
@@ -738,6 +815,19 @@ class SymbolScanner:
             fresh_snapshot = await self._gateway.get_snapshot(response.symbol)
             fresh_positions = await self._gateway.get_positions()
             fresh_health = await self._gateway.health()
+            # v2 emir öncesi hesap yeniden doğrulaması (ilke #5): kontrat
+            # sürümü + hesap kimliği/türü/oturumu taze health'ten kontrol
+            # edilir; değişim tespiti otomatik disarm + blok üretir.
+            async with async_session_factory() as session:
+                account_check = await account_watcher.check(fresh_health, session)
+                await session.commit()
+            if not account_check.dispatch_allowed:
+                logger.warning(
+                    "Order blocked by account watcher requestId=%s reason=%s",
+                    response.request_id,
+                    account_check.reason,
+                )
+                return
             preflight_reason = validate_order_preflight(
                 payload=fresh_snapshot.get("payload") or {},
                 positions=fresh_positions,
@@ -801,6 +891,25 @@ class SymbolScanner:
                     response.symbol,
                     response.action.value,
                 )
+        # v2 audit-yoksa-emir-yok kapısı (ilke #6): nihai karar audit kaydı
+        # (normal yol: risk_decisions; stop-loss yolu: STOP_BREACHED olayı)
+        # DB'de COMMIT edilmiş olmadan gateway'e POST atılmaz. DB okunamazsa
+        # da emir gönderilmez (fail-closed).
+        try:
+            if not await _decision_audit_exists(response.request_id):
+                logger.warning(
+                    "Order blocked: no committed decision audit record "
+                    "requestId=%s",
+                    response.request_id,
+                )
+                return
+        except Exception:
+            logger.exception(
+                "Decision audit check failed — blocking dispatch requestId=%s",
+                response.request_id,
+            )
+            return
+
         if last_sent is not None and now - last_sent < _ORDER_COOLDOWN:
             remaining = _ORDER_COOLDOWN - (now - last_sent)
             logger.warning(

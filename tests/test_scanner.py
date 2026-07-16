@@ -27,7 +27,13 @@ from app.services.matriks_gateway import GatewayUnavailable, MatriksGatewayClien
 from app.services.scanner import SymbolScanner
 from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
-from app.models.db import OrderCashReservation, SystemConfig, TradeWatchlistSymbol
+from app.models.db import (
+    OrderCashReservation,
+    RiskDecision,
+    SystemConfig,
+    TradeWatchlistSymbol,
+)
+from app.services import account_watcher as account_watcher_module
 from sqlalchemy import select
 from tests.fake_gateway import FakeGateway
 
@@ -477,6 +483,26 @@ class TestOrderPath:
                         description="test account policy",
                     )
                 )
+                # Cutoff testin koştuğu saate bağlı olmasın (17:30 sonrası).
+                session.add(
+                    SystemConfig(
+                        key="disableTradingAfter",
+                        value="23:59",
+                        value_type="time",
+                        description="test",
+                    )
+                )
+                # v2 çift kapı (Faz 4): dispatch testleri için systemMode
+                # AUTO_TRADE'e alınır — eski kapılarla AND ilişkisi ayrıca
+                # test_system_mode.py'de doğrulanır.
+                session.add(
+                    SystemConfig(
+                        key="systemMode",
+                        value="AUTO_TRADE",
+                        value_type="system_mode",
+                        description="test",
+                    )
+                )
                 session.add(
                     TradeWatchlistSymbol(
                         symbol="THYAO",
@@ -485,9 +511,26 @@ class TestOrderPath:
                         manual_override=True,
                     )
                 )
+                # v2 audit-yoksa-emir-yok kapısı: make_result'un deterministik
+                # request id'leri için risk_decisions satırları.
+                for symbol in ("THYAO", "GARAN", "AKBNK"):
+                    session.add(
+                        RiskDecision(
+                            request_id=f"{symbol}-20260709-120000-scan",
+                            symbol=symbol,
+                            action="BUY",
+                            confidence=90.0,
+                            risk_score=10.0,
+                            allow_order=True,
+                            order_type="LIMIT",
+                            qty=1,
+                            mode="DEMO_LIVE",
+                        )
+                    )
                 await session.commit()
 
         asyncio.run(seed_account_policy())
+        account_watcher_module.account_watcher.reset()
         self.persisted: list[tuple[str, str]] = []
 
         async def fake_persist(scanner_self, response, status, reason):

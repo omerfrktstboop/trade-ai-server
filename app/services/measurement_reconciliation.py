@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from app.db.session import async_session_factory
-from app.models.db import MeasurementRepairJob, OrderFill, OrderLog
+from app.models.db import MeasurementRepairJob, OrderLog
 from app.services.fill_ledger import record_reconciliation_fill
 from app.services.measurement_repair import (
     MAX_REPAIR_ATTEMPTS,

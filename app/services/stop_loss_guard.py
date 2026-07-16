@@ -320,6 +320,12 @@ async def check_stop_loss_positions(
             stop_loss,
             sell_qty,
         )
+        # Request id, breach olayından ÖNCE üretilir ve olaya bağlanır:
+        # audit-yoksa-emir-yok kapısı (v2 ilke #6) bu STOP_BREACHED kaydını
+        # dispatch yetkisi olarak arar — commit edilmeden emir gönderilemez.
+        request_id = (
+            f"{symbol}-STOPLOSS-{datetime.now(timezone.utc):%Y%m%d%H%M%S%f}"
+        )
         try:
             async with async_session_factory() as breach_session:
                 fresh_lifecycle = await get_open_lifecycle(breach_session, symbol)
@@ -327,7 +333,7 @@ async def check_stop_loss_positions(
                     await record_stop_breach(
                         breach_session,
                         fresh_lifecycle,
-                        source_request_id=None,
+                        source_request_id=request_id,
                         reason=(
                             f"lastPrice={last_price_d} <= stopLoss={stop_loss}"
                         ),
@@ -337,9 +343,7 @@ async def check_stop_loss_positions(
             logger.exception("STOP_LOSS_GUARD_BREACH_AUDIT_FAILED symbol=%s", symbol)
 
         response = SignalResponse(
-            requestId=(
-                f"{symbol}-STOPLOSS-{datetime.now(timezone.utc):%Y%m%d%H%M%S%f}"
-            ),
+            requestId=request_id,
             symbol=symbol,
             action=SignalAction.SELL,
             qty=sell_qty,

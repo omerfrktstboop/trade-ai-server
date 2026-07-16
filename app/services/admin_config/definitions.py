@@ -115,6 +115,38 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "false",
         "Açıkken analiz devam eder ama hiçbir emir gönderilmez (güvenli mod).",
     ),
+    # ── v2 mod katmanı (Faz 4) — eski mod anahtarlarıyla PARALEL çalışır;
+    # geçiş döneminde dispatch için eski VE yeni kapılar birlikte açık olmalı.
+    "systemMode": ConfigDefinition(
+        "systemMode",
+        "system_mode",
+        "OBSERVE_ONLY",
+        "v2 çalışma modu. OBSERVE_ONLY: analiz ve karar üretilir, hiçbir emir "
+        "gönderilmez. AUTO_TRADE: Matriks'te oturum açık hesaba emir gönderilir "
+        "(DEMO hesap otomatik serbest; REAL hesap ayrıca arming ister).",
+    ),
+    "realAccountArmed": ConfigDefinition(
+        "realAccountArmed",
+        "bool",
+        "false",
+        "REAL hesapta emir gönderimini kurar. Yalnızca arming endpoint'i "
+        "'CONFIRM REAL ACCOUNT' onayıyla yazar; hesap/oturum değişince "
+        "account watcher otomatik düşürür.",
+    ),
+    "armedAccountRef": ConfigDefinition(
+        "armedAccountRef",
+        "string",
+        "",
+        "Arm edilen hesabın sha256 referansı — gateway'in verdiği değer "
+        "DOĞRUDAN saklanır (yeniden hash yok). Sadece arming akışı yazar.",
+    ),
+    "aiToolCallingEnabled": ConfigDefinition(
+        "aiToolCallingEnabled",
+        "bool",
+        str(settings.ai_tools_enabled).lower(),
+        "DeepSeek'in değerlendirme sırasında read-only veri araçlarını "
+        "çağırmasına izin verir (panel > env; .env AI_TOOLS_ENABLED fallback).",
+    ),
     "scannerEnabled": ConfigDefinition(
         "scannerEnabled",
         "bool",
@@ -480,6 +512,8 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
 
 RISKY_CONFIG_KEYS = {
     "tradingMode",
+    "systemMode",
+    "realAccountArmed",
     "killSwitchEnabled",
     "tradingKillSwitchActive",
     "forceSafeMode",
@@ -522,7 +556,12 @@ RISKY_CONFIG_KEYS = {
     "discoveryMaximumSpreadPct",
 }
 
-READ_ONLY_CONFIG_KEYS = frozenset({"botAllowMarketOrders"})
+# realAccountArmed/armedAccountRef panelin genel edit formundan yazılamaz —
+# tek yazma yolu arming endpoint'leridir (CONFIRM REAL ACCOUNT + canlı hesap
+# doğrulaması). botAllowMarketOrders kod kilididir.
+READ_ONLY_CONFIG_KEYS = frozenset(
+    {"botAllowMarketOrders", "realAccountArmed", "armedAccountRef"}
+)
 
 EMPTY_ALLOWED_CONFIG_KEYS = frozenset(
     {
@@ -543,6 +582,7 @@ CONFIG_SECTION_DEFINITIONS = (
             "kapıları. Güvenliği gevşeten değişiklikler CONFIRM onayı ister."
         ),
         keys=(
+            "systemMode",
             "tradingMode",
             "killSwitchEnabled",
             "tradingKillSwitchActive",
@@ -550,6 +590,7 @@ CONFIG_SECTION_DEFINITIONS = (
             "scannerEnabled",
             "scannerAllowOrders",
             "manualApprovalAllowOrders",
+            "aiToolCallingEnabled",
         ),
     ),
     ConfigSectionDefinition(
@@ -582,6 +623,8 @@ CONFIG_SECTION_DEFINITIONS = (
             "botRealLiveArmed",
             "botRequireDemoAccount",
             "botDemoAccountConfirmed",
+            "realAccountArmed",
+            "armedAccountRef",
             "botHttpTimeoutSeconds",
             "botAllowMarketOrders",
         ),

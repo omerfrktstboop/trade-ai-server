@@ -64,6 +64,11 @@ def _serialize_value(key: str, raw_value: Any, value_type: str) -> str:
         value = str(raw_value).upper()
         SignalMode(value)
         return value
+    if value_type == "system_mode":
+        value = str(raw_value).strip().upper()
+        if value not in {"OBSERVE_ONLY", "AUTO_TRADE"}:
+            raise ValueError(f"{key} must be OBSERVE_ONLY or AUTO_TRADE")
+        return value
     if value_type == "reservation_handling":
         value = str(raw_value).strip().upper()
         if value not in {
@@ -149,6 +154,11 @@ def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
             }
             and old_value != new_value
         )
+    if key == "systemMode":
+        # AUTO_TRADE'e geçiş gerçek emir yolunu kurar — onay ister.
+        return new_value == "AUTO_TRADE" and old_value != new_value
+    if key == "realAccountArmed":
+        return _parse_bool(new_value) is True and old_value != new_value
     if key in {"killSwitchEnabled", "tradingKillSwitchActive", "forceSafeMode"}:
         return _parse_bool(old_value) is True and _parse_bool(new_value) is False
     if key == "scannerEnabled":

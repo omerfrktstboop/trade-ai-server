@@ -121,11 +121,22 @@ class FakeGateway:
         self.token = token
         self.symbols = symbols or list(DEFAULT_SYMBOLS)
         self.positions_loaded = True
+        # v2 kontrat + hesap kimliği alanları (Faz 3 gateway'i raporlar).
+        # Testler hesap değişimi/kontrat uyuşmazlığı senaryoları için bunları
+        # değiştirebilir.
+        self.contract_version: Any = 2
+        self.account_ref: str | None = "f" * 64
+        self.account_session_ref: str | None = "5" * 64
+        self.account_type: str = "DEMO"
         self.account_payload: dict[str, Any] = {
             "ok": True,
             "sourceProvider": "MATRIKS_IQ",
             "accountDataAgeSeconds": "1",
             "accountDataReliable": True,
+            "accountRef": "f" * 64,
+            "accountSessionRef": "5" * 64,
+            "accountIdMasked": "12***",
+            "accountType": "DEMO",
             "account": {
                 "TotalEquity": "100000.00",
                 "OrderableCash": "50000.00",
@@ -214,6 +225,16 @@ class FakeGateway:
                     "autoOrderEnabled": True,
                     "testAutoOrderEnabled": True,
                     "quoteAgeSeconds": {s: 5.0 for s in self.symbols},
+                    # v2 kontrat + hesap kimliği (gerçek gateway şemasıyla aynı)
+                    "gatewayContractVersion": self.contract_version,
+                    "serverContractVersion": self.contract_version,
+                    "systemMode": "OBSERVE_ONLY",
+                    "realAccountArmed": False,
+                    "accountRef": self.account_ref,
+                    "accountSessionRef": self.account_session_ref,
+                    "accountIdMasked": "12***",
+                    "accountType": self.account_type,
+                    "accountVerifiedAgoSeconds": 1.0,
                 },
             )
 

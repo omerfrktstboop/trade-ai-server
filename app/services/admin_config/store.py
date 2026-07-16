@@ -192,6 +192,37 @@ async def get_trading_mode_override(session: AsyncSession) -> SignalMode | None:
     return SignalMode(value.upper())
 
 
+# ── v2 mod katmanı (Faz 4) ──────────────────────────────────────────────────
+
+
+async def get_system_mode(session: AsyncSession) -> str:
+    """v2 çalışma modu — OBSERVE_ONLY (default, fail-closed) | AUTO_TRADE."""
+    value = (await get_admin_config_value(session, "systemMode")).strip().upper()
+    return value if value == "AUTO_TRADE" else "OBSERVE_ONLY"
+
+
+async def is_auto_trade(session: AsyncSession) -> bool:
+    return await get_system_mode(session) == "AUTO_TRADE"
+
+
+async def disarm_real_account(
+    session: AsyncSession, reason: str, *, changed_by: str = "SYSTEM_WATCHER"
+) -> None:
+    """REAL hesap arming'ini koşulsuz düşür (fail-closed yön — onay gerekmez).
+
+    Hesap kimliği/türü/oturumu değiştiğinde watcher, manuel istekte admin
+    endpoint'i çağırır. Config audit satırları set_admin_config_value içinde
+    otomatik yazılır; account_events satırını ÇAĞIRAN taraf ekler (olayın
+    türünü ve önceki referansı yalnızca o bilir).
+    """
+    await set_admin_config_value(
+        session, "realAccountArmed", "false", changed_by=changed_by, reason=reason
+    )
+    await set_admin_config_value(
+        session, "armedAccountRef", "", changed_by=changed_by, reason=reason
+    )
+
+
 async def _env_overridable_bool(
     session: AsyncSession, key: str, env_value: bool
 ) -> bool:
@@ -227,6 +258,15 @@ async def get_manual_approval_allow_orders(session: AsyncSession) -> bool:
 
     return await _env_overridable_bool(
         session, "manualApprovalAllowOrders", settings.manual_approval_allow_orders
+    )
+
+
+async def get_ai_tool_calling_enabled(session: AsyncSession) -> bool:
+    """DeepSeek tool-calling bayrağı (panel > env AI_TOOLS_ENABLED)."""
+    from app.config import settings
+
+    return await _env_overridable_bool(
+        session, "aiToolCallingEnabled", settings.ai_tools_enabled
     )
 
 

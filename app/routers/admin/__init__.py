@@ -29,6 +29,7 @@ from app.routers.admin._shared import (  # noqa: F401
 )
 
 from app.routers.admin import (  # noqa: F401
+    arming,
     auth,
     config_routes,
     dashboard,

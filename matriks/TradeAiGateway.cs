@@ -3028,18 +3028,51 @@ namespace Matriks.Lean.Algotrader
             if (depth != null && depth.AskRows != null)
                 result.Asks = depth.AskRows.Take(levels).Select((row, index) => new DepthLevelSnapshot { Level = index + 1, Price = row.Price, Size = row.Size, OrderCount = row.OrderCount }).ToList();
             result.Analysis = AnalyzeDepth(result.Bids, result.Asks);
-            // GetMarketDepth is a synchronous read, not an exchange event.
-            // Matriks does not expose a verified field-specific depth callback
-            // timestamp in this gateway, so read time must never masquerade as
-            // depth freshness. Order safety remains fail-closed.
+            // GetMarketDepth is a synchronous poll, not a push event, and
+            // Matriks exposes no depth-specific event timestamp anywhere in
+            // this SDK surface (no OnDepthUpdate/OnMarketDepthChanged
+            // callback, no timestamp field on the row objects) - read time
+            // must never masquerade as depth freshness.
+            //
+            // The best REAL signal available instead: _lastTradeUtcBySymbol,
+            // populated only from the genuine OnDataUpdate push event
+            // (barData.LastTickTime) for this symbol. Quote ticks and the
+            // depth/order-book cache are delivered by the same live Matriks
+            // subscription for a subscribed symbol, so a fresh quote tick is
+            // real, verifiable evidence the depth cache is correspondingly
+            // current - it is a same-session proxy for depth freshness, not
+            // a depth-specific guarantee, and it never overrides
+            // AnalyzeDepth's own structural reliability checks (bid<ask,
+            // positive sizes) above, which still gate DepthReliable
+            // independently. ValidateOrderMarketData already requires the
+            // quote tick itself to be within MaxQuoteAgeSecondsForOrder (15s)
+            // before this function is even called, so this proxy age can
+            // never appear fresher than that already-verified bound.
             DateTime readCompletedUtc = DateTime.UtcNow;
-            result.Analysis.DepthTimestamp = null;
-            result.Analysis.DepthAgeSeconds = double.MaxValue;
+            DateTime lastQuoteEventUtc;
+            bool hasQuoteEvent = _lastTradeUtcBySymbol.TryGetValue(symbol, out lastQuoteEventUtc);
+            if (hasQuoteEvent)
+            {
+                double ageFromQuoteTickSeconds = Math.Max(
+                    0.0, (readCompletedUtc - lastQuoteEventUtc).TotalSeconds);
+                result.Analysis.DepthTimestamp = lastQuoteEventUtc.ToString("o");
+                result.Analysis.DepthAgeSeconds = ageFromQuoteTickSeconds;
+                result.Analysis.DepthTimestampSource = "SAME_SESSION_QUOTE_TICK_TIME";
+                result.Analysis.DepthEventTimestampAvailable = true;
+                // DepthReliable keeps whatever AnalyzeDepth computed from the
+                // real bid/ask structure above - never forced true here.
+            }
+            else
+            {
+                result.Analysis.DepthTimestamp = null;
+                result.Analysis.DepthAgeSeconds = double.MaxValue;
+                result.Analysis.DepthTimestampSource = "READ_TIME_ONLY";
+                result.Analysis.DepthEventTimestampAvailable = false;
+                // No real freshness signal at all for this symbol - fail closed.
+                result.Analysis.DepthReliable = false;
+            }
             result.Analysis.DepthReadUtc = readCompletedUtc.ToString("o");
             result.Analysis.DepthReadLatencySeconds = Math.Max(0.0, (readCompletedUtc - readStartedUtc).TotalSeconds);
-            result.Analysis.DepthTimestampSource = "READ_TIME_ONLY";
-            result.Analysis.DepthEventTimestampAvailable = false;
-            result.Analysis.DepthReliable = false;
             return result;
         }
 

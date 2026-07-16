@@ -459,6 +459,15 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "30",
         "Stop-loss bekçisinin bir fiyatı tetikleyici kabul edebileceği en fazla yaş (sn).",
     ),
+    "depthTimestampFixConfirmed": ConfigDefinition(
+        "depthTimestampFixConfirmed",
+        "bool",
+        "false",
+        "matriks/TradeAiGateway.cs'teki ReadDepthSnapshot derinlik-tazelik "
+        "kaynak düzeltmesi Matriks IQ içinde algoritma yeniden yüklendikten "
+        "SONRA operatör tarafından elle onaylanmalı. Onaylanmadan "
+        "demo_live_readiness bunu hâlâ bir engel olarak raporlar.",
+    ),
     "marketSessionCloseTime": ConfigDefinition(
         "marketSessionCloseTime",
         "time",
@@ -680,6 +689,7 @@ CONFIG_SECTION_DEFINITIONS = (
             "outcomeMaximumObservationDelaySeconds",
             "stopGuardMaximumQuoteAgeSeconds",
             "marketSessionCloseTime",
+            "depthTimestampFixConfirmed",
         ),
     ),
 )
@@ -758,6 +768,7 @@ CONFIG_LABELS: dict[str, str] = {
     "outcomeMaximumObservationDelaySeconds": "Outcome Gözlem Azami Gecikmesi (sn)",
     "stopGuardMaximumQuoteAgeSeconds": "Stop Guard Azami Fiyat Yaşı (sn)",
     "marketSessionCloseTime": "Seans Kapanış Saati (EOD)",
+    "depthTimestampFixConfirmed": "Depth Zaman Damgası Düzeltmesi Onaylandı (Matriks IQ reload sonrası)",
 }
 
 

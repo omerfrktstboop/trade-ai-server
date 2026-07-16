@@ -190,6 +190,9 @@ class SignalRequest(BaseModel):
         None, alias="closeChangeVolatilityProxy"
     )
     adx: Optional[float] = None
+    # MOST (hareketli stop) — gateway native göstergeden üretir (v2 Faz 3).
+    most: Optional[float] = None
+    most_signal: Optional[str] = Field(None, alias="mostSignal")
     obv_slope: Optional[float] = Field(None, alias="obvSlope")
     vwap_distance_pct: Optional[float] = Field(None, alias="vwapDistancePct")
     depth_bid1_size: Optional[float] = Field(None, alias="depthBid1Size")

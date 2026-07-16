@@ -115,6 +115,26 @@ namespace Matriks.Lean.Algotrader
         private string _configVersion = "UNAVAILABLE";
         private GatewayConfigSnapshot _activeConfig = GatewayConfigSnapshot.SafeDefault();
 
+        // ── v2 kontrat + mod/arming durumu (Faz 3) ───────────────────
+        // ExpectedContractVersion: bu gateway'in konuştuğu config kontratı.
+        // Server farklı bir contractVersion gönderirse (veya hiç göndermezse)
+        // emir yolu fail-closed kapanır — iki taraf ancak atomik deploy ile
+        // birlikte yükseltilir.
+        private const int ExpectedContractVersion = 2;
+        private int _serverContractVersion; // 0 = config'te alan yok (legacy)
+        // SystemMode: OBSERVE_ONLY | AUTO_TRADE. Bilinmeyen değer fail-closed
+        // olarak OBSERVE_ONLY'ye normalize edilir.
+        private string SystemMode = "OBSERVE_ONLY";
+        private bool RealAccountArmed;
+        // Server'ın arm ettiği hesabın sha256 referansı — gateway kendi
+        // hesapladığı accountRef ile BİREBİR aynı formatta karşılaştırır
+        // (yeniden hash yok).
+        private string ArmedAccountRef = string.Empty;
+        private string _lastVerifiedAccountRef = string.Empty;
+        private string _lastVerifiedSessionRef = string.Empty;
+        private string _lastVerifiedAccountType = "UNKNOWN"; // DEMO|REAL|UNKNOWN
+        private bool _lastAccountChanged;
+
         private SymbolPeriod IndicatorPeriod = SymbolPeriod.Min5;
 
         // ── Symbols ──────────────────────────────────────────────────
@@ -163,6 +183,8 @@ namespace Matriks.Lean.Algotrader
         private readonly ConcurrentDictionary<string, object> _volumeIndicatorBySymbol = new ConcurrentDictionary<string, object>();
         private readonly ConcurrentDictionary<string, object> _volumeTlIndicatorBySymbol = new ConcurrentDictionary<string, object>();
         private readonly ConcurrentDictionary<string, object> _atrIndicatorBySymbol = new ConcurrentDictionary<string, object>();
+        private readonly ConcurrentDictionary<string, object> _mostIndicatorBySymbol = new ConcurrentDictionary<string, object>();
+        private readonly ConcurrentDictionary<string, object> _adxIndicatorBySymbol = new ConcurrentDictionary<string, object>();
         private readonly ConcurrentDictionary<string, PositionMarketSnapshot> _positionMarketBySymbol = new ConcurrentDictionary<string, PositionMarketSnapshot>();
         private readonly ConcurrentDictionary<string, decimal> _maxBid1SizeBySymbol = new ConcurrentDictionary<string, decimal>();
         // Günlük referans fiyat (gün içinde görülen ilk geçerli last) — /movers
@@ -819,6 +841,11 @@ namespace Matriks.Lean.Algotrader
                     string orderTimeInForce = cfg.Value<string>("orderTimeInForce") ?? "Day";
                     string activeProfileCode = cfg.Value<string>("profileCode") ?? "UNKNOWN";
                     string configVersion = cfg.Value<string>("configHash") ?? "UNKNOWN";
+                    // v2 kontrat alanları — eksikse fail-closed default'lar.
+                    int contractVersion = cfg.Value<int?>("contractVersion") ?? 0;
+                    string systemMode = NormalizeSystemMode(cfg.Value<string>("systemMode"));
+                    bool realAccountArmed = cfg.Value<bool?>("realAccountArmed") ?? false;
+                    string armedAccountRef = (cfg.Value<string>("armedAccountRef") ?? string.Empty).Trim();
                     string marketIndexSymbol = NormalizeSymbol(cfg.Value<string>("marketIndexSymbol"));
                     Dictionary<string, string> instrumentTypes = cfg["instrumentTypes"] != null
                         ? cfg["instrumentTypes"].ToObject<Dictionary<string, string>>()
@@ -941,6 +968,10 @@ namespace Matriks.Lean.Algotrader
                     OrderTimeInForce = orderTimeInForce;
                     ActiveProfileCode = activeProfileCode;
                     _configVersion = configVersion;
+                    _serverContractVersion = contractVersion;
+                    SystemMode = systemMode;
+                    RealAccountArmed = realAccountArmed;
+                    ArmedAccountRef = armedAccountRef;
 
                     // Haber ayarları da server'dan gelir (algo panelinde değil).
                     // Boş bırakılırsa: keyword aboneliği yok, sembol bazlı pasif
@@ -1025,7 +1056,9 @@ namespace Matriks.Lean.Algotrader
             // Readiness must be able to observe a fresh demo-account check even
             // before the first order attempt. This is the same compile-safe
             // GetTradeUser verification used immediately before /order.
-            if (RuntimeMode == "DEMO_LIVE" && RequireDemoAccount)
+            // v2: AUTO_TRADE modunda da hesap kimliği raporlanabilsin diye
+            // aynı doğrulama ısıtılır (account watcher /health'ten okur).
+            if ((RuntimeMode == "DEMO_LIVE" && RequireDemoAccount) || SystemMode == "AUTO_TRADE")
                 VerifyDemoAccountFresh();
 
             var quoteAgeSeconds = new Dictionary<string, double?>();
@@ -1064,6 +1097,18 @@ namespace Matriks.Lean.Algotrader
                 profileCode = ActiveProfileCode,
                 configVersion = _configVersion,
                 runtimeMode = RuntimeMode,
+                // ── v2 kontrat + hesap kimliği raporlama (Faz 3) ──
+                gatewayContractVersion = ExpectedContractVersion,
+                serverContractVersion = _serverContractVersion,
+                systemMode = SystemMode,
+                realAccountArmed = RealAccountArmed,
+                accountRef = string.IsNullOrEmpty(_lastVerifiedAccountRef) ? null : _lastVerifiedAccountRef,
+                accountSessionRef = string.IsNullOrEmpty(_lastVerifiedSessionRef) ? null : _lastVerifiedSessionRef,
+                accountIdMasked = string.IsNullOrEmpty(_lastVerifiedAccountId) ? null : MaskAccountId(_lastVerifiedAccountId),
+                accountType = _lastVerifiedAccountType,
+                accountVerifiedAgoSeconds = _lastAccountVerificationUtc == DateTime.MinValue
+                    ? (double?)null
+                    : Math.Round((DateTime.UtcNow - _lastAccountVerificationUtc).TotalSeconds, 1),
                 positionsLoaded = _realPositionsLoadedFromSnapshot,
                 lastPositionSyncUtc = _lastPositionSyncUtc == DateTime.MinValue ? null : _lastPositionSyncUtc.ToString("o"),
                 positionSyncAgeSeconds = _lastPositionSyncUtc == DateTime.MinValue
@@ -1886,6 +1931,14 @@ namespace Matriks.Lean.Algotrader
                     && overall > 0m
                     && TryGetFiniteDecimal(account, "AvailableMargin", out availableMargin)
                     && availableMargin >= 0m;
+                // v2 hesap kimliği alanları: taze GetTradeUser okumasından
+                // doğrudan hesaplanır (cache'e bağlı değil); ham id maskeli.
+                string rawAccountId = user == null
+                    ? string.Empty
+                    : (Convert.ToString(ReadPublicMember(user, "AccountId")) ?? string.Empty);
+                bool? testAutoOrder = user == null
+                    ? (bool?)null
+                    : ReadPublicMember(user, "TestAutoOrder") as bool?;
                 await WriteJsonAsync(stream, 200, new
                 {
                     ok = true,
@@ -1893,6 +1946,14 @@ namespace Matriks.Lean.Algotrader
                     sourceProvider = "MATRIKS_IQ",
                     receivedAtUtc = DateTime.UtcNow.ToString("o"),
                     accountDataReliable = accountDataReliable,
+                    accountRef = string.IsNullOrEmpty(rawAccountId) ? null : Sha256Hex(rawAccountId),
+                    accountSessionRef = string.IsNullOrEmpty(rawAccountId)
+                        ? null
+                        : Sha256Hex(rawAccountId + "|" + _startedAt.Ticks.ToString()),
+                    accountIdMasked = string.IsNullOrEmpty(rawAccountId) ? null : MaskAccountId(rawAccountId),
+                    accountType = user == null || testAutoOrder == null
+                        ? "UNKNOWN"
+                        : (testAutoOrder.Value ? "DEMO" : "REAL"),
                     account = account
                 });
             }
@@ -2479,6 +2540,14 @@ namespace Matriks.Lean.Algotrader
                 rejection = ValidateOrderMarketData(symbol, side, roundedPrice);
             if (rejection == null)
                 rejection = CheckModeGates(RuntimeMode);
+            // ── v2 kontrat + dispatch kapıları (Faz 3, eski kapılarla AND) ──
+            // Sürüm uyuşmazlığı (alan eksikliği dahil) fail-closed emir reddi:
+            // Python ve C# yalnızca atomik deploy ile birlikte yükseltilir.
+            if (rejection == null && _serverContractVersion != ExpectedContractVersion)
+                rejection = "contract version mismatch — dispatch disabled (expected "
+                    + ExpectedContractVersion + ", got " + _serverContractVersion + ")";
+            if (rejection == null)
+                rejection = CheckDispatchGates();
 
             if (rejection != null)
             {
@@ -2952,6 +3021,16 @@ namespace Matriks.Lean.Algotrader
                 _autoOrderEnabled = tradeUser.AutoOrder;
                 _testAutoOrderEnabled = testAutoOrder;
                 _lastVerifiedAccountId = accountId;
+                // v2 hesap kimliği raporlama: ham id asla dışarı çıkmaz, sadece
+                // sha256 referansları. SessionRef, hesap kimliği + algo başlangıç
+                // anından türetilir: hesap değişiminde ve gateway yeniden
+                // başlatıldığında değişir. Matriks SDK'sı aynı hesapla yeniden
+                // login'i ayrıca raporlamadığı için bu, erişilebilir en güçlü
+                // oturum sinyalidir.
+                _lastVerifiedAccountRef = Sha256Hex(accountId);
+                _lastVerifiedSessionRef = Sha256Hex(accountId + "|" + _startedAt.Ticks.ToString());
+                _lastVerifiedAccountType = testAutoOrder ? "DEMO" : "REAL";
+                _lastAccountChanged = accountChanged;
                 _lastAccountVerificationUtc = DateTime.UtcNow;
                 // Reject the first order after an account switch. A new
                 // verification is required before a subsequent order can run.
@@ -2962,8 +3041,84 @@ namespace Matriks.Lean.Algotrader
             {
                 _demoAccountVerified = false;
                 _lastAccountVerificationUtc = DateTime.MinValue;
+                _lastVerifiedAccountType = "UNKNOWN";
                 SafeDebug("Demo account verification failed: " + ex.Message);
                 return false;
+            }
+        }
+
+        private sealed class AccountVerification
+        {
+            public string AccountRef;
+            public string SessionRef;
+            public string AccountType; // DEMO | REAL | UNKNOWN
+            public bool AccountChanged;
+        }
+
+        /// <summary>
+        /// v2 hesap doğrulaması: VerifyDemoAccountFresh ile AYNI 5 saniyelik
+        /// tazelik penceresini ve GetTradeUser okumasını paylaşır; başarısız
+        /// veya bayat doğrulamada null döner (fail-closed).
+        /// </summary>
+        private AccountVerification VerifyAccountFresh()
+        {
+            if ((DateTime.UtcNow - _lastAccountVerificationUtc).TotalSeconds > AccountVerificationMaxAgeSeconds)
+                VerifyDemoAccountFresh();
+            if (_lastAccountVerificationUtc == DateTime.MinValue
+                || (DateTime.UtcNow - _lastAccountVerificationUtc).TotalSeconds > AccountVerificationMaxAgeSeconds
+                || string.IsNullOrEmpty(_lastVerifiedAccountRef)
+                || _lastVerifiedAccountType == "UNKNOWN")
+                return null;
+            return new AccountVerification
+            {
+                AccountRef = _lastVerifiedAccountRef,
+                SessionRef = _lastVerifiedSessionRef,
+                AccountType = _lastVerifiedAccountType,
+                AccountChanged = _lastAccountChanged
+            };
+        }
+
+        /// <summary>
+        /// v2 emir kapısı (contractVersion=2): SystemMode + otomatik hesap
+        /// türü tespiti. DEMO hesapta AUTO_TRADE serbest akar; REAL hesap
+        /// yalnızca RealAccountArmed VE gateway'in kendi hesapladığı
+        /// accountRef == ArmedAccountRef (aynı sha256 formatı, tekrar hash
+        /// yok) iken emir gönderebilir. Her belirsizlik fail-closed bloktur.
+        /// </summary>
+        private string CheckDispatchGates()
+        {
+            if (SystemMode != "AUTO_TRADE")
+                return "SystemMode=OBSERVE_ONLY — dispatch disabled";
+            var acct = VerifyAccountFresh();
+            if (acct == null)
+                return "account verification failed or stale";
+            if (acct.AccountChanged)
+                return "account changed since last verification — order rejected";
+            if (acct.AccountType == "DEMO")
+                return null;
+            if (!RealAccountArmed)
+                return "REAL account blocked: not armed";
+            if (!string.Equals(acct.AccountRef, ArmedAccountRef, StringComparison.OrdinalIgnoreCase))
+                return "REAL account blocked: armed account mismatch";
+            return null;
+        }
+
+        private static string NormalizeSystemMode(string mode)
+        {
+            string value = (mode ?? "").Trim().ToUpperInvariant();
+            // Bilinmeyen/eksik değer fail-closed: OBSERVE_ONLY.
+            return value == "AUTO_TRADE" ? "AUTO_TRADE" : "OBSERVE_ONLY";
+        }
+
+        private static string Sha256Hex(string value)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(value ?? string.Empty));
+                var builder = new StringBuilder(hash.Length * 2);
+                foreach (byte b in hash)
+                    builder.Append(b.ToString("x2"));
+                return builder.ToString();
             }
         }
 
@@ -3555,6 +3710,12 @@ namespace Matriks.Lean.Algotrader
                 object atrIndicator = TryCreateNativeAtrIndicator(symbol, 14);
                 if (atrIndicator != null)
                     _atrIndicatorBySymbol[symbol] = atrIndicator;
+                object mostIndicator = TryCreateNativeMostIndicator(symbol);
+                if (mostIndicator != null)
+                    _mostIndicatorBySymbol[symbol] = mostIndicator;
+                object adxIndicator = TryCreateNativeAdxIndicator(symbol, 14);
+                if (adxIndicator != null)
+                    _adxIndicatorBySymbol[symbol] = adxIndicator;
                 if (IsEquitySymbol(symbol))
                 {
                     object volumeIndicator = TryCreateVolumeIndicator("VolumeIndicator", symbol);
@@ -3627,6 +3788,82 @@ namespace Matriks.Lean.Algotrader
             {
                 if (MarketDataDiagnosticsEnabled)
                     SafeDebug("Verified ATR factory unavailable symbol=" + symbol + " error=" + ex.Message);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// MOST (Anıl Özekşi moving stop-loss) native göstergesini reflection
+        /// probe ile oluşturur — ATR probe deseninin (TryCreateNativeAtrIndicator)
+        /// esnek imzalı genellemesi. Varsayılanlar Matriks'in yaygın MOST
+        /// parametreleriyle uyumlu: MOV periyodu 3 (Exponential), yüzde 2.
+        /// Bulunamazsa null döner; /indicators alanı hiç üretilmez (fail-open).
+        /// </summary>
+        private object TryCreateNativeMostIndicator(string symbol)
+        {
+            return TryCreateFlexibleIndicator(
+                new[] { "MOSTIndicator", "MOST" }, symbol,
+                defaultInt: 3, defaultDouble: 2.0, defaultDecimal: 2m);
+        }
+
+        /// <summary>
+        /// ADX native göstergesi için reflection probe (aynı desen). Period 14.
+        /// </summary>
+        private object TryCreateNativeAdxIndicator(string symbol, int period)
+        {
+            return TryCreateFlexibleIndicator(
+                new[] { "ADXIndicator", "ADX" }, symbol,
+                defaultInt: period, defaultDouble: period, defaultDecimal: period);
+        }
+
+        /// <summary>
+        /// Esnek imzalı gösterge fabrikası: adları verilen metodlar arasından
+        /// ilk parametresi string (symbol) olanı seçer ve kalan parametreleri
+        /// tipe göre doldurur (SymbolPeriod→IndicatorPeriod, OHLCType→Close,
+        /// MovMethod→Exponential, int/double/decimal→verilen default'lar).
+        /// Doldurulamayan parametre tipi varsa o aday atlanır. Her hata null
+        /// döner — gösterge yoksa veri üretilmez, asla uydurulmaz.
+        /// </summary>
+        private object TryCreateFlexibleIndicator(
+            string[] methodNames, string symbol,
+            int defaultInt, double defaultDouble, decimal defaultDecimal)
+        {
+            try
+            {
+                foreach (MethodInfo method in GetType().GetMethods(
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (!methodNames.Any(name => string.Equals(method.Name, name, StringComparison.Ordinal)))
+                        continue;
+                    ParameterInfo[] parameters = method.GetParameters();
+                    if (parameters.Length < 2 || parameters[0].ParameterType != typeof(string))
+                        continue;
+                    var args = new object[parameters.Length];
+                    args[0] = symbol;
+                    bool resolvable = true;
+                    for (int i = 1; i < parameters.Length; i++)
+                    {
+                        Type type = parameters[i].ParameterType;
+                        if (type == typeof(SymbolPeriod)) args[i] = IndicatorPeriod;
+                        else if (type == typeof(OHLCType)) args[i] = OHLCType.Close;
+                        else if (type == typeof(MovMethod)) args[i] = MovMethod.Exponential;
+                        else if (type == typeof(int)) args[i] = defaultInt;
+                        else if (type == typeof(double)) args[i] = defaultDouble;
+                        else if (type == typeof(decimal)) args[i] = defaultDecimal;
+                        else if (parameters[i].HasDefaultValue) args[i] = parameters[i].DefaultValue;
+                        else { resolvable = false; break; }
+                    }
+                    if (!resolvable)
+                        continue;
+                    object created = method.Invoke(this, args);
+                    if (created != null)
+                        return created;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (MarketDataDiagnosticsEnabled)
+                    SafeDebug(string.Join("/", methodNames) + " unavailable symbol=" + symbol + " error=" + ex.Message);
             }
             return null;
         }
@@ -4531,6 +4768,17 @@ namespace Matriks.Lean.Algotrader
             features["atrPeriod"] = 14;
             features["atrTimeframe"] = atrTimeframe;
             features["volatilityMetricSource"] = volatility.Source;
+            // v2: MOST + ADX native göstergelerden (Faz 3). Gösterge yoksa
+            // alan hiç yazılmaz — Python tarafı None'ı fail-open işler.
+            decimal? nativeAdx = ReadIndicatorCurrentValue(_adxIndicatorBySymbol, symbol);
+            if (nativeAdx.HasValue && nativeAdx.Value >= 0m)
+                features["adx"] = ToDouble(nativeAdx.Value);
+            decimal? nativeMost = ReadIndicatorCurrentValue(_mostIndicatorBySymbol, symbol);
+            if (nativeMost.HasValue && nativeMost.Value > 0m && lastPrice > 0m)
+            {
+                features["most"] = ToDouble(nativeMost.Value);
+                features["mostSignal"] = lastPrice >= nativeMost.Value ? "LONG" : "SHORT";
+            }
             features["depthReliable"] = depthReliable;
             if (depthReliable)
             {

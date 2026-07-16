@@ -48,6 +48,8 @@ class TechnicalContext(_ContextModel):
     atr: FiniteFloat | None = None
     natr: FiniteFloat | None = None
     adx: FiniteFloat | None = None
+    most: FiniteFloat | None = None
+    mostSignal: str | None = None
     obvSlope: FiniteFloat | None = None
     vwapDistancePct: FiniteFloat | None = None
     alphaTrendSignal: str | None = None

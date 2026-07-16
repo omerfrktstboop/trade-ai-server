@@ -180,6 +180,11 @@ async def gateway_runtime_config() -> dict:
 
     config = {
         "ok": True,
+        # v2 kontrat sürümü (Faz 3): gateway ExpectedContractVersion=2 ile
+        # karşılaştırır; uyuşmazlık (alan eksikliği dahil) emir yolunu iki
+        # tarafta da fail-closed kapatır. Python ve C# yalnızca atomik deploy
+        # ile birlikte yükseltilir.
+        "contractVersion": 2,
         "symbols": sorted(symbols),
         "subscriptionSymbols": sorted(symbols),
         "marketIndexSymbol": market_index_symbol or None,

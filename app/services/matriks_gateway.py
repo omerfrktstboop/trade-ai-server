@@ -337,7 +337,7 @@ class MatriksGatewayClient:
         if response.status_code != 200:
             raise GatewayError(response.status_code, response.text)
 
-        data = response.json()
+        data = self._parse_json(response)
         if not isinstance(data, dict) or not data.get("ok"):
             error = (
                 data.get("error", "unknown")
@@ -357,7 +357,7 @@ class MatriksGatewayClient:
             raise GatewayUnavailable(f"Gateway config reload failed: {exc}") from exc
         if response.status_code != 200:
             raise GatewayError(response.status_code, response.text)
-        data = response.json()
+        data = self._parse_json(response)
         if not isinstance(data, dict) or not data.get("ok"):
             raise GatewayError(response.status_code, str(data))
         return data
@@ -373,7 +373,7 @@ class MatriksGatewayClient:
             ) from exc
         if response.status_code != 200:
             raise GatewayError(response.status_code, response.text)
-        data = response.json()
+        data = self._parse_json(response)
         if not isinstance(data, dict) or not data.get("ok"):
             raise GatewayError(response.status_code, str(data))
         return data
@@ -426,7 +426,7 @@ class MatriksGatewayClient:
             if response.status_code != 200:
                 raise GatewayError(response.status_code, response.text)
 
-            data = response.json()
+            data = self._parse_json(response)
             if not isinstance(data, dict) or not data.get("ok"):
                 error = (
                     data.get("error", "unknown")
@@ -440,6 +440,20 @@ class MatriksGatewayClient:
         raise GatewayUnavailable(
             f"Gateway unreachable at {self._base_url}{path}: {last_error}"
         ) from last_error
+
+    @staticmethod
+    def _parse_json(response: httpx.Response) -> Any:
+        """Gateway responded with HTTP 200 but the body may still be empty or
+        malformed (e.g. during a Matriks IQ algo reload) — treat that as a
+        gateway-level failure (GatewayError) instead of leaking a raw
+        JSONDecodeError to callers that only expect GatewayUnavailable/
+        GatewayError."""
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise GatewayError(
+                response.status_code, f"invalid JSON response: {exc}"
+            ) from exc
 
 
 # Modül seviyesinde paylaşılan tek client — scanner ve router'lar bunu kullanır.

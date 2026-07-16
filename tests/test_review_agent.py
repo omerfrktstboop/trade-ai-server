@@ -35,7 +35,7 @@ class FakeChatProvider:
         self.response_text = response_text
         self.calls: list[tuple[str, str]] = []
 
-    async def decide(self, payload):  # pragma: no cover — unused here
+    async def decide(self, payload, *, request_id=None):  # pragma: no cover — unused here
         raise NotImplementedError
 
     async def chat(

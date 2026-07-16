@@ -80,6 +80,10 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
             incoming_status = body.status.upper()
             order_qty = body.order_qty if body.order_qty is not None else body.qty
             filled_qty = body.filled_qty if body.filled_qty is not None else body.qty
+            # Fill'i, watcher'ın son gördüğü aktif hesap referansıyla damgala
+            # (Fix #4). Böylece DEMO ve REAL fill'leri günlük PnL'de ayrılır.
+            from app.services.account_watcher import account_watcher
+
             entry, event_applied = await apply_callback(
                 session,
                 request_id=body.request_id,
@@ -93,6 +97,7 @@ async def record_order_result(body: OrderResultRequest) -> OrderResultResponse:
                 limit_price=body.limit_price,
                 order_id=body.order_id,
                 message=body.matriks_message,
+                account_ref=account_watcher.current_account_ref(),
             )
             persisted = True
             applied_status = entry.status

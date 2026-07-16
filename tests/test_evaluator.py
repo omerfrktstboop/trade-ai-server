@@ -24,7 +24,9 @@ class StubProvider:
         self.raw = raw or {"action": "WAIT", "confidence": 0.0, "reason": "stub"}
         self.payloads: list[dict[str, Any]] = []
 
-    async def decide(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def decide(
+        self, payload: dict[str, Any], *, request_id: str | None = None
+    ) -> dict[str, Any]:
         self.payloads.append(payload)
         return self.raw
 

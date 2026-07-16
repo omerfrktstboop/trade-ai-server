@@ -66,6 +66,7 @@ async def _seed_fill(
     price: float,
     fees: float = 0.0,
     filled_at: datetime | None = None,
+    account_ref: str | None = None,
 ) -> None:
     order_log_id = await _seed_order_log(request_id, symbol, action)
     async with async_session_factory() as session:
@@ -75,6 +76,7 @@ async def _seed_fill(
                 request_id=request_id,
                 symbol=symbol,
                 action=action,
+                account_ref=account_ref,
                 fill_qty=Decimal(str(qty)),
                 fill_price=Decimal(str(price)),
                 gross_value_tl=Decimal(str(qty * price)),
@@ -228,6 +230,65 @@ async def test_missing_price_is_data_gap_not_zero():
     async with async_session_factory() as session:
         pnl = await get_daily_pnl(session, price_lookup={})
     assert any("UNREALIZED_PRICE_UNAVAILABLE" in gap for gap in pnl.data_gaps)
+
+
+# ── Fix #3: kronolojik replay (güncel lifecycle ortalamasına GÜVENME) ───────
+
+
+async def test_addon_buy_then_sell_uses_cost_at_sale_time_not_current_avg():
+    """Bugün: 10@100 al, 10@120 al (ort=110), sonra 10@130 sat. Doğru realized
+    kronolojik replay'e göre (130-110)*10=+200. Lifecycle güncel ortalaması
+    (satıştan sonra kalan lotların ortalaması) kullanılsaydı yanlış çıkardı."""
+    # Lifecycle güncel ortalaması kasıtlı olarak yanıltıcı (95) tohumlanır;
+    # replay bunu kullanmamalı.
+    await _seed_lifecycle("THYAO", opened_at=NOW, avg_entry=95.0, qty=10)
+    await _seed_fill("buy-r1", "THYAO", "BUY", qty=10, price=100.0,
+                     filled_at=NOW - timedelta(minutes=30))
+    await _seed_fill("buy-r2", "THYAO", "BUY", qty=10, price=120.0,
+                     filled_at=NOW - timedelta(minutes=20))
+    await _seed_fill("sell-r1", "THYAO", "SELL", qty=10, price=130.0,
+                     filled_at=NOW - timedelta(minutes=10))
+
+    async with async_session_factory() as session:
+        pnl = await get_daily_pnl(session, price_lookup={"THYAO": Decimal("120")})
+    assert pnl.realized_tl == Decimal("200")  # (130-110)*10
+
+
+async def test_two_partial_sells_at_different_prices_replay_correctly():
+    await _seed_lifecycle("THYAO", opened_at=NOW, avg_entry=100.0, qty=0)
+    await _seed_fill("buy-s", "THYAO", "BUY", qty=10, price=100.0,
+                     filled_at=NOW - timedelta(minutes=30))
+    await _seed_fill("sell-s1", "THYAO", "SELL", qty=4, price=110.0,
+                     filled_at=NOW - timedelta(minutes=20))
+    await _seed_fill("sell-s2", "THYAO", "SELL", qty=6, price=90.0,
+                     filled_at=NOW - timedelta(minutes=10))
+
+    async with async_session_factory() as session:
+        pnl = await get_daily_pnl(session, price_lookup={})
+    # (110-100)*4 + (90-100)*6 = 40 - 60 = -20
+    assert pnl.realized_tl == Decimal("-20")
+
+
+# ── Fix #4: hesap bazında ayrım ──────────────────────────────────────────────
+
+
+async def test_daily_pnl_split_by_account_ref():
+    await _seed_lifecycle("THYAO", opened_at=NOW, avg_entry=100.0, qty=0)
+    # DEMO hesabında zarar, REAL hesabında kâr.
+    await _seed_fill("buy-d", "THYAO", "BUY", qty=10, price=100.0,
+                     filled_at=NOW - timedelta(minutes=30), account_ref="demo")
+    await _seed_fill("sell-d", "THYAO", "SELL", qty=10, price=90.0,
+                     filled_at=NOW - timedelta(minutes=20), account_ref="demo")
+    await _seed_fill("buy-r", "THYAO", "BUY", qty=10, price=100.0,
+                     filled_at=NOW - timedelta(minutes=15), account_ref="real")
+    await _seed_fill("sell-r", "THYAO", "SELL", qty=10, price=115.0,
+                     filled_at=NOW - timedelta(minutes=10), account_ref="real")
+
+    async with async_session_factory() as session:
+        demo = await get_daily_pnl(session, price_lookup={}, account_ref="demo")
+        real = await get_daily_pnl(session, price_lookup={}, account_ref="real")
+    assert demo.realized_tl == Decimal("-100")  # DEMO REAL'i etkilemez
+    assert real.realized_tl == Decimal("150")
 
 
 # ── Limit uygulaması ────────────────────────────────────────────────────────

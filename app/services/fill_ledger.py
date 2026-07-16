@@ -103,6 +103,7 @@ async def record_fill_delta(
     limit_price: float | Decimal | None,
     order_id: str | None,
     filled_at: datetime,
+    account_ref: str | None = None,
 ) -> OrderFill | None:
     """Create at most one OrderFill for the new quantity in this callback.
 
@@ -165,6 +166,7 @@ async def record_fill_delta(
         order_log_id=row.id,
         request_id=row.request_id,
         order_id=order_id or row.order_id,
+        account_ref=(account_ref or None),
         symbol=row.symbol.upper(),
         action=action,
         fill_qty=delta_qty,

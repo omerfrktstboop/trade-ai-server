@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -757,6 +758,7 @@ class TestDeepSeekToolLoop:
                     "name": name,
                     "args": args,
                     "caller": caller,
+                    "request_id": request_id,
                     "symbol_scope": symbol_scope,
                 }
             )
@@ -902,6 +904,40 @@ class TestDeepSeekToolLoop:
 
         assert result["action"] == "WAIT"
         assert "Could not parse model response" in result["reason"]
+
+    @pytest.mark.asyncio
+    async def test_evaluation_request_id_forwarded_to_call_tool(self, monkeypatch):
+        """Fix #5: değerlendirme request_id'si tool audit'ine geçirilir."""
+        calls = self._patch_call_tool(monkeypatch)
+        provider = self._tools_provider()
+        round1 = _mock_session(
+            _msg_resp(
+                {
+                    "content": None,
+                    "tool_calls": [_tool_call("get_snapshot", {"symbol": "THYAO"})],
+                }
+            )
+        )
+        round2 = _mock_session(_msg_resp(FINAL_BUY))
+        with patch("aiohttp.ClientSession", side_effect=[round1, round2]):
+            await provider.decide(COMPACT_CONTEXT, request_id="eval-req-77")
+        assert calls[0]["request_id"] == "eval-req-77"
+
+    @pytest.mark.asyncio
+    async def test_hard_timeout_returns_wait_when_round_hangs(self, monkeypatch):
+        """Fix #5: takılan bir LLM turu 12 sn'lik kesin asyncio.timeout ile
+        kesilir ve WAIT fallback döner."""
+        self._patch_call_tool(monkeypatch)
+        provider = self._tools_provider(tool_budget_seconds=0.2)
+
+        async def _hang(*_a, **_k):
+            await asyncio.sleep(5)
+            return None, "unreached"
+
+        monkeypatch.setattr(provider, "_tool_round_completion", _hang)
+        result = await provider.decide(COMPACT_CONTEXT)
+        assert result["action"] == "WAIT"
+        assert "hard timeout" in result["reason"]
 
     @pytest.mark.asyncio
     async def test_tool_loop_uses_tool_aware_system_prompt(self, monkeypatch):

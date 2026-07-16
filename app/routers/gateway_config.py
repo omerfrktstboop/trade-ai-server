@@ -214,6 +214,15 @@ async def gateway_runtime_config() -> dict:
         "realLiveArmed": values["botRealLiveArmed"] == "true",
         "requireDemoAccount": values["botRequireDemoAccount"] == "true",
         "demoAccountConfirmed": values["botDemoAccountConfirmed"] == "true",
+        # v2 mod/arming kontratı (Faz 4 — C# CheckDispatchGates bunları okur;
+        # eksik gönderilirse gateway fail-closed OBSERVE_ONLY'ye düşer).
+        "systemMode": (
+            "AUTO_TRADE"
+            if values.get("systemMode", "OBSERVE_ONLY").strip().upper() == "AUTO_TRADE"
+            else "OBSERVE_ONLY"
+        ),
+        "realAccountArmed": values.get("realAccountArmed", "false") == "true",
+        "armedAccountRef": (values.get("armedAccountRef", "") or "").strip(),
         "maxOrderValueTl": profile.max_order_value_tl,
         "maxQtyPerOrder": profile.max_qty_per_order,
         "maxOrdersPerDay": profile.max_orders_per_day,

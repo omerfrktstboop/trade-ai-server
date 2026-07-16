@@ -92,6 +92,18 @@ async def arm_real_account(request: Request, body: ArmRequest) -> dict:
         await set_admin_config_value(
             session, "armedAccountRef", account_ref, changed_by=identity, reason=reason
         )
+        # Oturum referansı + hesap türünü de kalıcı sakla: oturum değişince
+        # watcher otomatik disarm eder (Fix #2).
+        await set_admin_config_value(
+            session,
+            "armedAccountSessionRef",
+            session_ref,
+            changed_by=identity,
+            reason=reason,
+        )
+        await set_admin_config_value(
+            session, "armedAccountType", account_type, changed_by=identity, reason=reason
+        )
         # confirmText doğrulaması yukarıda yapıldı — RISKY onayı bu akışın
         # kendisidir (panelin genel CONFIRM'i değil).
         await set_admin_config_value(

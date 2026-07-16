@@ -189,11 +189,15 @@ class AiProvider(ABC):
     consecutive_failures: int = 0
 
     @abstractmethod
-    async def decide(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def decide(
+        self, payload: dict[str, Any], *, request_id: str | None = None
+    ) -> dict[str, Any]:
         """Produce a trading decision from an ``AiDecisionContext`` payload.
 
         Parameters:
             payload: Serialized ``ai-decision-context-v1`` fields only.
+            request_id: Evaluation request id, forwarded to tool-call audit
+                rows so a tool invocation can be traced to its evaluation.
 
         Returns:
             A dict with at minimum:
@@ -225,7 +229,9 @@ class AiProvider(ABC):
 class MockAiProvider(AiProvider):
     """Always returns WAIT — safe no-op for testing and development."""
 
-    async def decide(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def decide(
+        self, payload: dict[str, Any], *, request_id: str | None = None
+    ) -> dict[str, Any]:
         _compact_context_payload(payload)
         logger.debug("MockAiProvider.decide called — returning WAIT")
         return {
@@ -316,7 +322,9 @@ class DeepSeekProvider(AiProvider):
         self.consecutive_failures = 0
         self.last_failure_at = None
 
-    async def decide(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def decide(
+        self, payload: dict[str, Any], *, request_id: str | None = None
+    ) -> dict[str, Any]:
         """Send compact decision context to DeepSeek, parse JSON response.
 
         On any error (network, timeout, parse) → WAIT fallback. Network and
@@ -349,7 +357,21 @@ class DeepSeekProvider(AiProvider):
         self.last_attempt_at = t0
 
         if self.tools_enabled:
-            result = await self._decide_with_tools(payload, t0)
+            # Fix #5: 12 sn'lik toplam bütçe LLM turları + tool çağrıları +
+            # audit dahil KESİN bir asyncio.timeout ile uygulanır. Deadline
+            # kontrolleri son turu erken zorlar; bu timeout ise takılan bir
+            # ağ/tool çağrısında sert üst sınırdır.
+            try:
+                async with asyncio.timeout(self.tool_budget_seconds):
+                    result = await self._decide_with_tools(payload, t0, request_id)
+            except asyncio.TimeoutError:
+                result = {
+                    **_WAIT_FALLBACK,
+                    "reason": (
+                        f"Tool budget hard timeout after {self.tool_budget_seconds}s"
+                    ),
+                    "_transient_failure": True,
+                }
         else:
             messages = [
                 {"role": "system", "content": get_trading_system_prompt()},
@@ -377,7 +399,7 @@ class DeepSeekProvider(AiProvider):
     # ── Tool-calling döngüsü (v2 Faz 2) ───────────────────────────────────
 
     async def _decide_with_tools(
-        self, payload: dict[str, Any], t0: float
+        self, payload: dict[str, Any], t0: float, request_id: str | None = None
     ) -> dict[str, Any]:
         """Sınırlı tool-calling döngüsü: en fazla MAX_TOOL_ROUNDS tur,
         MAX_TOOL_EXECUTIONS çağrı ve toplam tool_budget_seconds wall-clock
@@ -457,6 +479,7 @@ class DeepSeekProvider(AiProvider):
                             name,
                             args,
                             caller="deepseek",
+                            request_id=request_id,
                             symbol_scope=symbol_scope or None,
                         )
                         tool_names_used.append(name)

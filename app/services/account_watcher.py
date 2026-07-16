@@ -59,6 +59,10 @@ class AccountWatcher:
         self._last_session_ref = None
         self._last_account_type = None
 
+    def current_account_ref(self) -> str | None:
+        """Watcher'ın son gördüğü aktif hesap referansı (fill damgalama için)."""
+        return self._last_account_ref
+
     async def check(
         self, health: dict[str, Any], session: AsyncSession
     ) -> AccountCheckResult:
@@ -118,6 +122,9 @@ class AccountWatcher:
         armed_ref = (
             await get_admin_config_value(session, "armedAccountRef")
         ).strip()
+        armed_session_ref = (
+            await get_admin_config_value(session, "armedAccountSessionRef")
+        ).strip()
 
         if changed_events:
             for event_type, previous_ref in changed_events:
@@ -154,10 +161,22 @@ class AccountWatcher:
 
         self._remember(account_ref, session_ref, account_type)
 
-        # Arm edilmiş REAL hesap referansı canlı hesapla uyuşmuyorsa disarm.
+        # Arm edilmiş REAL hesap referansı VEYA oturum referansı canlı hesapla
+        # uyuşmuyorsa disarm (restart sonrası baseline yokken bile — in-memory
+        # baseline'a bağlı değil, DB'deki arm anındaki değerlerle karşılaştırır).
+        mismatch_reason = None
         if armed and armed_ref and account_ref != armed_ref:
+            mismatch_reason = "live accountRef does not match armedAccountRef"
+        elif (
+            armed
+            and armed_session_ref
+            and session_ref
+            and session_ref != armed_session_ref
+        ):
+            mismatch_reason = "live accountSessionRef does not match armed session"
+        if mismatch_reason is not None:
             await disarm_real_account(
-                session, "auto-disarm: armed account ref mismatch"
+                session, f"auto-disarm: {mismatch_reason}"
             )
             await self._record(
                 session,
@@ -166,11 +185,11 @@ class AccountWatcher:
                 account_session_ref=session_ref,
                 account_type=account_type,
                 previous_ref=armed_ref,
-                detail="live accountRef does not match armedAccountRef",
+                detail=mismatch_reason,
             )
             return AccountCheckResult(
                 False,
-                "armed account mismatch — auto-disarmed",
+                "armed account/session mismatch — auto-disarmed",
                 account_ref=account_ref,
                 account_type=account_type,
             )

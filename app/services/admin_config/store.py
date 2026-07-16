@@ -215,12 +215,16 @@ async def disarm_real_account(
     otomatik yazılır; account_events satırını ÇAĞIRAN taraf ekler (olayın
     türünü ve önceki referansı yalnızca o bilir).
     """
-    await set_admin_config_value(
-        session, "realAccountArmed", "false", changed_by=changed_by, reason=reason
-    )
-    await set_admin_config_value(
-        session, "armedAccountRef", "", changed_by=changed_by, reason=reason
-    )
+    for key in (
+        "realAccountArmed",
+        "armedAccountRef",
+        "armedAccountSessionRef",
+        "armedAccountType",
+    ):
+        default = "false" if key == "realAccountArmed" else ""
+        await set_admin_config_value(
+            session, key, default, changed_by=changed_by, reason=reason
+        )
 
 
 async def _env_overridable_bool(

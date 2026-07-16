@@ -273,7 +273,9 @@ class TestResearchBudget:
 
 
 class _ResearchProvider:
-    async def decide(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def decide(
+        self, payload: dict[str, Any], *, request_id: str | None = None
+    ) -> dict[str, Any]:
         assert payload["schemaVersion"] == "ai-decision-context-v1"
         assert payload["evaluationPurpose"] == "RESEARCH_DISCOVERY"
         assert "allowOrder" not in payload

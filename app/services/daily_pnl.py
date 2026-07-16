@@ -64,25 +64,22 @@ async def _day_start_utc(session: AsyncSession) -> datetime:
     )
 
 
-async def _lifecycle_covering(
-    session: AsyncSession, symbol: str, at: datetime
-) -> PositionLifecycle | None:
-    """Verilen an için geçerli lifecycle (satışın maliyet bazı)."""
-    stmt = (
-        select(PositionLifecycle)
-        .where(
-            PositionLifecycle.symbol == symbol,
-            PositionLifecycle.opened_at <= at,
+async def _fallback_avg_cost(
+    session: AsyncSession, symbol: str
+) -> Decimal | None:
+    """Fill geçmişi eksik satışlar için son çare maliyet bazı: en güncel
+    lifecycle'ın ortalama giriş fiyatı. Yoksa None (data-gap)."""
+    row = (
+        await session.execute(
+            select(PositionLifecycle)
+            .where(PositionLifecycle.symbol == symbol)
+            .order_by(PositionLifecycle.opened_at.desc())
+            .limit(1)
         )
-        .order_by(PositionLifecycle.opened_at.desc())
-        .limit(1)
-    )
-    row = (await session.execute(stmt)).scalars().first()
-    if row is None:
+    ).scalars().first()
+    if row is None or row.average_entry_price is None:
         return None
-    if row.closed_at is not None and _aware(row.closed_at) < at:
-        return None
-    return row
+    return row.average_entry_price
 
 
 async def get_daily_pnl(
@@ -90,28 +87,54 @@ async def get_daily_pnl(
     gateway=None,
     *,
     price_lookup: dict[str, Decimal] | None = None,
+    account_ref: str | None = None,
 ) -> DailyPnl:
     """Bugünün realized + (bugünkü lotların) unrealized K/Z'si.
 
-    ``price_lookup`` verilirse canlı fiyatlar oradan okunur (test/veri
-    enjeksiyonu); yoksa ``gateway.get_snapshot`` kullanılır; o da yoksa
-    unrealized tarafı data-gap olarak raporlanır.
+    ``account_ref`` verilirse yalnızca o hesaba (ve hesabı bilinmeyen legacy
+    NULL) fill'ler sayılır — DEMO ve REAL karışmaz (Fix #4).
+
+    Realized, lifecycle'ın GÜNCEL ortalamasından DEĞİL; sembolün tüm
+    fill'leri kronolojik replay edilerek satış anındaki ağırlıklı maliyetten
+    hesaplanır (Fix #3) — ek alım sonrası satış, kısmi satış ve taşınan
+    pozisyonlar doğru işlenir.
+
+    ``price_lookup`` verilirse canlı fiyatlar oradan; yoksa
+    ``gateway.get_snapshot`` kullanılır; o da yoksa unrealized data-gap.
     """
     day_start = await _day_start_utc(session)
     gaps: list[str] = []
 
-    fills_today = list(
+    def _account_match(fill: OrderFill) -> bool:
+        if account_ref is None:
+            return True
+        return fill.account_ref is None or fill.account_ref == account_ref
+
+    # Sembol başına TÜM fill'ler kronolojik — running ağırlıklı maliyet için.
+    all_fills = list(
         (
             await session.execute(
-                select(OrderFill)
-                .where(OrderFill.filled_at >= day_start)
-                .order_by(OrderFill.filled_at.asc(), OrderFill.id.asc())
+                select(OrderFill).order_by(
+                    OrderFill.filled_at.asc(), OrderFill.id.asc()
+                )
             )
         )
         .scalars()
         .all()
     )
+    fills_by_symbol: dict[str, list[OrderFill]] = {}
+    for fill in all_fills:
+        if not _account_match(fill):
+            continue
+        fills_by_symbol.setdefault(fill.symbol.upper(), []).append(fill)
 
+    fills_today = [
+        fill
+        for fill in all_fills
+        if _account_match(fill) and _aware(fill.filled_at) >= day_start
+    ]
+
+    # ── Realized: kronolojik replay ────────────────────────────────────────
     realized = Decimal("0")
     fees = Decimal("0")
     for fill in fills_today:
@@ -120,16 +143,34 @@ async def get_daily_pnl(
             + (fill.exchange_fee_tl or 0)
             + (fill.other_fee_tl or 0)
         )
-        if fill.action != "SELL":
-            continue
-        lifecycle = await _lifecycle_covering(
-            session, fill.symbol, _aware(fill.filled_at)
-        )
-        avg_entry = lifecycle.average_entry_price if lifecycle is not None else None
-        if avg_entry is None:
-            gaps.append(f"REALIZED_COST_UNKNOWN:{fill.symbol}:{fill.request_id}")
-            continue
-        realized += (fill.fill_price - avg_entry) * fill.fill_qty
+
+    for symbol, fills in fills_by_symbol.items():
+        running_qty = Decimal("0")
+        running_cost = Decimal("0")  # ağırlıklı toplam maliyet (qty*avg)
+        for fill in fills:
+            if fill.action == "BUY":
+                running_qty += fill.fill_qty
+                running_cost += fill.fill_qty * fill.fill_price
+                continue
+            # SELL: satış anındaki ağırlıklı ortalama maliyet.
+            if running_qty > 0:
+                avg_cost = running_cost / running_qty
+            else:
+                # Fill geçmişi eksik (ör. dünden taşınan lotun açılış fill'i
+                # yok). Lifecycle ortalamasına düş; o da yoksa data-gap.
+                avg_cost = await _fallback_avg_cost(session, symbol)
+                if avg_cost is None:
+                    if _aware(fill.filled_at) >= day_start:
+                        gaps.append(
+                            f"REALIZED_COST_UNKNOWN:{symbol}:{fill.request_id}"
+                        )
+                    continue
+            sold_qty = fill.fill_qty
+            if _aware(fill.filled_at) >= day_start:
+                realized += (fill.fill_price - avg_cost) * sold_qty
+            # Running pozisyonu düş (maliyet ortalaması değişmez).
+            running_qty -= sold_qty
+            running_cost = avg_cost * running_qty if running_qty > 0 else Decimal("0")
     realized -= fees
 
     # ── Unrealized: sadece bugün açılan/eklenen lotlar ─────────────────────
@@ -211,8 +252,13 @@ async def is_daily_loss_limit_breached(
     gateway=None,
     *,
     price_lookup: dict[str, Decimal] | None = None,
+    account_ref: str | None = None,
 ) -> tuple[bool, str | None]:
-    """(aşıldı mı, gerekçe). Limit 0/geçersiz → devre dışı (False)."""
+    """(aşıldı mı, gerekçe). Limit 0/geçersiz → devre dışı (False).
+
+    ``account_ref`` verilmezse aktif hesap watcher'dan okunur — limit sadece
+    o hesabın (DEMO veya REAL) fill'lerine göre değerlendirilir (Fix #4).
+    """
     try:
         raw_limit = await get_admin_config_value(session, "dailyMaxLossTl")
         limit = Decimal(str(raw_limit))
@@ -222,7 +268,14 @@ async def is_daily_loss_limit_breached(
     if limit <= 0:
         return False, None
 
-    pnl = await get_daily_pnl(session, gateway, price_lookup=price_lookup)
+    if account_ref is None:
+        from app.services.account_watcher import account_watcher
+
+        account_ref = account_watcher.current_account_ref()
+
+    pnl = await get_daily_pnl(
+        session, gateway, price_lookup=price_lookup, account_ref=account_ref
+    )
 
     # Realized tek başına aşıyorsa fail-closed — veri boşlukları önemsiz.
     if pnl.realized_tl <= -limit:

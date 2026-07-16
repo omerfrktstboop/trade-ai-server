@@ -140,6 +140,19 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "Arm edilen hesabın sha256 referansı — gateway'in verdiği değer "
         "DOĞRUDAN saklanır (yeniden hash yok). Sadece arming akışı yazar.",
     ),
+    "armedAccountSessionRef": ConfigDefinition(
+        "armedAccountSessionRef",
+        "string",
+        "",
+        "Arm anındaki hesap oturum referansı (sha256). Oturum değişirse "
+        "watcher otomatik disarm eder. Sadece arming akışı yazar.",
+    ),
+    "armedAccountType": ConfigDefinition(
+        "armedAccountType",
+        "string",
+        "",
+        "Arm anındaki hesap türü (DEMO|REAL). Sadece arming akışı yazar.",
+    ),
     "aiToolCallingEnabled": ConfigDefinition(
         "aiToolCallingEnabled",
         "bool",
@@ -576,7 +589,13 @@ RISKY_CONFIG_KEYS = {
 # tek yazma yolu arming endpoint'leridir (CONFIRM REAL ACCOUNT + canlı hesap
 # doğrulaması). botAllowMarketOrders kod kilididir.
 READ_ONLY_CONFIG_KEYS = frozenset(
-    {"botAllowMarketOrders", "realAccountArmed", "armedAccountRef"}
+    {
+        "botAllowMarketOrders",
+        "realAccountArmed",
+        "armedAccountRef",
+        "armedAccountSessionRef",
+        "armedAccountType",
+    }
 )
 
 EMPTY_ALLOWED_CONFIG_KEYS = frozenset(

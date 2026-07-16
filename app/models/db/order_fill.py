@@ -33,6 +33,11 @@ class OrderFill(Base):
     symbol: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     action: Mapped[str] = mapped_column(String(8), nullable=False)
 
+    # Hesap referansı (sha256): fill'in ait olduğu hesap. DEMO ve REAL
+    # fill'lerinin günlük PnL'de karışmasını önler (Fix #4). Fill anında aktif
+    # hesabın accountRef'iyle damgalanır; bilinmiyorsa None.
+    account_ref: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
     fill_qty: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
     fill_price: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)

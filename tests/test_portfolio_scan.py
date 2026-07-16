@@ -145,6 +145,60 @@ class TestPortfolioScan:
         # trade-watchlist row or a held position the normal scanner is empty.
         assert calls == []
 
+    async def test_significance_baseline_updates_only_for_llm_decisions(
+        self, monkeypatch, runtime_stubs
+    ):
+        """Fix #6: baseline yalnızca decisionSource=='llm' kararlardan sonra
+        güncellenir; preflight-gate/override kararları baseline oluşturmaz."""
+        from app.models.signal import (
+            OrderType,
+            SignalAction,
+            SignalResponse,
+        )
+        from app.services.evaluation.pipeline import EvaluationResult
+        from app.services.significance import significance_detector
+
+        significance_detector.reset()
+        await _add_position("THYAO", qty=10.0, avg_price=300.0)
+
+        def _result(source: str) -> EvaluationResult:
+            resp = SignalResponse(
+                requestId="THYAO-x",
+                symbol="THYAO",
+                action=SignalAction.WAIT,
+                qty=0,
+                orderType=OrderType.NONE,
+                price=None,
+                confidenceScore=0.0,
+                riskScore=0.0,
+                allowOrder=False,
+                requiresConfirmation=False,
+                reason="test",
+            )
+            return EvaluationResult(
+                response=resp, mode=SignalMode.PAPER, decision_source=source
+            )
+
+        # 1) preflight-gate kararı → baseline OLUŞMAZ.
+        async def eval_gate(symbol: str, **kwargs: Any):
+            return _result("preflight-gate")
+
+        monkeypatch.setattr(scanner_module, "evaluate_symbol", eval_gate)
+        scanner = SymbolScanner(gateway=make_gateway_client(FakeGateway()))
+        await scanner.tick()
+        assert "THYAO" not in significance_detector._baseline
+
+        # 2) llm kararı → baseline OLUŞUR.
+        scanner._last_portfolio_scan = None
+        scanner._last_scan_by_symbol.clear()
+
+        async def eval_llm(symbol: str, **kwargs: Any):
+            return _result("llm")
+
+        monkeypatch.setattr(scanner_module, "evaluate_symbol", eval_llm)
+        await scanner.tick()
+        assert "THYAO" in significance_detector._baseline
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # positionContext (evaluator)

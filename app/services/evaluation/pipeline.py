@@ -114,6 +114,10 @@ class EvaluationResult:
     evaluation_purpose: str = "TRADING"
     research_score: float | None = None
     raw_action: SignalAction | None = None
+    # "llm" | "preflight-gate" | "admin-override" | "system-gate" | None.
+    # Significance dedektörünün baseline'ı YALNIZCA "llm" iken güncellenir
+    # (Fix #6): kapı WAIT'i veya admin override baseline oluşturmamalı.
+    decision_source: str | None = None
 
 
 async def with_runtime_controls(
@@ -476,6 +480,7 @@ async def evaluate_symbol(
                 override = await consume_override(ov_session, sig_req.symbol)
             if override is not None:
                 raw = override_to_raw_decision(override)
+                payload["decisionSource"] = "admin-override"
         except Exception:
             logger.exception("Failed to check signal override for %s", sig_req.symbol)
 
@@ -503,7 +508,7 @@ async def evaluate_symbol(
     # değeri yoktu. Sınıf kullanım dışıdır ve Faz 8 cutover'ında silinecek.
     if raw is None:
         provider = provider or get_default_provider()
-        raw = await provider.decide(ai_context)
+        raw = await provider.decide(ai_context, request_id=sig_req.request_id)
         payload["decisionSource"] = "llm"
 
     # == 7. RiskEngine (makro rejim filtresiyle) ==========================
@@ -548,6 +553,7 @@ async def evaluate_symbol(
             _safe_float(raw.get("research_score")) if "research_score" in raw else None
         ),
         raw_action=decision.action,
+        decision_source=payload.get("decisionSource"),
     )
 
 

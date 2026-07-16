@@ -156,6 +156,27 @@ def test_arm_requires_admin_auth(client, monkeypatch):
     assert resp.status_code == 401
 
 
+def test_arm_persists_session_ref_and_type(client, admin_headers, monkeypatch):
+    """Fix #2: arming, accountSessionRef ve hesap türünü de kalıcı saklar."""
+    monkeypatch.setattr(arming_module, "gateway_client", FakeAccountGateway())
+    client.post(
+        "/api/admin/arm-real-account",
+        headers=admin_headers,
+        json={"confirmText": "CONFIRM REAL ACCOUNT"},
+    )
+
+    async def _read():
+        async with async_session_factory() as session:
+            return (
+                await get_admin_config_value(session, "armedAccountSessionRef"),
+                await get_admin_config_value(session, "armedAccountType"),
+            )
+
+    session_ref, acct_type = asyncio.run(_read())
+    assert session_ref == SESSION_1
+    assert acct_type == "REAL"
+
+
 def test_disarm_clears_state_and_writes_event(client, admin_headers, monkeypatch):
     monkeypatch.setattr(arming_module, "gateway_client", FakeAccountGateway())
     client.post(
@@ -177,7 +198,7 @@ def test_disarm_clears_state_and_writes_event(client, admin_headers, monkeypatch
 # ── Account watcher ─────────────────────────────────────────────────────────
 
 
-async def _arm_directly(ref: str = REF_A) -> None:
+async def _arm_directly(ref: str = REF_A, session_ref: str = SESSION_1) -> None:
     async with async_session_factory() as session:
         await set_admin_config_value(
             session,
@@ -188,6 +209,9 @@ async def _arm_directly(ref: str = REF_A) -> None:
         )
         await set_admin_config_value(
             session, "armedAccountRef", ref, changed_by="test"
+        )
+        await set_admin_config_value(
+            session, "armedAccountSessionRef", session_ref, changed_by="test"
         )
 
 
@@ -257,6 +281,23 @@ async def test_watcher_type_change_produces_type_event():
         await session.commit()
     assert changed.dispatch_allowed is False
     assert len(await _events("TYPE_CHANGED")) == 1
+
+
+async def test_watcher_armed_session_mismatch_auto_disarms():
+    """Fix #2: aynı hesap ama farklı oturum (restart/yeniden login) → disarm.
+    Baseline in-memory olmadan bile DB'deki armed session ref ile karşılaştırır."""
+    await _arm_directly(REF_A, session_ref=SESSION_1)
+    watcher = AccountWatcher()  # taze baseline (restart senaryosu)
+    async with async_session_factory() as session:
+        result = await watcher.check(
+            _health(account_type="REAL", session_ref=SESSION_2), session
+        )
+        await session.commit()
+    assert result.dispatch_allowed is False
+    assert "mismatch" in result.reason
+    armed, _ = await _armed_state()
+    assert armed is False
+    assert len(await _events("DISARMED")) == 1
 
 
 async def test_watcher_armed_ref_mismatch_auto_disarms():

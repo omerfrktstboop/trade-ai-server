@@ -734,9 +734,10 @@ class SymbolScanner:
             # Normal tarama zamanlayıcısını da tazele - aynı tick içinde
             # sembol ikinci kez değerlendirilmesin.
             self._last_scan_by_symbol[symbol] = now
-            # Gerçek bir AI değerlendirmesi yapıldı → baseline güncellenir;
-            # skip edilen taramalar baseline'ı asla değiştirmez.
-            if observation is not None:
+            # Baseline YALNIZCA gerçek bir LLM kararından sonra güncellenir
+            # (Fix #6): preflight-gate WAIT'i, admin override veya sistem
+            # kapısı baseline oluşturmamalı — yoksa değişimler kaçırılır.
+            if observation is not None and result.decision_source == "llm":
                 significance_detector.record_ai_evaluation(observation)
             response = result.response
             logger.info(

@@ -51,6 +51,38 @@ def test_gateway_config_payload_carries_contract_version_2(_db):
     assert "enableDemoOrders" in config
 
 
+def test_gateway_config_carries_v2_mode_and_arming_fields(_db):
+    """Fix #1: C# CheckDispatchGates bu üç alanı okur; eksik gönderilirse
+    gateway fail-closed OBSERVE_ONLY'ye düşer ve AUTO_TRADE asla çalışmaz."""
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {settings.api_token}"}
+    config = client.get("/api/gateway/config", headers=headers).json()
+    assert config["systemMode"] == "OBSERVE_ONLY"  # default
+    assert config["realAccountArmed"] is False
+    assert config["armedAccountRef"] == ""
+
+
+def test_gateway_config_reflects_auto_trade_when_set(_db):
+    from app.db.session import async_session_factory
+    from app.services.admin_config import RISKY_CONFIRMATION, set_admin_config_value
+
+    async def _arm():
+        async with async_session_factory() as session:
+            await set_admin_config_value(
+                session,
+                "systemMode",
+                "AUTO_TRADE",
+                changed_by="test",
+                confirmation=RISKY_CONFIRMATION,
+            )
+
+    asyncio.run(_arm())
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {settings.api_token}"}
+    config = client.get("/api/gateway/config", headers=headers).json()
+    assert config["systemMode"] == "AUTO_TRADE"
+
+
 # ── C# tarafı: kaynak invariant'ları ────────────────────────────────────────
 
 

@@ -30,6 +30,16 @@ _WAIT_FALLBACK: dict[str, Any] = {
     "reason": "Provider fallback — safe WAIT",
 }
 
+# ── Tool-calling sınırları (v2 Faz 2, ilke #4) ────────────────────────────────
+# Bütçe toplam wall-clock süredir: LLM turları + tool çağrıları dahil.
+MAX_TOOL_ROUNDS = 4
+MAX_TOOL_EXECUTIONS = 6
+
+_BUDGET_EXHAUSTED_NUDGE = (
+    "Tool budget exhausted — return the final JSON decision now, "
+    "using the data you already have."
+)
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -254,11 +264,22 @@ class DeepSeekProvider(AiProvider):
         max_attempts: int | None = None,
         degraded_threshold: int | None = None,
         probe_interval_seconds: float | None = None,
+        tools_enabled: bool | None = None,
+        tool_budget_seconds: float | None = None,
     ) -> None:
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        # v2 Faz 2: bayrak kapalıyken (default) tek-atış davranış birebir.
+        self.tools_enabled = (
+            tools_enabled if tools_enabled is not None else settings.ai_tools_enabled
+        )
+        self.tool_budget_seconds = float(
+            tool_budget_seconds
+            if tool_budget_seconds is not None
+            else settings.deepseek_tool_budget_seconds
+        )
         self.max_attempts = max(1, max_attempts or settings.deepseek_max_attempts)
         self.degraded_threshold = max(
             1, degraded_threshold or settings.ai_degraded_threshold
@@ -324,30 +345,210 @@ class DeepSeekProvider(AiProvider):
                     ),
                 }
 
-        messages = [
-            {"role": "system", "content": get_trading_system_prompt()},
-            {"role": "user", "content": _build_payload_str(payload)},
-        ]
-
-        body = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0.3,
-            # 500 (was 300): the mandatory bear_case field for BUYs adds 1-2
-            # sentences to the JSON output — a truncated response fails
-            # _extract_json and falls back to WAIT, so leave headroom.
-            "max_tokens": 500,
-        }
-
         t0 = time.monotonic()
         self.last_attempt_at = t0
-        result = await self._call_with_retry(body, t0)
+
+        if self.tools_enabled:
+            result = await self._decide_with_tools(payload, t0)
+        else:
+            messages = [
+                {"role": "system", "content": get_trading_system_prompt()},
+                {"role": "user", "content": _build_payload_str(payload)},
+            ]
+
+            body = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.3,
+                # 500 (was 300): the mandatory bear_case field for BUYs adds 1-2
+                # sentences to the JSON output — a truncated response fails
+                # _extract_json and falls back to WAIT, so leave headroom.
+                "max_tokens": 500,
+            }
+            result = await self._call_with_retry(body, t0)
+
         if result.get("_transient_failure"):
             self._record_failure()
             result = {k: v for k, v in result.items() if k != "_transient_failure"}
         else:
             self._record_success()
         return result
+
+    # ── Tool-calling döngüsü (v2 Faz 2) ───────────────────────────────────
+
+    async def _decide_with_tools(
+        self, payload: dict[str, Any], t0: float
+    ) -> dict[str, Any]:
+        """Sınırlı tool-calling döngüsü: en fazla MAX_TOOL_ROUNDS tur,
+        MAX_TOOL_EXECUTIONS çağrı ve toplam tool_budget_seconds wall-clock
+        (LLM turları dahil). Tool hataları döngüyü asla kırmaz; her hata
+        modele ``{"error": ...}`` içeriği olarak döner. Her hata yolu WAIT
+        fallback'ine iner — asla exception fırlatmaz."""
+        # Lazy import: registry → (lazy) pipeline → ai_provider döngüsünü
+        # module-import seviyesinde kurmamak için.
+        from app.tools import call_tool, openai_tool_definitions
+
+        symbol_scope = str(payload.get("symbol") or "").strip().upper()
+        deadline = t0 + self.tool_budget_seconds
+        tools = openai_tool_definitions("ai")
+        tool_names_used: list[str] = []
+        executions = 0
+
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": get_trading_system_prompt(tools_enabled=True)},
+            {"role": "user", "content": _build_payload_str(payload)},
+        ]
+
+        for round_index in range(MAX_TOOL_ROUNDS + 1):
+            force_final = (
+                round_index >= MAX_TOOL_ROUNDS
+                or executions >= MAX_TOOL_EXECUTIONS
+                or time.monotonic() >= deadline
+            )
+            if force_final and round_index > 0:
+                messages.append({"role": "user", "content": _BUDGET_EXHAUSTED_NUDGE})
+
+            body: dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.3,
+                "max_tokens": 500,
+                "tools": tools,
+                "tool_choice": "none" if force_final else "auto",
+            }
+            remaining = deadline - time.monotonic()
+            per_call_timeout = min(self.timeout, max(2.0, remaining))
+            message, failure_reason = await self._tool_round_completion(
+                body, per_call_timeout
+            )
+            if message is None:
+                return {
+                    **_WAIT_FALLBACK,
+                    "reason": failure_reason or "Unknown error",
+                    "_transient_failure": True,
+                }
+
+            tool_calls = message.get("tool_calls") or []
+            if tool_calls and not force_final:
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": message.get("content") or "",
+                        "tool_calls": tool_calls,
+                    }
+                )
+                for tc in tool_calls:
+                    fn = tc.get("function") or {}
+                    name = str(fn.get("name") or "")
+                    if executions >= MAX_TOOL_EXECUTIONS or time.monotonic() >= deadline:
+                        result: dict[str, Any] = {
+                            "tool": name,
+                            "error": "tool budget exhausted",
+                        }
+                    else:
+                        executions += 1
+                        try:
+                            args = json.loads(fn.get("arguments") or "{}")
+                            if not isinstance(args, dict):
+                                args = {}
+                        except json.JSONDecodeError:
+                            args = {}
+                        result = await call_tool(
+                            name,
+                            args,
+                            caller="deepseek",
+                            symbol_scope=symbol_scope or None,
+                        )
+                        tool_names_used.append(name)
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": str(tc.get("id") or ""),
+                            "content": json.dumps(result, ensure_ascii=False),
+                        }
+                    )
+                continue
+
+            content = message.get("content") or ""
+            parsed = _extract_json(content) if content else None
+            if parsed is None:
+                logger.warning(
+                    "DeepSeek tool-loop JSON parse failed (round=%d). Raw (200): %s",
+                    round_index,
+                    str(content)[:200],
+                )
+                return {
+                    **_WAIT_FALLBACK,
+                    "reason": (
+                        "Could not parse model response as JSON: "
+                        f"{str(content)[:100]}..."
+                    ),
+                    "_transient_failure": True,
+                }
+
+            decision = _normalize_decision(parsed)
+            decision["_response_time_ms"] = int((time.monotonic() - t0) * 1000)
+            audit_raw = decision.get("_audit_raw_response")
+            if isinstance(audit_raw, dict):
+                audit_raw["toolCallsUsed"] = list(tool_names_used)
+            logger.info(
+                "DeepSeek tool-loop decision: action=%s confidence=%.1f "
+                "rounds=%d toolCalls=%d elapsed_ms=%d",
+                decision["action"],
+                decision["confidence"],
+                round_index + 1,
+                len(tool_names_used),
+                decision["_response_time_ms"],
+            )
+            return decision
+
+        # force_final son turda kesin final ürettiği için buraya inilmez.
+        return {  # pragma: no cover — savunma amaçlı
+            **_WAIT_FALLBACK,
+            "reason": "Tool loop exhausted without a final decision",
+            "_transient_failure": True,
+        }
+
+    async def _tool_round_completion(
+        self, body: dict[str, Any], timeout_seconds: float
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Tek LLM turu: assistant mesajını (content + tool_calls) ham döndür.
+
+        12 sn'lik toplam bütçeye backoff'lu retry sığmadığı için tur başına
+        tek deneme yapılır; hata (None, reason) olarak döner ve decide()
+        seviyesinde WAIT fallback + degraded sayacına dönüşür."""
+        try:
+            timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self._headers,
+                    json=body,
+                ) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        logger.error(
+                            "DeepSeek tool-round error %d: %s",
+                            resp.status,
+                            error_text[:500],
+                        )
+                        return None, f"API error {resp.status}"
+                    data = await resp.json()
+        except asyncio.TimeoutError:
+            return None, f"Request timed out after {timeout_seconds:.0f}s"
+        except aiohttp.ClientError as exc:
+            return None, f"Network error: {exc}"
+        except Exception as exc:  # noqa: BLE001 — her hata WAIT'e iner
+            logger.exception("DeepSeek tool-round unexpected error")
+            return None, f"Unexpected error: {exc}"
+
+        choices = data.get("choices", [])
+        if not choices:
+            return None, "Empty response from model"
+        message = choices[0].get("message") or {}
+        if not isinstance(message, dict):
+            return None, "Malformed message from model"
+        return message, None
 
     async def _call_with_retry(self, body: dict[str, Any], t0: float) -> dict[str, Any]:
         last_reason = "Unknown error"
@@ -596,6 +797,8 @@ def get_provider(name: str | AIProvider | None = None) -> AiProvider:
             model=settings.deepseek_model,
             base_url=settings.deepseek_base_url,
             timeout=settings.deepseek_timeout,
+            tools_enabled=settings.ai_tools_enabled,
+            tool_budget_seconds=settings.deepseek_tool_budget_seconds,
         )
 
     raise ValueError(f"Unknown AI_PROVIDER: {resolved!r}. Supported: mock, deepseek")
@@ -621,4 +824,5 @@ def get_ai_provider_status() -> dict[str, Any]:
         "providerName": type(provider).__name__,
         "isDegraded": provider.is_degraded,
         "consecutiveFailures": provider.consecutive_failures,
+        "toolCallingEnabled": bool(getattr(provider, "tools_enabled", False)),
     }

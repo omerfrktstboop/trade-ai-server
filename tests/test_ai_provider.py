@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 
 from app.services.ai_provider import (
@@ -702,6 +703,7 @@ class TestAiProviderStatus:
             "providerName": "MockAiProvider",
             "isDegraded": False,
             "consecutiveFailures": 0,
+            "toolCallingEnabled": False,
         }
 
     def test_get_ai_provider_status_reflects_degraded_deepseek(self, monkeypatch):
@@ -716,3 +718,202 @@ class TestAiProviderStatus:
         assert status["providerName"] == "DeepSeekProvider"
         assert status["isDegraded"] is True
         assert status["consecutiveFailures"] == 1
+
+
+# ── Tool-calling döngüsü (v2 Faz 2) ──────────────────────────────────────────
+
+
+def _tool_call(name: str, args: dict, call_id: str = "tc-1") -> dict:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": json.dumps(args)},
+    }
+
+
+def _msg_resp(message: dict):
+    return _fake_resp(status=200, json_body={"choices": [{"message": message}]})
+
+
+FINAL_BUY = {
+    "content": '{"action": "BUY", "confidence": 85, "reason": "tool-verified"}'
+}
+
+
+class TestDeepSeekToolLoop:
+    """Bütçeli tool-calling döngüsü: 4 tur / 6 çağrı / 12 sn wall-clock."""
+
+    def _tools_provider(self, **kwargs) -> DeepSeekProvider:
+        defaults = {"tools_enabled": True, "tool_budget_seconds": 12.0}
+        defaults.update(kwargs)
+        return _provider(**defaults)
+
+    def _patch_call_tool(self, monkeypatch):
+        calls: list[dict] = []
+
+        async def fake_call_tool(name, args, *, caller, request_id=None, symbol_scope=None):
+            calls.append(
+                {
+                    "name": name,
+                    "args": args,
+                    "caller": caller,
+                    "symbol_scope": symbol_scope,
+                }
+            )
+            return {"tool": name, "result": {"ok": True, "value": 42}}
+
+        monkeypatch.setattr("app.tools.call_tool", fake_call_tool)
+        return calls
+
+    @pytest.mark.asyncio
+    async def test_tools_disabled_sends_legacy_body_without_tools_key(self):
+        provider = _provider()  # settings default: tools kapalı
+        assert provider.tools_enabled is False
+        session = _mock_session()
+        with patch("aiohttp.ClientSession", return_value=session):
+            result = await provider.decide(COMPACT_CONTEXT)
+        assert result["action"] == "BUY"
+        body = session.post.call_args.kwargs["json"]
+        assert "tools" not in body
+        assert "tool_choice" not in body
+
+    @pytest.mark.asyncio
+    async def test_two_tool_calls_then_final_decision(self, monkeypatch):
+        calls = self._patch_call_tool(monkeypatch)
+        provider = self._tools_provider()
+        round1 = _mock_session(
+            _msg_resp(
+                {
+                    "content": None,
+                    "tool_calls": [
+                        _tool_call("get_indicators", {"symbol": "THYAO"}, "tc-1"),
+                        _tool_call("get_depth", {"symbol": "THYAO"}, "tc-2"),
+                    ],
+                }
+            )
+        )
+        round2 = _mock_session(_msg_resp(FINAL_BUY))
+        with patch("aiohttp.ClientSession", side_effect=[round1, round2]):
+            result = await provider.decide(COMPACT_CONTEXT)
+
+        assert result["action"] == "BUY"
+        assert [c["name"] for c in calls] == ["get_indicators", "get_depth"]
+        assert all(c["caller"] == "deepseek" for c in calls)
+        assert all(c["symbol_scope"] == "THYAO" for c in calls)
+        assert result["_audit_raw_response"]["toolCallsUsed"] == [
+            "get_indicators",
+            "get_depth",
+        ]
+        # İkinci turun gövdesi tool sonuçlarını içermeli.
+        body2 = round2.post.call_args.kwargs["json"]
+        roles = [m["role"] for m in body2["messages"]]
+        assert roles == ["system", "user", "assistant", "tool", "tool"]
+        assert body2["tool_choice"] == "auto"
+
+    @pytest.mark.asyncio
+    async def test_endless_tool_calls_forced_final_after_max_rounds(self, monkeypatch):
+        calls = self._patch_call_tool(monkeypatch)
+        provider = self._tools_provider()
+        tool_rounds = [
+            _mock_session(
+                _msg_resp(
+                    {
+                        "content": None,
+                        "tool_calls": [
+                            _tool_call("get_snapshot", {"symbol": "THYAO"}, f"tc-{i}")
+                        ],
+                    }
+                )
+            )
+            for i in range(4)
+        ]
+        final_round = _mock_session(_msg_resp(FINAL_BUY))
+        with patch(
+            "aiohttp.ClientSession", side_effect=[*tool_rounds, final_round]
+        ):
+            result = await provider.decide(COMPACT_CONTEXT)
+
+        assert result["action"] == "BUY"
+        assert len(calls) == 4  # tur başına 1 çağrı, 4 turda kesildi
+        final_body = final_round.post.call_args.kwargs["json"]
+        assert final_body["tool_choice"] == "none"
+        # Bütçe nudge'ı son tura eklenmiş olmalı.
+        assert final_body["messages"][-1]["content"].startswith(
+            "Tool budget exhausted"
+        )
+
+    @pytest.mark.asyncio
+    async def test_tool_error_is_fed_back_not_fatal(self, monkeypatch):
+        async def failing_call_tool(name, args, *, caller, request_id=None, symbol_scope=None):
+            return {"tool": name, "error": "tool failed: gateway down"}
+
+        monkeypatch.setattr("app.tools.call_tool", failing_call_tool)
+        provider = self._tools_provider()
+        round1 = _mock_session(
+            _msg_resp(
+                {
+                    "content": None,
+                    "tool_calls": [_tool_call("get_news", {"symbol": "THYAO"})],
+                }
+            )
+        )
+        round2 = _mock_session(_msg_resp(FINAL_BUY))
+        with patch("aiohttp.ClientSession", side_effect=[round1, round2]):
+            result = await provider.decide(COMPACT_CONTEXT)
+
+        assert result["action"] == "BUY"
+        body2 = round2.post.call_args.kwargs["json"]
+        tool_msg = body2["messages"][-1]
+        assert tool_msg["role"] == "tool"
+        assert "gateway down" in tool_msg["content"]
+
+    @pytest.mark.asyncio
+    async def test_zero_budget_forces_immediate_final(self, monkeypatch):
+        self._patch_call_tool(monkeypatch)
+        provider = self._tools_provider(tool_budget_seconds=0.0)
+        only_round = _mock_session(_msg_resp(FINAL_BUY))
+        with patch("aiohttp.ClientSession", return_value=only_round):
+            result = await provider.decide(COMPACT_CONTEXT)
+
+        assert result["action"] == "BUY"
+        body = only_round.post.call_args.kwargs["json"]
+        assert body["tool_choice"] == "none"
+
+    @pytest.mark.asyncio
+    async def test_network_error_returns_wait_and_counts_degraded(self, monkeypatch):
+        self._patch_call_tool(monkeypatch)
+        provider = self._tools_provider(degraded_threshold=1)
+        session = _mock_session()
+        session.post = MagicMock(side_effect=aiohttp.ClientError("conn reset"))
+        with patch("aiohttp.ClientSession", return_value=session):
+            result = await provider.decide(COMPACT_CONTEXT)
+
+        assert result["action"] == "WAIT"
+        assert "Network error" in result["reason"]
+        assert provider.is_degraded is True
+
+    @pytest.mark.asyncio
+    async def test_unparseable_final_returns_wait(self, monkeypatch):
+        self._patch_call_tool(monkeypatch)
+        provider = self._tools_provider()
+        session = _mock_session(_msg_resp({"content": "not json at all"}))
+        with patch("aiohttp.ClientSession", return_value=session):
+            result = await provider.decide(COMPACT_CONTEXT)
+
+        assert result["action"] == "WAIT"
+        assert "Could not parse model response" in result["reason"]
+
+    @pytest.mark.asyncio
+    async def test_tool_loop_uses_tool_aware_system_prompt(self, monkeypatch):
+        self._patch_call_tool(monkeypatch)
+        provider = self._tools_provider()
+        session = _mock_session(_msg_resp(FINAL_BUY))
+        with patch("aiohttp.ClientSession", return_value=session):
+            await provider.decide(COMPACT_CONTEXT)
+
+        body = session.post.call_args.kwargs["json"]
+        assert "TOOLS" in body["messages"][0]["content"]
+        assert isinstance(body["tools"], list)
+        names = {t["function"]["name"] for t in body["tools"]}
+        assert "get_snapshot" in names
+        assert "get_account_summary" not in names

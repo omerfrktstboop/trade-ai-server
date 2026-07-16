@@ -126,6 +126,11 @@ class Settings(BaseSettings):
     deepseek_max_attempts: int = 2
     ai_degraded_threshold: int = 3
     ai_degraded_probe_interval_seconds: int = 60
+    # v2 tool-calling (Faz 2): default KAPALI — açılana kadar tek-atış
+    # davranış birebir korunur. Bütçe toplam wall-clock'tur (LLM turları +
+    # tool çağrıları dahil); 10-15 sn bandında tutulmalı.
+    ai_tools_enabled: bool = False
+    deepseek_tool_budget_seconds: float = 12.0
 
     # ── Database ──────────────────────────────────────────────────────────
 

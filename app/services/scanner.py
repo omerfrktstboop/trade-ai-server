@@ -52,6 +52,7 @@ from app.services.admin_config import (
     is_kill_switch_enabled,
     is_scanner_runtime_enabled,
 )
+from app.core.runtime_flags import dispatch_block_reason, is_dispatch_blocked
 from app.services.account_watcher import account_watcher
 from app.services.ai_provider import get_default_provider
 from app.services.discovery_agent import run_discovery_scan
@@ -800,6 +801,15 @@ class SymbolScanner:
         kendi sabit limitleriyle bir kez daha uygular.
         """
         response = result.response
+        # Fix #2: startup disarm başarısızsa süreç boyunca sert blok
+        # (DB'den bağımsız fail-closed) — hiçbir emir gönderilmez.
+        if is_dispatch_blocked():
+            logger.warning(
+                "Order blocked: dispatch hard-blocked (%s) requestId=%s",
+                dispatch_block_reason(),
+                response.request_id,
+            )
+            return
         if response.requires_confirmation:
             await queue_response(response, result.mode)
             return
@@ -879,6 +889,7 @@ class SymbolScanner:
             )
             return
 
+        dispatch_account_ref: str | None = None
         try:
             async with async_session_factory() as session:
                 if await is_kill_switch_enabled(session):
@@ -910,6 +921,8 @@ class SymbolScanner:
                     account_check.reason,
                 )
                 return
+            # Bu emrin sabit hesap referansı (fill damgalama için, Fix #1).
+            dispatch_account_ref = account_check.account_ref
             preflight_reason = validate_order_preflight(
                 payload=fresh_snapshot.get("payload") or {},
                 positions=fresh_positions,
@@ -1102,6 +1115,29 @@ class SymbolScanner:
                     )
                     return
                 await mark_send_started(session, ledger_row)
+
+        # Fix #1: emir GÖNDERİLMEDEN önce, preflight'ta doğrulanan hesap
+        # referansını OrderLog'a sabitle. Callback fill'i bu sabit değeri
+        # kullanır (callback anındaki canlı hesabı değil) — emir sonrası hesap
+        # değişse bile fill doğru hesaba yazılır.
+        if dispatch_account_ref:
+            try:
+                async with async_session_factory() as session:
+                    olog = (
+                        await session.execute(
+                            select(OrderLog).where(
+                                OrderLog.request_id == response.request_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if olog is not None and not olog.account_ref:
+                        olog.account_ref = dispatch_account_ref
+                        await session.commit()
+            except Exception:
+                logger.exception(
+                    "Failed to stamp OrderLog.account_ref requestId=%s",
+                    response.request_id,
+                )
 
         try:
             outcome = await self._gateway.send_order(

@@ -103,7 +103,6 @@ async def record_fill_delta(
     limit_price: float | Decimal | None,
     order_id: str | None,
     filled_at: datetime,
-    account_ref: str | None = None,
 ) -> OrderFill | None:
     """Create at most one OrderFill for the new quantity in this callback.
 
@@ -166,7 +165,9 @@ async def record_fill_delta(
         order_log_id=row.id,
         request_id=row.request_id,
         order_id=order_id or row.order_id,
-        account_ref=(account_ref or None),
+        # Fill'in hesabı, emrin GÖNDERİLDİĞİ anda OrderLog'a yazılan sabit
+        # accountRef'tir (callback anındaki canlı hesap değil) — Fix #1.
+        account_ref=getattr(row, "account_ref", None),
         symbol=row.symbol.upper(),
         action=action,
         fill_qty=delta_qty,
@@ -315,6 +316,7 @@ async def record_reconciliation_fill(
         order_log_id=row.id,
         request_id=row.request_id,
         order_id=row.order_id,
+        account_ref=getattr(row, "account_ref", None),
         symbol=row.symbol.upper(),
         action=action,
         fill_qty=missing_qty,

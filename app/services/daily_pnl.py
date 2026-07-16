@@ -106,9 +106,13 @@ async def get_daily_pnl(
     gaps: list[str] = []
 
     def _account_match(fill: OrderFill) -> bool:
+        # Belirli bir hesap sorgulanıyorsa KATI eşleşme: account_ref=None olan
+        # (bilinmeyen/legacy) fill'ler o hesabın PnL'ine dahil EDİLMEZ — aksi
+        # halde DEMO ve REAL sonuçları karışır (Fix #4/#1). account_ref
+        # verilmemişse (legacy/unfiltered) tüm fill'ler sayılır.
         if account_ref is None:
             return True
-        return fill.account_ref is None or fill.account_ref == account_ref
+        return fill.account_ref == account_ref
 
     # Sembol başına TÜM fill'ler kronolojik — running ağırlıklı maliyet için.
     all_fills = list(

@@ -49,6 +49,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # v2 güvenlik (Fix #2): her backend başlangıcında REAL hesap arming'i
     # KOŞULSUZ düşürülür. Restart, hesap/oturum kimliğinin sessizce değişmiş
     # olabileceği bir andır; operatör her açılışta yeniden arm etmelidir.
+    # Disarm BAŞARISIZ olursa fail-closed: dispatch süreç boyunca sert
+    # bloklanır (scanner başlar ama emir göndermez — OBSERVE_ONLY davranışı).
     try:
         from app.db.session import async_session_factory
         from app.services.admin_config import (
@@ -66,8 +68,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 )
                 await _session.commit()
                 print("🔒 REAL account disarmed on startup (re-arm required).")
-    except Exception as _disarm_exc:  # pragma: no cover
-        print(f"⚠️  Startup disarm check failed: {_disarm_exc}")
+    except Exception as _disarm_exc:
+        from app.core.runtime_flags import block_dispatch
+
+        block_dispatch(f"startup disarm failed: {_disarm_exc}")
+        print(
+            f"⛔ Startup disarm FAILED — dispatch hard-blocked (fail-closed): "
+            f"{_disarm_exc}"
+        )
 
     if settings.scanner_enabled:
         from app.services.scanner import scanner

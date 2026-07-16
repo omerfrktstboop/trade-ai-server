@@ -35,7 +35,6 @@ async def apply_callback(
     limit_price: float | None,
     order_id: str | None,
     message: str,
-    account_ref: str | None = None,
 ) -> tuple[OrderLog, bool]:
     values = dict(
         request_id=request_id,
@@ -108,7 +107,6 @@ async def apply_callback(
                     limit_price=row.limit_price,
                     order_id=row.order_id,
                     filled_at=datetime.now(timezone.utc),
-                    account_ref=account_ref,
                 )
                 if fill is not None:
                     await apply_fill_to_lifecycle(session, row, fill)

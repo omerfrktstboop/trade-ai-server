@@ -77,6 +77,7 @@ os.environ["RISK_DISABLE_TRADING_AFTER"] = "17:30"
 def _reset_decision_caches():
     """Süreç içi global cache'ler (karar cache'i + endeks rejimi + hesap
     izleyici baseline'ı) test sınırlarından sızmasın."""
+    from app.core.runtime_flags import clear_dispatch_block
     from app.services.account_watcher import account_watcher
     from app.services.decision_gate import decision_cache
     from app.services.market_regime import reset_cache
@@ -86,8 +87,10 @@ def _reset_decision_caches():
     reset_cache()
     account_watcher.reset()
     significance_detector.reset()
+    clear_dispatch_block()
     yield
     decision_cache.clear()
     reset_cache()
     account_watcher.reset()
     significance_detector.reset()
+    clear_dispatch_block()

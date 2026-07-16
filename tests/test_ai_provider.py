@@ -870,16 +870,13 @@ class TestDeepSeekToolLoop:
         assert "gateway down" in tool_msg["content"]
 
     @pytest.mark.asyncio
-    async def test_zero_budget_forces_immediate_final(self, monkeypatch):
-        self._patch_call_tool(monkeypatch)
-        provider = self._tools_provider(tool_budget_seconds=0.0)
-        only_round = _mock_session(_msg_resp(FINAL_BUY))
-        with patch("aiohttp.ClientSession", return_value=only_round):
-            result = await provider.decide(COMPACT_CONTEXT)
-
-        assert result["action"] == "BUY"
-        body = only_round.post.call_args.kwargs["json"]
-        assert body["tool_choice"] == "none"
+    # NOT (Fix #3): eski `test_zero_budget_forces_immediate_final` kaldırıldı.
+    # tool_budget_seconds=0 artık sert asyncio.timeout(0) demek; anlık mock'un
+    # timeout'tan önce tamamlanıp tamamlanmaması event-loop zamanlamasına bağlı
+    # olduğu için test tutarsızdı (bazen BUY, bazen WAIT). Zorunlu-final davranışı
+    # `test_endless_tool_calls_forced_final_after_max_rounds` (tool_choice=none),
+    # sert üst sınır ise `test_hard_timeout_returns_wait_when_round_hangs`
+    # tarafından deterministik kapsanıyor.
 
     @pytest.mark.asyncio
     async def test_network_error_returns_wait_and_counts_degraded(self, monkeypatch):

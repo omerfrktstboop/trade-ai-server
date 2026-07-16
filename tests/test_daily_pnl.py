@@ -291,6 +291,27 @@ async def test_daily_pnl_split_by_account_ref():
     assert real.realized_tl == Decimal("150")
 
 
+async def test_none_account_fills_excluded_from_specific_account_query():
+    """Fix #1/#4: account_ref=None (bilinmeyen/legacy) fill'ler belirli bir
+    hesabın PnL'ine dahil edilmez — DEMO/REAL karışmaz."""
+    await _seed_lifecycle("THYAO", opened_at=NOW, avg_entry=100.0, qty=0)
+    # Hesabı bilinmeyen büyük bir zarar.
+    await _seed_fill("buy-u", "THYAO", "BUY", qty=10, price=100.0,
+                     filled_at=NOW - timedelta(minutes=30), account_ref=None)
+    await _seed_fill("sell-u", "THYAO", "SELL", qty=10, price=50.0,
+                     filled_at=NOW - timedelta(minutes=20), account_ref=None)
+    # REAL hesabında küçük bir kâr.
+    await _seed_fill("buy-r2", "THYAO", "BUY", qty=10, price=100.0,
+                     filled_at=NOW - timedelta(minutes=15), account_ref="real")
+    await _seed_fill("sell-r2", "THYAO", "SELL", qty=10, price=105.0,
+                     filled_at=NOW - timedelta(minutes=10), account_ref="real")
+
+    async with async_session_factory() as session:
+        real = await get_daily_pnl(session, price_lookup={}, account_ref="real")
+    # Bilinmeyen -500'lük zarar REAL'e sızmaz.
+    assert real.realized_tl == Decimal("50")
+
+
 # ── Limit uygulaması ────────────────────────────────────────────────────────
 
 

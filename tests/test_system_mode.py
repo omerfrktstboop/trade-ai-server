@@ -155,6 +155,23 @@ async def test_invalid_system_mode_value_rejected():
             )
 
 
+async def test_startup_disarm_failure_hard_blocks_dispatch(monkeypatch):
+    """Fix #2: startup disarm başarısızsa süreç-global sert blok devrededir;
+    diğer tüm kapılar açık olsa bile hiçbir emir gönderilmez (fail-closed)."""
+    from app.core import runtime_flags
+
+    monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+    await _set_system_mode("AUTO_TRADE")
+    runtime_flags.block_dispatch("test: startup disarm failed")
+    try:
+        fake = FakeGateway()
+        fake.positions = []
+        await _scanner(fake)._maybe_send_order(make_result())
+        assert fake.orders == []
+    finally:
+        runtime_flags.clear_dispatch_block()
+
+
 async def test_missing_decision_audit_blocks_dispatch(monkeypatch):
     """Audit-yoksa-emir-yok (ilke #6): risk_decisions satırı olmayan bir
     karar, diğer tüm kapılar açıkken bile gönderilemez."""

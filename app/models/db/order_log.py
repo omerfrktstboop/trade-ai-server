@@ -31,6 +31,10 @@ class OrderLog(Base):
 
     mode: Mapped[str] = mapped_column(String(16), default="PAPER")
     order_type: Mapped[str] = mapped_column(String(16), default="LIMIT")
+    # Emir GÖNDERİM anında damgalanan hesap referansı (sha256). Callback fill'i
+    # bu sabit değeri kullanır — callback anındaki canlı hesabı DEĞİL — böylece
+    # emir sonrası hesap değişse bile fill doğru hesaba yazılır (Fix #1).
+    account_ref: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     decision_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     rounded_limit_price: Mapped[float | None] = mapped_column(Float, nullable=True)

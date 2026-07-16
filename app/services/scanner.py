@@ -36,6 +36,7 @@ from app.db.session import async_session_factory
 from app.models.db import (
     BotPosition,
     OrderLog,
+    PositionLifecycle,
     PositionStopEvent,
     RiskDecision,
     TradeWatchlistSymbol,
@@ -79,6 +80,11 @@ from app.services.order_ledger import mark_send_result, mark_send_started, reser
 from app.services.order_preflight import parse_finite_decimal, validate_order_preflight
 from app.services.position_sizing import TradeSizingContext
 from app.services.signal_override import list_pending_override_symbols
+from app.services.significance import (
+    build_observation,
+    load_event_fingerprints,
+    significance_detector,
+)
 from app.services.market_observation_collector import market_observation_collector
 from app.services.stop_loss_guard import check_stop_loss_positions, stop_loss_guard
 from app.services.trade_profile import get_active_profile
@@ -660,19 +666,48 @@ class SymbolScanner:
             logger.exception("Portfolio scan: bot_positions read failed")
             return
 
-        held = [row.symbol.strip().upper() for row in rows]
+        held = {
+            row.symbol.strip().upper(): float(row.qty or 0) for row in rows
+        }
         if not held:
             return
 
         logger.info("PORTFOLIO_SCAN_STARTED positionCount=%s", len(held))
-        for symbol in held:
+        for symbol, held_qty in held.items():
             if self._stop_event.is_set():
                 break
-            # Normal tarama bu sembolü zaten yakın zamanda değerlendirdiyse
-            # (aynı tick dahil) tekrarlamak sadece token yakar - atla.
-            last_scan = self._last_scan_by_symbol.get(symbol)
-            if last_scan is not None and (now - last_scan) < interval:
-                continue
+            # v2 önem kapısı (Faz 5): AI yalnızca son AI çağrısından bu yana
+            # anlamlı değişiklik varsa çağrılır. Gözlem kurulamazsa fail-open
+            # → normal değerlendirme yoluna devam (AI kendi veri kalitesi
+            # kontrollerini yapar). Stop-loss bekçisi bu kapıdan bağımsızdır.
+            observation = None
+            try:
+                observation = await self._build_portfolio_observation(
+                    symbol, held_qty
+                )
+            except GatewayUnavailable:
+                self._warn_throttled(
+                    "gateway", "Gateway unavailable during portfolio scan; stopping"
+                )
+                break
+            except Exception:
+                logger.exception(
+                    "Portfolio observation failed symbol=%s — evaluating anyway",
+                    symbol,
+                )
+            if observation is not None:
+                threshold = await self._significance_threshold()
+                verdict = significance_detector.assess(
+                    observation, price_move_pct=threshold
+                )
+                if not verdict.significant:
+                    logger.info("PORTFOLIO_SCAN_SKIP symbol=%s triggers=[]", symbol)
+                    continue
+                logger.info(
+                    "PORTFOLIO_SCAN_SIGNIFICANT symbol=%s triggers=%s",
+                    symbol,
+                    ",".join(verdict.triggers),
+                )
             try:
                 result = await evaluate_symbol(
                     symbol,
@@ -699,6 +734,10 @@ class SymbolScanner:
             # Normal tarama zamanlayıcısını da tazele - aynı tick içinde
             # sembol ikinci kez değerlendirilmesin.
             self._last_scan_by_symbol[symbol] = now
+            # Gerçek bir AI değerlendirmesi yapıldı → baseline güncellenir;
+            # skip edilen taramalar baseline'ı asla değiştirmez.
+            if observation is not None:
+                significance_detector.record_ai_evaluation(observation)
             response = result.response
             logger.info(
                 "Portfolio decision symbol=%s action=%s confidence=%s allowOrder=%s",
@@ -708,6 +747,48 @@ class SymbolScanner:
                 response.allow_order,
             )
             await self._maybe_send_order(result)
+
+    async def _significance_threshold(self) -> Decimal:
+        try:
+            async with async_session_factory() as session:
+                raw = await get_admin_config_value(
+                    session, "significancePriceMovePct"
+                )
+            return Decimal(str(raw))
+        except Exception:
+            return Decimal("1.5")
+
+    async def _build_portfolio_observation(
+        self, symbol: str, held_qty: float
+    ):
+        """Önem değerlendirmesi için ucuz, LLM'siz gözlem üret."""
+        snapshot = await self._gateway.get_snapshot(symbol)
+        payload = snapshot.get("payload") or {}
+        async with async_session_factory() as session:
+            news_fp, kap_fp = await load_event_fingerprints(session, symbol)
+            lifecycle = (
+                await session.execute(
+                    select(PositionLifecycle)
+                    .where(
+                        PositionLifecycle.symbol == symbol,
+                        PositionLifecycle.status == "OPEN",
+                    )
+                    .limit(1)
+                )
+            ).scalars().first()
+        active_stop = (
+            float(lifecycle.active_stop_loss)
+            if lifecycle is not None and lifecycle.active_stop_loss is not None
+            else None
+        )
+        return build_observation(
+            symbol,
+            payload,
+            position_qty=held_qty,
+            active_stop=active_stop,
+            news_fp=news_fp,
+            kap_fp=kap_fp,
+        )
 
     # ── Order path (Phase 2) ───────────────────────────────────────────────
 

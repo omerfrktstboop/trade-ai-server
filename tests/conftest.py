@@ -80,11 +80,14 @@ def _reset_decision_caches():
     from app.services.account_watcher import account_watcher
     from app.services.decision_gate import decision_cache
     from app.services.market_regime import reset_cache
+    from app.services.significance import significance_detector
 
     decision_cache.clear()
     reset_cache()
     account_watcher.reset()
+    significance_detector.reset()
     yield
     decision_cache.clear()
     reset_cache()
     account_watcher.reset()
+    significance_detector.reset()

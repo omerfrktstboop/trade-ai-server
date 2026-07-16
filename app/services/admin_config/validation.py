@@ -159,6 +159,10 @@ def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
         return new_value == "AUTO_TRADE" and old_value != new_value
     if key == "realAccountArmed":
         return _parse_bool(new_value) is True and old_value != new_value
+    if key == "dailyMaxLossTl":
+        # Limiti yükseltmek veya kapatmak (0) korumayı gevşetir — onay ister.
+        old_d, new_d = Decimal(old_value), Decimal(new_value)
+        return old_d > 0 and (new_d == 0 or new_d > old_d)
     if key in {"killSwitchEnabled", "tradingKillSwitchActive", "forceSafeMode"}:
         return _parse_bool(old_value) is True and _parse_bool(new_value) is False
     if key == "scannerEnabled":

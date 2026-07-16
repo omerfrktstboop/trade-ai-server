@@ -147,6 +147,21 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "DeepSeek'in değerlendirme sırasında read-only veri araçlarını "
         "çağırmasına izin verir (panel > env; .env AI_TOOLS_ENABLED fallback).",
     ),
+    "dailyMaxLossTl": ConfigDefinition(
+        "dailyMaxLossTl",
+        "decimal",
+        "0",
+        "Günlük maksimum zarar (TL). Aşılınca YENİ BUY'lar bloklanır; SELL ve "
+        "stop-loss bekçisi asla etkilenmez. 0 = devre dışı. Realized zarar tek "
+        "başına aşarsa veri boşluğunda bile bloklar (fail-closed).",
+    ),
+    "significancePriceMovePct": ConfigDefinition(
+        "significancePriceMovePct",
+        "decimal",
+        "1.5",
+        "Portföy taramasında AI'ı tetikleyen fiyat hareketi eşiği (yüzde). "
+        "Pozisyon varken eşiğin 2/3'ü uygulanır.",
+    ),
     "scannerEnabled": ConfigDefinition(
         "scannerEnabled",
         "bool",
@@ -514,6 +529,7 @@ RISKY_CONFIG_KEYS = {
     "tradingMode",
     "systemMode",
     "realAccountArmed",
+    "dailyMaxLossTl",
     "killSwitchEnabled",
     "tradingKillSwitchActive",
     "forceSafeMode",
@@ -591,6 +607,8 @@ CONFIG_SECTION_DEFINITIONS = (
             "scannerAllowOrders",
             "manualApprovalAllowOrders",
             "aiToolCallingEnabled",
+            "dailyMaxLossTl",
+            "significancePriceMovePct",
         ),
     ),
     ConfigSectionDefinition(

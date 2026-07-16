@@ -40,7 +40,6 @@ from app.services.account_context import (
 from app.services.cash_reservation import calculate_backend_reserved_cash
 from app.services.daily_trade_count import get_today_trade_counts
 from app.services.decision_gate import (
-    decision_cache,
     decision_context_fingerprint,
     preflight_wait_reason,
 )
@@ -498,23 +497,14 @@ async def evaluate_symbol(
             }
             payload["decisionSource"] = "preflight-gate"
 
-    if raw is None:
-        context_fingerprint = decision_context_fingerprint(ai_context)
-        cached = decision_cache.get(
-            sig_req.symbol, sig_req.last_price, news_context, context_fingerprint
-        )
-        if cached is not None:
-            raw = cached
-            payload["decisionSource"] = "cache"
-
+    # v2 Faz 5: 15 sn'lik DecisionCache devre dışı bırakıldı — portföy
+    # taramasındaki önem dedektörü (app/services/significance.py) LLM
+    # çağrısını zaten baseline'a göre kapılıyor; kısa-TTL cache'in kalan
+    # değeri yoktu. Sınıf kullanım dışıdır ve Faz 8 cutover'ında silinecek.
     if raw is None:
         provider = provider or get_default_provider()
         raw = await provider.decide(ai_context)
         payload["decisionSource"] = "llm"
-        # Yalnizca gercek LLM cevaplari cache'lenir - kapi WAIT'leri degil.
-        decision_cache.put(
-            sig_req.symbol, sig_req.last_price, news_context, raw, context_fingerprint
-        )
 
     # == 7. RiskEngine (makro rejim filtresiyle) ==========================
     decision = dict_to_risk_decision(raw, sig_req)
@@ -530,6 +520,12 @@ async def evaluate_symbol(
     from app.services.news_risk_lock import apply_news_risk_lock
 
     response = await apply_news_risk_lock(response, sig_req.symbol)
+
+    # v2 günlük zarar limiti (Faz 5): sadece emre dönüşebilecek BUY'ları
+    # keser; SELL/WAIT ve (pipeline dışı) stop-loss guard asla etkilenmez.
+    from app.services.daily_pnl import apply_daily_loss_limit
+
+    response = await apply_daily_loss_limit(response, gateway=gateway)
 
     # == 8. Log + persist =================================================
     _log_evaluation(sig_req, response)

@@ -129,6 +129,12 @@ async def set_admin_config_value(
         await session.refresh(row)
     else:
         await session.flush()
+        # updated_at is a server/onupdate-evaluated column, so the flush
+        # above leaves it expired on the ORM object; a bare attribute read
+        # would trigger an implicit synchronous lazy-load, which raises
+        # MissingGreenlet under the async driver. Refresh it explicitly
+        # instead - safe to call mid-transaction (no separate commit).
+        await session.refresh(row, attribute_names=["updated_at"])
     return AdminConfigItem(
         key=key,
         value=row.value,

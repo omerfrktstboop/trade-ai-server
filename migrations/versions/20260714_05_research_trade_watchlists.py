@@ -16,6 +16,76 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    tables = set(inspector.get_table_names())
+
+    if "research_candidates" not in tables:
+        _create_research_candidates()
+    if "research_candidate_events" not in tables:
+        _create_research_candidate_events()
+    if "trade_watchlist_symbols" not in tables:
+        _create_trade_watchlist_symbols()
+
+    # Existing discovery rows are research-only after the split. They are not
+    # copied into the trade watchlist, so migration cannot accidentally grant BUY.
+    # Symbols already present in research_candidates (e.g. this table was
+    # created out-of-band before this revision ran) are skipped to avoid a
+    # uq_research_candidates_symbol violation.
+    if "watchlist_symbols" in tables:
+        existing_symbols = {
+            row[0]
+            for row in bind.execute(sa.text("SELECT symbol FROM research_candidates")).fetchall()
+        }
+        legacy = sa.table(
+            "watchlist_symbols",
+            sa.column("symbol"),
+            sa.column("source"),
+            sa.column("reason"),
+            sa.column("change_pct"),
+            sa.column("volume"),
+            sa.column("is_active"),
+            sa.column("added_at"),
+            sa.column("last_seen_at"),
+        )
+        target = sa.table(
+            "research_candidates",
+            sa.column("symbol"),
+            sa.column("status"),
+            sa.column("source", sa.JSON()),
+            sa.column("trend_pre_score"),
+            sa.column("change_pct_daily"),
+            sa.column("volume_tl"),
+            sa.column("technical_summary", sa.JSON()),
+            sa.column("first_detected_at"),
+            sa.column("last_detected_at"),
+            sa.column("consecutive_pass_count"),
+        )
+        rows = bind.execute(
+            sa.select(legacy).where(legacy.c.is_active.is_(True))
+        ).mappings()
+        for row in rows:
+            symbol = str(row["symbol"]).upper()
+            if symbol in existing_symbols:
+                continue
+            bind.execute(
+                target.insert().values(
+                    symbol=symbol,
+                    status="RESEARCH_PENDING",
+                    source=[str(row["source"])],
+                    trend_pre_score=0,
+                    change_pct_daily=row["change_pct"],
+                    volume_tl=row["volume"],
+                    technical_summary={"legacyReason": row["reason"]},
+                    first_detected_at=row["added_at"],
+                    last_detected_at=row["last_seen_at"],
+                    consecutive_pass_count=0,
+                )
+            )
+            existing_symbols.add(symbol)
+
+
+def _create_research_candidates() -> None:
     op.create_table(
         "research_candidates",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
@@ -69,6 +139,8 @@ def upgrade() -> None:
         "ix_research_candidates_expires_at", "research_candidates", ["expires_at"]
     )
 
+
+def _create_research_candidate_events() -> None:
     op.create_table(
         "research_candidate_events",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
@@ -102,6 +174,8 @@ def upgrade() -> None:
         ["event_type"],
     )
 
+
+def _create_trade_watchlist_symbols() -> None:
     op.create_table(
         "trade_watchlist_symbols",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
@@ -159,54 +233,14 @@ def upgrade() -> None:
         ["expires_at"],
     )
 
-    # Existing discovery rows are research-only after the split. They are not
-    # copied into the trade watchlist, so migration cannot accidentally grant BUY.
-    bind = op.get_bind()
-    inspector = sa.inspect(bind)
-    if "watchlist_symbols" in inspector.get_table_names():
-        legacy = sa.table(
-            "watchlist_symbols",
-            sa.column("symbol"),
-            sa.column("source"),
-            sa.column("reason"),
-            sa.column("change_pct"),
-            sa.column("volume"),
-            sa.column("is_active"),
-            sa.column("added_at"),
-            sa.column("last_seen_at"),
-        )
-        target = sa.table(
-            "research_candidates",
-            sa.column("symbol"),
-            sa.column("status"),
-            sa.column("source"),
-            sa.column("trend_pre_score"),
-            sa.column("change_pct_daily"),
-            sa.column("volume_tl"),
-            sa.column("technical_summary"),
-            sa.column("first_detected_at"),
-            sa.column("last_detected_at"),
-        )
-        rows = bind.execute(
-            sa.select(legacy).where(legacy.c.is_active.is_(True))
-        ).mappings()
-        for row in rows:
-            bind.execute(
-                target.insert().values(
-                    symbol=str(row["symbol"]).upper(),
-                    status="RESEARCH_PENDING",
-                    source=[str(row["source"])],
-                    trend_pre_score=0,
-                    change_pct_daily=row["change_pct"],
-                    volume_tl=row["volume"],
-                    technical_summary={"legacyReason": row["reason"]},
-                    first_detected_at=row["added_at"],
-                    last_detected_at=row["last_seen_at"],
-                )
-            )
-
 
 def downgrade() -> None:
-    op.drop_table("research_candidate_events")
-    op.drop_table("trade_watchlist_symbols")
-    op.drop_table("research_candidates")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    tables = set(inspector.get_table_names())
+    if "research_candidate_events" in tables:
+        op.drop_table("research_candidate_events")
+    if "trade_watchlist_symbols" in tables:
+        op.drop_table("trade_watchlist_symbols")
+    if "research_candidates" in tables:
+        op.drop_table("research_candidates")

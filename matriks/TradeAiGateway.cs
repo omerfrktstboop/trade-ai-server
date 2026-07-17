@@ -868,12 +868,14 @@ namespace Matriks.Lean.Algotrader
                     bool hasDailyCounterDate = DateTime.TryParse(
                         cfg.Value<string>("dailyCounterDate"), out dailyCounterConfigDate);
 
-                    bool liveMode = runtimeMode == "DEMO_LIVE" || runtimeMode == "REAL_LIVE";
+                    // v2: emir dispatch'i sadece AUTO_TRADE'de mümkün — bu modda
+                    // sembol listesi ve pozitif risk limitleri zorunlu (fail-closed).
+                    bool liveMode = systemMode == "AUTO_TRADE";
                     if (liveMode && (symbols.Length == 0 || maxOrderValueTl <= 0m
                         || maxQtyPerOrder <= 0m || maxOrdersPerDay <= 0
                         || maxOrdersPerSymbolPerDay <= 0))
                     {
-                        SafeDebug("Server config rejected: live mode requires allowed symbols and positive risk limits");
+                        SafeDebug("Server config rejected: AUTO_TRADE requires allowed symbols and positive risk limits");
                         return false;
                     }
 

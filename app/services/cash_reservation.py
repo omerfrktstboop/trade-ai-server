@@ -220,8 +220,13 @@ async def reserve_sized_buy(
     trade: TradeSizingContext,
     limits: EffectiveRiskConfig,
     adapter: MatriksAccountContextAdapter,
+    account_ref: str | None = None,
 ) -> BuyReservationResult:
-    """Lock, recalculate, reserve ledger+cash, and commit before gateway send."""
+    """Lock, recalculate, reserve ledger+cash, and commit before gateway send.
+
+    ``account_ref`` rezervasyonla aynı transaction'da OrderLog'a yazılır
+    (Fix #1, atomik).
+    """
     if isinstance(original_decision_qty, bool) or original_decision_qty <= 0:
         raise ValueError("original_decision_qty must be a positive integer")
     await acquire_account_reservation_lock(session)
@@ -280,6 +285,7 @@ async def reserve_sized_buy(
             mode=mode,
             config_version=limits.system_config_version,
             profile_code=limits.trade_profile_code,
+            account_ref=account_ref,
             commit=False,
         )
         if not may_send:

@@ -550,6 +550,44 @@ class TestOrderPath:
 
         assert fake.orders == []
 
+    async def test_account_ref_stamp_failure_blocks_order_fail_closed(
+        self, monkeypatch
+    ):
+        """Fail-closed: OrderLog.account_ref yazılamazsa (rezervasyon account_ref
+        yazmadıysa) gateway'e HİÇBİR emir gönderilmez; ledger REJECTED olur."""
+        from app.services import order_ledger as ledger_mod
+        from app.models.db import OrderLog
+        from sqlalchemy import select as _select
+
+        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+
+        real_reserve = ledger_mod.reserve_order
+
+        async def stripped_reserve(session, **kwargs):
+            # account_ref'i düşür → OrderLog damgasız kalır (yazım hatası simülasyonu).
+            kwargs["account_ref"] = None
+            return await real_reserve(session, **kwargs)
+
+        monkeypatch.setattr(scanner_module, "reserve_order", stripped_reserve)
+
+        fake = FakeGateway()
+        # AKBNK bot pozisyonu 25 → SELL sellable; SELL yolu reserve_order kullanır.
+        await self.make_scanner(fake)._maybe_send_order(
+            make_result(symbol="AKBNK", action=SignalAction.SELL, price=71.5)
+        )
+
+        assert fake.orders == []  # gateway'e hiçbir emir gitmedi
+        async with async_session_factory() as session:
+            row = (
+                await session.execute(
+                    _select(OrderLog).where(
+                        OrderLog.request_id == "AKBNK-20260709-120000-scan"
+                    )
+                )
+            ).scalar_one()
+        assert row.status == "REJECTED"
+        assert "account_ref" in (row.matrix_message or "")
+
     async def test_demo_live_buy_sends_order(self, monkeypatch):
         monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()

@@ -69,9 +69,14 @@ async def reserve_order(
     order_type: str = "LIMIT",
     config_version: str | None = None,
     profile_code: str | None = None,
+    account_ref: str | None = None,
     commit: bool = True,
 ) -> tuple[OrderLog, bool, str | None]:
-    """Atomically reserve an order; return (row, may_send, rejection)."""
+    """Atomically reserve an order; return (row, may_send, rejection).
+
+    ``account_ref`` (verilirse) rezervasyonla AYNI transaction'da OrderLog'a
+    yazılır — fill'ler bu sabit hesap referansını kullanır (Fix #1, atomik).
+    """
     request_id = request_id.strip()
     if not request_id:
         raise ValueError("request_id is required")
@@ -127,6 +132,7 @@ async def reserve_order(
         reservation_created_at=now,
         config_version=config_version,
         profile_code=profile_code,
+        account_ref=(account_ref or None),
     )
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":

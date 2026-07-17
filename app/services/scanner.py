@@ -1074,6 +1074,7 @@ class SymbolScanner:
                         ),
                         limits=limits,
                         adapter=adapter,
+                        account_ref=dispatch_account_ref,
                     )
                 if not reservation.allowed:
                     logger.warning(
@@ -1106,6 +1107,7 @@ class SymbolScanner:
                     qty=response.qty,
                     limit_price=response.price,
                     mode=result.mode.value,
+                    account_ref=dispatch_account_ref,
                 )
                 if not may_send:
                     logger.warning(
@@ -1116,11 +1118,19 @@ class SymbolScanner:
                     return
                 await mark_send_started(session, ledger_row)
 
-        # Fix #1: emir GÖNDERİLMEDEN önce, preflight'ta doğrulanan hesap
-        # referansını OrderLog'a sabitle. Callback fill'i bu sabit değeri
-        # kullanır (callback anındaki canlı hesabı değil) — emir sonrası hesap
-        # değişse bile fill doğru hesaba yazılır.
-        if dispatch_account_ref:
+        # Fix #1 (fail-closed): hesap referansı emir GÖNDERİLMEDEN önce
+        # OrderLog'a KESİN olarak yazılmış olmalı. Rezervasyon bunu atomik
+        # yazdı; burada doğrulanıyor. dispatch_account_ref boşsa, OrderLog
+        # bulunamazsa, account_ref beklenenle uyuşmuyorsa VEYA doğrulama
+        # DB hatası verirse: emir GÖNDERİLMEZ, ledger REJECTED'a çekilir
+        # (rezervasyon serbest bırakılır) ve tur atlanır. Aksi halde fill'ler
+        # hangi hesaba yazılacağı belirsiz kalırdı (DEMO/REAL karışması riski).
+        async def _block_order(block_reason: str) -> None:
+            logger.error(
+                "Order blocked (account_ref fail-closed) requestId=%s reason=%s",
+                response.request_id,
+                block_reason,
+            )
             try:
                 async with async_session_factory() as session:
                     olog = (
@@ -1130,14 +1140,48 @@ class SymbolScanner:
                             )
                         )
                     ).scalar_one_or_none()
-                    if olog is not None and not olog.account_ref:
-                        olog.account_ref = dispatch_account_ref
-                        await session.commit()
+                    if olog is not None:
+                        await mark_send_result(
+                            session,
+                            olog,
+                            status="REJECTED",
+                            message=f"account_ref stamping failed: {block_reason}",
+                        )
             except Exception:
                 logger.exception(
-                    "Failed to stamp OrderLog.account_ref requestId=%s",
+                    "Failed to mark ledger REJECTED after account_ref block "
+                    "requestId=%s",
                     response.request_id,
                 )
+            await notify_risk_block(
+                f"Order blocked (account_ref): {block_reason}",
+                {"symbol": response.symbol, "requestId": response.request_id},
+            )
+
+        if not dispatch_account_ref:
+            await _block_order("dispatch account_ref is empty")
+            return
+        try:
+            async with async_session_factory() as session:
+                olog = (
+                    await session.execute(
+                        select(OrderLog).where(
+                            OrderLog.request_id == response.request_id
+                        )
+                    )
+                ).scalar_one_or_none()
+            if olog is None:
+                await _block_order("OrderLog not found before send")
+                return
+            if olog.account_ref != dispatch_account_ref:
+                await _block_order(
+                    f"OrderLog.account_ref mismatch "
+                    f"(stored={olog.account_ref!r} expected={dispatch_account_ref!r})"
+                )
+                return
+        except Exception as exc:
+            await _block_order(f"account_ref verification error: {exc}")
+            return
 
         try:
             outcome = await self._gateway.send_order(

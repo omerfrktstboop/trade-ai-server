@@ -16,7 +16,7 @@ from app.services.matriks_gateway import gateway_client
 from app.services.scanner import scanner
 
 router = APIRouter(tags=["Health"])
-EXPECTED_MIGRATION = "20260714_05"
+EXPECTED_MIGRATION = "20260717_14"
 
 
 @router.get("/health")
@@ -73,12 +73,19 @@ async def health_ready() -> JSONResponse:
         ]
         position_age = gateway.get("positionSyncAgeSeconds")
         verification_age = gateway.get("accountVerificationAgeSeconds")
-        order_limits = gateway.get("orderLimits") or {}
-        account_ok = gateway.get("runtimeMode") != "DEMO_LIVE" or (
-            gateway.get("testAutoOrderEnabled") is True
-            and order_limits.get("demoAccountConfirmed") is True
+        # v2: dispatch yalnızca AUTO_TRADE'de mümkün, o yüzden hesap kimliği
+        # yalnızca o modda readiness'i etkiler. Eskiden burada runtimeMode ==
+        # "DEMO_LIVE" karşılaştırması vardı; cutover'da o kavram kalktığı için
+        # koşul her zaman doğruya düşüyor ve kontrol sessizce ölmüştü.
+        # CheckDispatchGates ile aynı kuralları yansıtır: hesap türü bilinmeli,
+        # doğrulama taze olmalı, REAL ise arming şart.
+        system_mode = str(gateway.get("systemMode") or "OBSERVE_ONLY").upper()
+        account_type = str(gateway.get("accountType") or "UNKNOWN").upper()
+        account_ok = system_mode != "AUTO_TRADE" or (
+            account_type in {"DEMO", "REAL"}
             and verification_age is not None
             and float(verification_age) <= 5
+            and (account_type != "REAL" or gateway.get("realAccountArmed") is True)
         )
         gateway_ok = bool(gateway.get("ok")) and gateway.get("configStale") is False
         # A real depth event timestamp is intentionally absent on supported
@@ -87,10 +94,16 @@ async def health_ready() -> JSONResponse:
         # not be permanently red solely for that contract limitation.  The
         # order-time preflight remains fail-closed: it independently requires
         # a reliable, valid order book for every BUY/SELL order.
-        quote_freshness_ok = bool(quote_ages) and max(quote_ages) <= 15
+        # Negatif yaş = zaman damgası gelecekte, yani saat/timezone kayması.
+        # Emir yolu bunu zaten reddediyor (C# ValidateOrderMarketData ve
+        # order_preflight._valid_age, ikisi de age >= 0 şartı arar), ama
+        # readiness sadece "<= 15" baksaydı kaymayı sağlıklı gösterir ve
+        # emirler sessizce "quote is stale" ile bloklanırken panel yeşil
+        # kalırdı. Aynı fail-closed eşiği burada da uygula.
+        quote_freshness_ok = bool(quote_ages) and all(0 <= age <= 15 for age in quote_ages)
         depth_event_freshness_available = bool(depth_ages)
-        depth_freshness_ok = (
-            not depth_event_freshness_available or max(depth_ages) <= 10
+        depth_freshness_ok = not depth_event_freshness_available or all(
+            0 <= age <= 10 for age in depth_ages
         )
         freshness_ok = quote_freshness_ok and depth_freshness_ok
         position_ok = position_age is not None and float(position_age) <= 90

@@ -12,7 +12,15 @@ venv/
 env/
 
 # Environment
+# .env kopyaları gerçek token taşıyor (.env.bak.20260716 gibi); yalnızca
+# .env.example takipli kalır.
 .env
+.env.*
+!.env.example
+
+# Üretim veritabanı yedekleri (pg_dump) — şema değişikliği öncesi alınıyor,
+# repoya değil diske ait.
+backups/
 
 # IDE
 .vscode/
@@ -36,6 +44,9 @@ htmlcov/
 logs/
 *.log
 *.db
+*.db-journal
 
 # AI planning artefacts (not production code)
 .hermes/
+CLAUDE_CODE_BRIEF.md
+task.md.txt

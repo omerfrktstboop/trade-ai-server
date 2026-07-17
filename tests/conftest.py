@@ -62,6 +62,14 @@ os.environ["DISCOVERY_SYMBOLS"] = ""
 # Testler dev token'ı hard-code'lar; üretim .env'inin gerçek token'ı sızmasın.
 os.environ["API_TOKEN"] = "dev-token-change-me"
 os.environ["ADMIN_PASSWORD"] = "admin-change-me"
+# Kapsamlı (scoped) token'lar da sabitlenmeli: üretim .env'i bunları tanımlarsa
+# effective_*_api_token fallback'i API_TOKEN yerine gerçek üretim token'ını
+# döndürür ve dev token'ı kullanan her test 401 alır. Boş bırakmak fallback'i
+# yukarıdaki API_TOKEN'a geri döndürür; ayrım test eden testler (test_ops_security,
+# test_config_production_validation) değerleri zaten kendileri set ediyor.
+os.environ["EVALUATION_API_TOKEN"] = ""
+os.environ["GATEWAY_API_TOKEN"] = ""
+os.environ["ADMIN_API_TOKEN"] = ""
 # Üretim .env'i günün erken saatine sabitlenmiş bir trading cutoff içerebilir
 # (ops ihtiyacı); testler bunun yerine kod varsayılanını (17:30) bekler, yoksa
 # gerçek saatten bağımsız olarak "trading cutoff passed" ile tüm emir testleri

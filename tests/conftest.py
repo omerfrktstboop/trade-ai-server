@@ -57,15 +57,11 @@ os.environ["MARKET_INDEX_SYMBOL"] = ""
 # bunları açmış olabilir (SCANNER_ALLOW_ORDERS=true, DISCOVERY_SYMBOLS=...).
 # Env var, .env dosyasına baskın geldiği için burada sabitliyoruz.
 os.environ["SCANNER_ENABLED"] = "false"
-os.environ["SCANNER_ALLOW_ORDERS"] = "false"
 os.environ["POSITION_SYNC_ENABLED"] = "false"
 os.environ["DISCOVERY_SYMBOLS"] = ""
 # Testler dev token'ı hard-code'lar; üretim .env'inin gerçek token'ı sızmasın.
 os.environ["API_TOKEN"] = "dev-token-change-me"
 os.environ["ADMIN_PASSWORD"] = "admin-change-me"
-# tradingMode'un default'u DEFAULT_MODE'dan türetilir; üretim .env'i
-# demo_live'a çekmiş olabilir — testler PAPER varsayımıyla yazıldı.
-os.environ["DEFAULT_MODE"] = "paper"
 # Üretim .env'i günün erken saatine sabitlenmiş bir trading cutoff içerebilir
 # (ops ihtiyacı); testler bunun yerine kod varsayılanını (17:30) bekler, yoksa
 # gerçek saatten bağımsız olarak "trading cutoff passed" ile tüm emir testleri

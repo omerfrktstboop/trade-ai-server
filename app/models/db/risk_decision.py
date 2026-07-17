@@ -32,7 +32,8 @@ class RiskDecision(Base):
     order_type: Mapped[str] = mapped_column(String(16), default="NONE")
     qty: Mapped[float] = mapped_column(Float, default=0.0)
 
-    mode: Mapped[str] = mapped_column(String(16), default="PAPER")
+    # v2: mod kaldırıldı; kolon geçmiş/gösterim için kalır (default OBSERVE_ONLY).
+    mode: Mapped[str] = mapped_column(String(16), default="OBSERVE_ONLY")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

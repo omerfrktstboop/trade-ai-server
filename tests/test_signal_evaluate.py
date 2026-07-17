@@ -10,7 +10,7 @@ from __future__ import annotations
 
 
 from app.core.risk_config import RiskConfig
-from app.models.signal import SignalAction, SignalMode, SignalRequest, EntryRange
+from app.models.signal import SignalAction, SignalRequest, EntryRange
 from app.services.ai_provider import MockAiProvider
 from app.services.risk_engine import RiskDecision, RiskEngine
 
@@ -35,8 +35,8 @@ def _req(**kwargs) -> SignalRequest:
         # These unit tests exercise gates after server-side watchlist
         # resolution.  HTTP/evaluator tests cover the authoritative DB lookup.
         tradeEligible=True,
-        mode=SignalMode.MANUAL,
     )
+    kwargs.pop("mode", None)  # v2: mode kaldırıldı
     defaults.update(kwargs)
     return SignalRequest(**defaults)
 
@@ -111,7 +111,7 @@ class TestMockProviderFlow:
             reason=raw["reason"],
         )
         resp = engine.evaluate(
-            _req(rsi=10.0, lastPrice=100.0, ema20=80.0, mode=SignalMode.LIVE),
+            _req(rsi=10.0, lastPrice=100.0, ema20=80.0),
             decision,
         )
         # RiskEngine may override reason for WAIT (confidence 0 < threshold 100)
@@ -128,7 +128,7 @@ class TestRiskEngineEdgeCases:
     def test_unknown_symbol_blocks_order_but_keeps_analysis(self):
         """GARAN not in allowed → order path closed, AI analysis preserved."""
         engine = RiskEngine(_cfg())
-        req = _req(symbol="GARAN", mode=SignalMode.LIVE)
+        req = _req(symbol="GARAN")
         decision = RiskDecision(
             action=SignalAction.BUY,
             confidence=95.0,
@@ -142,10 +142,10 @@ class TestRiskEngineEdgeCases:
         assert resp.qty == 0
         assert "not in the allowed order list" in resp.reason
 
-    def test_paper_mode_always_blocks(self):
-        """PAPER mode → allow_order=False regardless of decision."""
+    def test_buy_without_entry_details_blocked(self):
+        """v2: eksik entryRange/stopLoss/targetPrice olan BUY bloklanır."""
         engine = RiskEngine(_cfg())
-        req = _req(mode=SignalMode.PAPER)
+        req = _req()
         decision = RiskDecision(
             action=SignalAction.BUY,
             confidence=95.0,
@@ -154,12 +154,11 @@ class TestRiskEngineEdgeCases:
         )
         resp = engine.evaluate(req, decision)
         assert resp.allow_order is False
-        assert "PAPER mode" in resp.reason
 
     def test_low_confidence_buy_blocked(self):
         """BUY with confidence below threshold → allowed but order blocked."""
         engine = RiskEngine(_cfg(min_confidence_for_buy=75))
-        req = _req(mode=SignalMode.LIVE)
+        req = _req()
         decision = RiskDecision(
             action=SignalAction.BUY,
             confidence=60.0,
@@ -176,7 +175,7 @@ class TestRiskEngineEdgeCases:
     def test_good_buy_passes_all_checks(self):
         """A valid BUY with high confidence in LIVE mode → allowed."""
         engine = RiskEngine(_cfg())
-        req = _req(mode=SignalMode.LIVE)
+        req = _req()
         decision = RiskDecision(
             action=SignalAction.BUY,
             confidence=85.0,

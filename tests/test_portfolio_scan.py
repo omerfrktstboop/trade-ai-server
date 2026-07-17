@@ -11,7 +11,7 @@ from app.core.risk_config import RiskConfig
 from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
 from app.models.db import BotPosition
-from app.models.signal import SignalMode, SignalRequest
+from app.models.signal import SignalRequest
 from app.services import scanner as scanner_module
 from app.services.scanner import SymbolScanner
 from tests.fake_gateway import FakeGateway
@@ -176,7 +176,7 @@ class TestPortfolioScan:
                 reason="test",
             )
             return EvaluationResult(
-                response=resp, mode=SignalMode.PAPER, decision_source=source
+                response=resp, decision_source=source
             )
 
         # 1) preflight-gate kararı → baseline OLUŞMAZ.
@@ -220,7 +220,6 @@ class TestPositionContext:
             low=328.0,
             volume=1000.0,
             rsi=55.0,
-            mode=SignalMode.PAPER,
             botPositionQty=100.0,
         )
 
@@ -247,7 +246,6 @@ class TestPositionContext:
             low=328.0,
             volume=1000.0,
             rsi=55.0,
-            mode=SignalMode.PAPER,
             botPositionQty=0.0,
         )
 
@@ -267,7 +265,6 @@ class TestPositionContext:
             low=69.0,
             volume=1000.0,
             rsi=50.0,
-            mode=SignalMode.PAPER,
             botPositionQty=25.0,
         )
 

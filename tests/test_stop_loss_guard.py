@@ -15,7 +15,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.config import Mode
 from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
 from app.models.db import BotPosition, RiskDecision, SystemConfig, TradeWatchlistSymbol
@@ -237,8 +236,7 @@ class TestScannerStopLossIntegration:
         guard_module.stop_loss_guard._triggered_on.clear()
 
     async def test_triggered_stop_sends_sell_order(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
-        monkeypatch.setattr(scanner_module.settings, "default_mode", Mode.DEMO_LIVE)
+        
         await _seed_position("THYAO", 10)
         await _seed_buy_stop("THYAO", stop_loss=68.0)
         fake = FakeGateway()
@@ -259,7 +257,7 @@ class TestScannerStopLossIntegration:
         assert guard_module.stop_loss_guard.is_symbol_cooling_down("THYAO") is True
 
     async def test_kill_switch_blocks_stop_loss_order(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+        
 
         async def kill_switch_on(_session) -> bool:
             return True
@@ -276,7 +274,6 @@ class TestScannerStopLossIntegration:
         assert fake.orders == []
 
     async def test_orders_disabled_does_not_send(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", False)
         await _seed_position("THYAO", 10)
         await _seed_buy_stop("THYAO", stop_loss=68.0)
         fake = FakeGateway()
@@ -288,7 +285,7 @@ class TestScannerStopLossIntegration:
         assert fake.orders == []
 
     async def test_no_breach_sends_nothing(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+        
         await _seed_position("THYAO", 10)
         await _seed_buy_stop("THYAO", stop_loss=60.0)
         fake = FakeGateway()

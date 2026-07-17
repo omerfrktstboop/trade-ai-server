@@ -38,7 +38,7 @@ async def test_dry_run_does_not_call_create_all(monkeypatch, tmp_path):
         dry_run=True,
     )
 
-    assert "manual_approval_requests" in tables
+    assert "account_events" in tables  # v2: manual_approval_requests kaldırıldı
     assert "position_management_decisions" in tables
     assert "watchlist_quality_scores" in tables
     assert "research_candidates" in tables
@@ -63,7 +63,7 @@ async def test_yes_creates_schema_seeds_profiles_and_is_idempotent(tmp_path):
 
     async with engine.connect() as connection:
         for table in (
-            "manual_approval_requests",
+            "account_events",
             "position_management_decisions",
             "watchlist_quality_scores",
             "ai_lessons_learned",
@@ -82,8 +82,9 @@ async def test_yes_creates_schema_seeds_profiles_and_is_idempotent(tmp_path):
         profiles = await connection.execute(text("SELECT count(*) FROM trade_profiles"))
         assert profiles.scalar_one() == 4
 
-    assert "ManualApprovalRequest" not in Base.metadata.tables
-    assert "manual_approval_requests" in Base.metadata.tables
+    # v2 cutover: manual_approval_requests tablosu kaldırıldı.
+    assert "manual_approval_requests" not in Base.metadata.tables
+    assert "account_events" in Base.metadata.tables
     assert "position_management_decisions" in Base.metadata.tables
     assert "watchlist_quality_scores" in Base.metadata.tables
     assert "research_candidates" in Base.metadata.tables

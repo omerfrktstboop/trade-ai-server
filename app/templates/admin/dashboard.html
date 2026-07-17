@@ -8,10 +8,10 @@
 {% if configs %}
 <div class="stat-grid">
   <div class="card">
-    <div class="card-header">İşlem Modu</div>
+    <div class="card-header">Sistem Modu</div>
     <div class="card-value">
-      {% set mode = configs.tradingMode.display_value %}
-      <span class="badge {% if mode == 'LIVE' %}badge-live{% elif mode == 'PAPER' %}badge-paper{% else %}badge-manual{% endif %}">{{ mode }}</span>
+      {% set mode = configs.systemMode.display_value | default('OBSERVE_ONLY') %}
+      <span class="badge {% if mode == 'AUTO_TRADE' %}badge-live{% else %}badge-paper{% endif %}">{{ mode }}</span>
     </div>
     <div class="mt-16" style="font-size:12px;color:var(--text-muted)">Aktif çalışma modu</div>
   </div>
@@ -121,7 +121,7 @@
   <div class="stat-grid">
     <div class="card"><div class="card-header">Gateway</div><div class="card-value">{% if bot_status.gateway.reachable %}<span class="status status-ok">Reachable</span>{% else %}<span class="status status-danger">Unavailable</span>{% endif %}</div><div class="mt-16 text-sm text-muted">positions: {{ bot_status.gateway.positionsLoaded | default('n/a') }}, subscriptions: {{ bot_status.gateway.subscriptionsInitialized | default('n/a') }}<br>quote age: {{ bot_status.gateway.quoteAgeSeconds | default('n/a') }} s<br>{{ bot_status.gateway.error | default('') }}</div></div>
     <div class="card"><div class="card-header">Scanner</div><div class="card-value">{% if bot_status.scanner.running %}<span class="status status-ok">Running</span>{% else %}<span class="status status-idle">Stopped</span>{% endif %}</div><div class="mt-16 text-sm text-muted">enabled: {{ bot_status.scanner.enabled }}, orders: {{ bot_status.scanner.allowOrders }}<br>tick: {{ bot_status.scanner.tickSeconds }}s<br>last: {{ bot_status.scanner.lastTickAt | default('never') }}</div></div>
-    <div class="card"><div class="card-header">Runtime</div><div class="card-value">{{ bot_status.runtime.tradingMode | default('UNKNOWN') }}</div><div class="mt-16 text-sm text-muted">kill switch: {{ bot_status.runtime.killSwitchEnabled | default(false) }}<br>profile: {{ bot_status.runtime.profileCode | default('UNKNOWN') }}<br>today trades: {{ bot_status.runtime.todayTradeCount | default(0) }}</div></div>
+    <div class="card"><div class="card-header">Runtime</div><div class="card-value">{{ bot_status.runtime.systemMode | default('OBSERVE_ONLY') }}</div><div class="mt-16 text-sm text-muted">kill switch: {{ bot_status.runtime.killSwitchEnabled | default(false) }}<br>profile: {{ bot_status.runtime.profileCode | default('UNKNOWN') }}<br>today trades: {{ bot_status.runtime.todayTradeCount | default(0) }}</div></div>
     <div class="card"><div class="card-header">Config</div><div class="card-value mono" style="font-size:16px">{{ bot_status.runtime.configHash | default('n/a') }}</div><div class="mt-16 text-sm text-muted">symbols: {{ bot_status.runtime.symbolsCount | default(0) }}<br>evaluated: {{ bot_status.scanner.lastEvaluatedSymbols | join(', ') or 'none' }}<br>discovery: {{ bot_status.scanner.lastDiscoveryRunAt | default('never') }}</div></div>
   </div>
 </div>
@@ -163,7 +163,7 @@
             <span class="badge {% if row.action == 'BUY' %}badge-buy{% elif row.action == 'SELL' %}badge-sell{% else %}badge-wait{% endif %}">{{ row.action }}</span>
           </td>
           <td>{% if row.allow_order %}<span class="status status-ok">Evet</span>{% else %}<span class="status status-danger">Hayır</span>{% endif %}</td>
-          <td><span class="badge {% if row.mode == 'LIVE' %}badge-live{% elif row.mode == 'PAPER' %}badge-paper{% else %}badge-manual{% endif %}">{{ row.mode }}</span></td>
+          <td><span class="badge {% if row.mode == 'AUTO_TRADE' %}badge-live{% else %}badge-paper{% endif %}">{{ row.mode }}</span></td>
           <td class="text-muted" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="{{ row.reason }}">{{ row.reason }}</td>
           <td class="mono text-muted">{{ row.created_at | local_time }}</td>
         </tr>
@@ -193,7 +193,7 @@
           </td>
           <td>{{ row.qty }}</td>
           <td><span class="status {% if row.status == 'FILLED' %}status-ok{% elif row.status == 'REJECTED' %}status-danger{% else %}status-idle{% endif %}">{{ row.status }}</span></td>
-          <td><span class="badge {% if row.mode == 'LIVE' %}badge-live{% elif row.mode == 'PAPER' %}badge-paper{% else %}badge-manual{% endif %}">{{ row.mode }}</span></td>
+          <td><span class="badge {% if row.mode == 'AUTO_TRADE' %}badge-live{% else %}badge-paper{% endif %}">{{ row.mode }}</span></td>
           <td class="mono text-muted">{{ row.created_at | local_time }}</td>
         </tr>
         {% else %}

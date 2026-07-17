@@ -12,12 +12,14 @@ Lifespan'de başlar, her tick'te (default 60 sn):
 6. Sırası gelen sembolleri (scan interval dolmuş VEYA admin pending override'ı
    olan) ``evaluator.evaluate_symbol`` ile değerlendirir.
 
-Emir yolu (Phase 2): ``SCANNER_ALLOW_ORDERS=false`` (default) iken tüm
-kararlar PAPER'a sabitlenir - Phase 1 davranışının aynısı. ``true`` iken mod
-admin panelin ``tradingMode`` override'ından gelir ve yalnızca **DEMO_LIVE**
-kararları gateway'e emir olarak gönderilir; REAL_LIVE/LIVE bu fazda kod
-seviyesinde bloklu. Senkron emir sonuçları ``order_logs``'a yazılır; nihai
-borsa durumu gateway'in OnOrderUpdate -> /api/order-result raporuyla gelir.
+Emir yolu (v2): tek anahtar ``systemMode`` (admin config). ``OBSERVE_ONLY``
+(default) iken analiz/karar üretilir ama hiçbir emir gönderilmez;
+``AUTO_TRADE`` iken karar; kill switch kapalı, account watcher başarılı
+(DEMO serbest, REAL arming), audit mevcut ve tüm risk kontrolleri geçtiğinde
+gateway'e LIMIT emri olur. DEMO/REAL yalnızca gateway'in bildirdiği
+accountType'tır (çalışma modu değil). Senkron emir sonuçları ``order_logs``'a
+yazılır; nihai borsa durumu gateway'in OnOrderUpdate -> /api/order-result
+raporuyla gelir.
 """
 
 from __future__ import annotations
@@ -41,13 +43,12 @@ from app.models.db import (
     RiskDecision,
     TradeWatchlistSymbol,
 )
-from app.models.signal import OrderType, SignalAction, SignalMode
+from app.models.signal import OrderType, SignalAction
 from app.services.admin_config import (
     build_runtime_risk_config,
     get_admin_config_value,
     get_ai_tool_calling_enabled,
     get_portfolio_scan_interval_minutes,
-    get_scanner_allow_orders,
     get_system_mode,
     is_kill_switch_enabled,
     is_scanner_runtime_enabled,
@@ -75,7 +76,6 @@ from app.services.notifications import (
     notify_order_event,
     notify_risk_block,
 )
-from app.services.manual_approvals import queue_response
 from app.services.order_sync import cancel_timed_out_orders
 from app.services.order_ledger import mark_send_result, mark_send_started, reserve_order
 from app.services.order_preflight import parse_finite_decimal, validate_order_preflight
@@ -102,22 +102,13 @@ from app.services.research_pipeline import (
 logger = logging.getLogger(__name__)
 
 
-def _configured_default_mode() -> SignalMode:
-    """Translate the configured default mode for scanner-originated requests."""
-    return SignalMode(settings.default_mode.value.upper())
-
-
-async def _orders_enabled() -> bool:
-    """Emir gönderim ana anahtarı (admin panel > .env varsayılanı).
-
-    DB'ye ulaşılamazsa .env değerine düşer; panelde satır yoksa da .env
-    değeri geçerlidir, yani mevcut kurulumlar davranış değiştirmez.
-    """
-    try:
-        async with async_session_factory() as session:
-            return await get_scanner_allow_orders(session)
-    except Exception:
-        return settings.scanner_allow_orders
+# v2: emir dispatch'i artık tek anahtardan gelir — systemMode=AUTO_TRADE
+# (admin config). Eski _configured_default_mode / _orders_enabled
+# (scannerAllowOrders) kaldırıldı; dispatch kararı _maybe_send_order'da
+# systemMode + kill switch + account watcher + audit + risk ile verilir.
+# Gateway'e gönderilen emir "mode" alanı artık sabittir (accountType gateway
+# tarafında tespit edilir).
+_ORDER_DISPATCH_TAG = "AUTO_TRADE"
 
 
 # Aynı uyarıyı her tick'te loglamamak için susturma süresi.
@@ -231,7 +222,6 @@ class SymbolScanner:
         """Return a read-only runtime snapshot for the admin status view."""
         return {
             "enabled": settings.scanner_enabled,
-            "allowOrders": settings.scanner_allow_orders,
             "running": self.running,
             "tickSeconds": self._tick_seconds,
             "lastTickAt": self._last_tick_at.isoformat()
@@ -293,7 +283,6 @@ class SymbolScanner:
         runtime_cfg = risk_config
         scan_interval_minutes = 30
         scanner_runtime_enabled = True
-        allow_orders = settings.scanner_allow_orders
         pending_overrides: set[str] = set()
         try:
             async with async_session_factory() as session:
@@ -302,7 +291,6 @@ class SymbolScanner:
                 profile = await get_active_profile(session)
                 scan_interval_minutes = int(profile.scan_interval_minutes)
                 scanner_runtime_enabled = await is_scanner_runtime_enabled(session)
-                allow_orders = await get_scanner_allow_orders(session)
                 pending_overrides = {
                     s.strip().upper()
                     for s in await list_pending_override_symbols(session)
@@ -436,13 +424,9 @@ class SymbolScanner:
                 continue
 
             try:
-                # scannerAllowOrders=false (panel > env) -> PAPER'a sabit
-                # (Phase 1 davranışı), emir yolu tamamen kapalı.
-                result = await evaluate_symbol(
-                    symbol,
-                    mode=_configured_default_mode(),
-                    force_paper=not allow_orders,
-                )
+                # v2: değerlendirme mod-bağımsız. Emir dispatch'i
+                # _maybe_send_order'da systemMode=AUTO_TRADE + kapılarla verilir.
+                result = await evaluate_symbol(symbol)
             except GatewayUnavailable:
                 self._warn_throttled(
                     "gateway",
@@ -470,12 +454,13 @@ class SymbolScanner:
 
             response = result.response
             logger.info(
-                "Scan decision symbol=%s action=%s confidence=%s allowOrder=%s mode=%s",
+                "Scan decision symbol=%s action=%s confidence=%s allowOrder=%s "
+                "dispatchEligible=%s",
                 symbol,
                 response.action.value,
                 response.confidence_score,
                 response.allow_order,
-                result.mode.value,
+                result.dispatch_eligible,
             )
             await self._maybe_send_order(result)
             await record_trade_watchlist_decision(result)
@@ -642,10 +627,8 @@ class SymbolScanner:
         try:
             async with async_session_factory() as session:
                 interval_minutes = await get_portfolio_scan_interval_minutes(session)
-                allow_orders = await get_scanner_allow_orders(session)
         except Exception:
             interval_minutes = settings.portfolio_scan_interval_minutes
-            allow_orders = settings.scanner_allow_orders
         interval = timedelta(minutes=max(5, interval_minutes))
         now = datetime.now(timezone.utc)
         if self._last_portfolio_scan and (now - self._last_portfolio_scan) < interval:
@@ -710,11 +693,7 @@ class SymbolScanner:
                     ",".join(verdict.triggers),
                 )
             try:
-                result = await evaluate_symbol(
-                    symbol,
-                    mode=_configured_default_mode(),
-                    force_paper=not allow_orders,
-                )
+                result = await evaluate_symbol(symbol)
             except GatewayUnavailable:
                 self._warn_throttled(
                     "gateway", "Gateway unavailable during portfolio scan; stopping"
@@ -810,14 +789,13 @@ class SymbolScanner:
                 response.request_id,
             )
             return
-        if response.requires_confirmation:
-            await queue_response(response, result.mode)
+        # v2: research kararları asla emre dönüşmez.
+        if not result.dispatch_eligible or not response.allow_order:
             return
-        if not await _orders_enabled() or not response.allow_order:
-            return
-        # v2 çift kapı (Faz 4): systemMode=AUTO_TRADE değilse hiçbir emir
-        # gönderilmez. Eski mod kapıları aşağıda AYNEN durur — geçiş dönemi
-        # boyunca dispatch için ikisi birden açık olmalı (fail-closed AND).
+        # v2 TEK emir kapısı: systemMode=AUTO_TRADE değilse (OBSERVE_ONLY)
+        # hiçbir emir gönderilmez. Eski scannerAllowOrders / DEMO_LIVE mod
+        # kapıları kaldırıldı — DEMO/REAL artık yalnızca accountType'tır ve
+        # gateway tarafında tespit edilir.
         try:
             async with async_session_factory() as session:
                 system_mode = await get_system_mode(session)
@@ -855,16 +833,6 @@ class SymbolScanner:
                 "Order skipped: invalid qty/price qty=%s price=%s requestId=%s",
                 response.qty,
                 response.price,
-                response.request_id,
-            )
-            return
-
-        # Phase 2 kapısı: sadece DEMO_LIVE emre dönüşür.
-        if result.mode != SignalMode.DEMO_LIVE:
-            logger.warning(
-                "Order blocked: mode=%s is not allowed to send orders in Phase 2 "
-                "(only DEMO_LIVE) requestId=%s",
-                result.mode.value,
                 response.request_id,
             )
             return
@@ -1057,7 +1025,7 @@ class SymbolScanner:
                         symbol=response.symbol,
                         original_decision_qty=response.qty,
                         limit_price=Decimal(str(response.price)),
-                        mode=result.mode.value,
+                        mode=_ORDER_DISPATCH_TAG,
                         raw_account=account_inputs.raw_account,
                         raw_positions=account_inputs.raw_positions,
                         raw_open_orders=account_inputs.raw_open_orders,
@@ -1106,7 +1074,7 @@ class SymbolScanner:
                     side=response.action.value,
                     qty=response.qty,
                     limit_price=response.price,
-                    mode=result.mode.value,
+                    mode=_ORDER_DISPATCH_TAG,
                     account_ref=dispatch_account_ref,
                 )
                 if not may_send:
@@ -1190,7 +1158,7 @@ class SymbolScanner:
                 side=response.action.value,
                 qty=response.qty,
                 limit_price=response.price,
-                mode=result.mode.value,
+                mode=_ORDER_DISPATCH_TAG,
             )
             status = str(outcome.get("status", "UNKNOWN"))
             reason = str(outcome.get("reason", ""))

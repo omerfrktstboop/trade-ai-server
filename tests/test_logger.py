@@ -19,7 +19,6 @@ def test_log_signal_evaluation_writes_istanbul_local_time(tmp_path, monkeypatch)
     log_signal_evaluation(
         request_id="test-tz",
         symbol="THYAO",
-        mode="PAPER",
         request={"symbol": "THYAO"},
         response={"action": "WAIT"},
     )

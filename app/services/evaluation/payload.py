@@ -17,10 +17,7 @@ from sqlalchemy import select
 from app.models.ai_decision_context import AiDecisionContext
 from app.models.db import BotPosition as BotPositionModel
 from app.models.db import OrderLog
-from app.models.signal import (
-    SignalMode,
-    SignalRequest,
-)
+from app.models.signal import SignalRequest
 from app.services.market_data_contract import normalize_snapshot_payload
 
 logger = logging.getLogger(__name__)
@@ -369,7 +366,6 @@ def snapshot_to_signal_request(
     payload: dict[str, Any],
     *,
     request_id: str,
-    mode: SignalMode,
 ) -> SignalRequest:
     """Build a :class:`SignalRequest` from a gateway snapshot payload.
 
@@ -512,7 +508,6 @@ def snapshot_to_signal_request(
             if isinstance(payload.get("positionContext"), dict)
             else None
         ),
-        mode=mode,
     )
 
 

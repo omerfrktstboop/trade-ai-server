@@ -21,14 +21,12 @@ from app.models.db import TradeWatchlistSymbol
 from app.models.signal import (
     OrderType,
     SignalAction,
-    SignalMode,
     SignalRequest,
     SignalResponse,
 )
 from app.services.ai_provider import AiProvider, get_default_provider
 from app.services.admin_config import (
     build_runtime_risk_config,
-    get_trading_mode_override,
     is_kill_switch_enabled,
 )
 from app.services.broker_flow_service import get_broker_flow_context
@@ -100,14 +98,17 @@ _static_risk_engine = RiskEngine(risk_config, _static_effective_config)
 
 @dataclass(frozen=True)
 class EvaluationResult:
-    """Final decision and effective mode after all runtime overrides.
+    """Final decision after all runtime controls.
 
-    The scanner order gate reads ``mode`` here because SignalResponse does not
-    carry the effective mode.
+    v2: mod kavramı kaldırıldı. Emrin dispatch edilebilir olup olmadığı
+    ``dispatch_eligible`` ile belirtilir (yalnızca TRADING amaçlı, research
+    olmayan değerlendirmeler emre dönüşebilir). Gerçek dispatch kararı ayrıca
+    scanner'da systemMode=AUTO_TRADE + account watcher + audit + risk
+    kapılarından geçer.
     """
 
     response: SignalResponse
-    mode: SignalMode
+    dispatch_eligible: bool = False
     decision_created_utc: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
@@ -127,7 +128,6 @@ async def with_runtime_controls(
     try:
         async with async_session_factory() as session:
             runtime_config = await build_runtime_risk_config(session)
-            mode_override = await get_trading_mode_override(session)
             kill_switch_enabled = await is_kill_switch_enabled(session)
             effective_config = await resolve_effective_risk_config(session)
     except Exception:
@@ -138,8 +138,7 @@ async def with_runtime_controls(
         )
         return req, _static_risk_engine, False
 
-    if mode_override is not None:
-        req = req.model_copy(update={"mode": mode_override})
+    # v2: eski tradingMode override kaldırıldı. Emir yetkisi mod-bağımsızdır.
     return req, RiskEngine(runtime_config, effective_config), kill_switch_enabled
 
 
@@ -275,26 +274,27 @@ async def evaluate_symbol(
     *,
     gateway: MatriksGatewayClient | None = None,
     provider: AiProvider | None = None,
-    mode: SignalMode = SignalMode.PAPER,
-    force_paper: bool = False,
     request_id: str | None = None,
     evaluation_purpose: str = "TRADING",
     research_context: dict[str, Any] | None = None,
 ) -> EvaluationResult | None:
     """Bir sembolu uctan uca degerlendir; final karari dondur.
 
+    v2: mod parametresi kaldirildi. ``evaluation_purpose=="TRADING"`` olan
+    degerlendirmeler ``dispatch_eligible=True`` uretir; research kararlari
+    asla emre donusmez. Gercek dispatch karari scanner'da systemMode=
+    AUTO_TRADE + account watcher + audit + risk kapilarindan gecer.
+
     Args:
         symbol: Kok sembol (or. ``"THYAO"``).
         gateway: Matriks gateway client'i (default: paylasilan singleton).
         provider: AI provider (default: settings'ten gelen singleton).
-        mode: Istek modu - runtime ``tradingMode`` override'i yine uygulanir.
-        force_paper: True -> mode override'dan SONRA bile PAPER'a sabitle;
-            emir yolu bu cagri icin tamamen kapali demektir.
         request_id: Verilmezse ``SYMBOL-yyyyMMdd-HHmmss-scan`` uretilir.
+        evaluation_purpose: ``"TRADING"`` (default) veya ``"RESEARCH_DISCOVERY"``.
 
     Returns:
-        ``EvaluationResult`` (final karar + efektif mod); veri
-        degerlendirilemeyecek kadar bozuksa (lastPrice<=0) ``None``.
+        ``EvaluationResult``; veri degerlendirilemeyecek kadar bozuksa
+        (lastPrice<=0) ``None``.
 
     Raises:
         GatewayUnavailable: Gateway'e hic ulasilamiyor - cagiran (scanner)
@@ -353,18 +353,17 @@ async def evaluate_symbol(
             )
 
     # == 3. SignalRequest koprusu =========================================
-    sig_req = snapshot_to_signal_request(
-        symbol, root_payload, request_id=request_id, mode=mode
-    )
+    sig_req = snapshot_to_signal_request(symbol, root_payload, request_id=request_id)
 
     sig_req = sig_req.model_copy(update={"evaluation_purpose": evaluation_purpose})
+
+    # v2: research kararlari asla emre donusmez.
+    dispatch_eligible = not research_only
 
     # == 4. Runtime kontroller ============================================
     sig_req, runtime_engine, kill_switch_enabled = await with_runtime_controls(sig_req)
     sig_req = await with_resolved_daily_trade_count(sig_req)
     sig_req = await with_trade_eligibility(sig_req)
-    if (force_paper or research_only) and sig_req.mode != SignalMode.PAPER:
-        sig_req = sig_req.model_copy(update={"mode": SignalMode.PAPER})
 
     if kill_switch_enabled:
         response = kill_switch_response(sig_req)
@@ -379,7 +378,7 @@ async def evaluate_symbol(
         await persist_evaluation(sig_req, payload, raw, response)
         return EvaluationResult(
             response=response,
-            mode=sig_req.mode,
+            dispatch_eligible=dispatch_eligible,
             decision_created_utc=decision_created_utc,
             evaluation_purpose=evaluation_purpose,
             raw_action=SignalAction.WAIT,
@@ -440,7 +439,6 @@ async def evaluate_symbol(
             "macro_market_regime_symbol": settings.market_index_symbol.strip().upper(),
         }
     )
-    payload["runtimeMode"] = sig_req.mode.value
     payload["configHash"] = runtime_config_hash
     payload["profileCode"] = active_profile_code
     if research_context:
@@ -458,8 +456,6 @@ async def evaluate_symbol(
         payload["positionContext"] = position_context
 
     # == 6. Admin test override VEYA AI karari ============================
-    # Override asla REAL_LIVE'da uygulanmaz - test amacli bir ozellik gercek
-    # sermayeyi hareket ettiremesin.
     ai_context = build_ai_decision_context(
         sig_req,
         news_context=news_context,
@@ -470,11 +466,10 @@ async def evaluate_symbol(
         position_context=position_context,
     )
     raw: dict[str, Any] | None = None
-    if not research_only and sig_req.mode in (
-        SignalMode.PAPER,
-        SignalMode.MANUAL,
-        SignalMode.DEMO_LIVE,
-    ):
+    # v2: admin test override yalnizca research olmayan degerlendirmelerde
+    # uygulanir (mod-bagimsiz). Override kararlari da systemMode gate'inden
+    # gecmeden emre donusmez.
+    if not research_only:
         try:
             async with async_session_factory() as ov_session:
                 override = await consume_override(ov_session, sig_req.symbol)
@@ -546,7 +541,7 @@ async def evaluate_symbol(
 
     return EvaluationResult(
         response=response,
-        mode=sig_req.mode,
+        dispatch_eligible=dispatch_eligible,
         decision_created_utc=decision_created_utc,
         evaluation_purpose=evaluation_purpose,
         research_score=(
@@ -561,7 +556,6 @@ def _log_evaluation(req: SignalRequest, response: SignalResponse) -> None:
     log_signal_evaluation(
         request_id=req.request_id,
         symbol=req.symbol,
-        mode=req.mode.value,
-        request=req.model_dump(by_alias=True, exclude={"mode"}, mode="json"),
+        request=req.model_dump(by_alias=True, mode="json"),
         response=response.model_dump(by_alias=True, mode="json"),
     )

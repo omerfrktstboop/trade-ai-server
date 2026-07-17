@@ -136,7 +136,7 @@ async def _status_strip_context(
     except Exception:
         ai_status = {"isDegraded": None}
     return {
-        "status_mode": configs["tradingMode"].value,
+        "status_mode": configs["systemMode"].value,
         "status_kill_switch": configs["killSwitchEnabled"].value == "true",
         "status_profile_code": profile.code,
         "status_profile_risk_level": profile.risk_level,

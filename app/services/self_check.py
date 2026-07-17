@@ -7,9 +7,7 @@ from sqlalchemy import text
 from app.config import is_supported_ai_provider, settings
 from app.db.session import async_session_factory
 from app.services.admin_config import (
-    get_admin_config_value,
-    get_manual_approval_allow_orders,
-    get_scanner_allow_orders,
+    get_system_mode,
     is_scanner_runtime_enabled,
 )
 from app.services.matriks_gateway import (
@@ -45,8 +43,8 @@ async def run_self_check() -> dict[str, Any]:
     async def config():
         async with async_session_factory() as session:
             profile = await get_active_profile(session)
-            mode = await get_admin_config_value(session, "tradingMode")
-        return f"profile={profile.code} mode={mode}", "PASS"
+            system_mode = await get_system_mode(session)
+        return f"profile={profile.code} systemMode={system_mode}", "PASS"
 
     async def gateway():
         health = await gateway_client.health()
@@ -63,17 +61,12 @@ async def run_self_check() -> dict[str, Any]:
     async def scanner_status():
         async with async_session_factory() as session:
             runtime_enabled = await is_scanner_runtime_enabled(session)
-            allow_orders = await get_scanner_allow_orders(session)
+            system_mode = await get_system_mode(session)
         return (
             f"envEnabled={settings.scanner_enabled} panelEnabled={runtime_enabled} "
-            f"running={scanner.running} allowOrders={allow_orders}",
+            f"running={scanner.running} systemMode={system_mode}",
             "PASS" if scanner.running and runtime_enabled else "WARN",
         )
-
-    async def manual_approval_gate():
-        async with async_session_factory() as session:
-            allowed = await get_manual_approval_allow_orders(session)
-        return f"allowOrders={str(allowed).lower()}", "WARN" if allowed else "PASS"
 
     async def ai():
         provider = getattr(settings.ai_provider, "value", str(settings.ai_provider))
@@ -92,7 +85,6 @@ async def run_self_check() -> dict[str, Any]:
     await check("gateway-health", gateway)
     await check("gateway-token", gateway_token)
     await check("scanner", scanner_status)
-    await check("manual-approval-order-gate", manual_approval_gate)
     return {
         "status": "FAIL"
         if any(c["status"] == "FAIL" for c in checks)

@@ -9,7 +9,6 @@ from app.models.signal import (
     EntryRange,
     OrderType,
     SignalAction,
-    SignalMode,
     SignalRequest,
 )
 from app.services.risk_engine import RiskDecision, RiskEngine
@@ -20,9 +19,9 @@ from app.services.risk_engine import RiskDecision, RiskEngine
 # ---------------------------------------------------------------------------
 
 
-def _make_request(
-    symbol: str = "THYAO", mode: SignalMode = SignalMode.MANUAL, **kwargs
-) -> SignalRequest:
+def _make_request(symbol: str = "THYAO", **kwargs) -> SignalRequest:
+    # v2: mode kaldırıldı; kalan `mode=` kwarg'ları yok sayılır.
+    kwargs.pop("mode", None)
     defaults: dict = dict(
         requestId="test-001",
         symbol=symbol,
@@ -34,7 +33,6 @@ def _make_request(
         volume=1000.0,
         rsi=55.0,
         tradeEligible=True,
-        mode=mode,
     )
     defaults.update(kwargs)
     if "totalAccountQty" in kwargs and "accountAvailableQty" not in kwargs:
@@ -86,7 +84,7 @@ class TestAllowedSymbols:
 
     def test_allowed_symbol_goes_through(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE)
+        req = _make_request(symbol="THYAO")
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -107,7 +105,7 @@ class TestAllowedSymbols:
 
     def test_case_insensitive_symbol_lookup(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(symbol="thyao", mode=SignalMode.LIVE)
+        req = _make_request(symbol="thyao")
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -118,7 +116,7 @@ class TestEmptyAllowListAllowsAll:
 
     def test_empty_allowed_symbols_permits_any_symbol(self):
         engine = RiskEngine(_cfg(allowed_symbols=""))
-        req = _make_request(symbol="GARAN", mode=SignalMode.LIVE)
+        req = _make_request(symbol="GARAN")
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -126,7 +124,7 @@ class TestEmptyAllowListAllowsAll:
 
     def test_nonempty_allowed_symbols_still_whitelists(self):
         engine = RiskEngine(_cfg(allowed_symbols="THYAO"))
-        req = _make_request(symbol="GARAN", mode=SignalMode.LIVE)
+        req = _make_request(symbol="GARAN")
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
@@ -134,7 +132,7 @@ class TestEmptyAllowListAllowsAll:
 
     def test_empty_allowed_symbols_does_not_promote_research_candidate(self):
         engine = RiskEngine(_cfg(allowed_symbols=""))
-        req = _make_request(symbol="GARAN", mode=SignalMode.LIVE, tradeEligible=False)
+        req = _make_request(symbol="GARAN", tradeEligible=False)
         resp = engine.evaluate(req, _make_buy_decision())
         assert resp.allow_order is False
         assert resp.qty == 0
@@ -146,7 +144,7 @@ class TestDeclineSymbols:
 
     def test_declined_symbol_blocks_buy_even_when_allow_all(self):
         engine = RiskEngine(_cfg(allowed_symbols="", decline_symbols="GARAN"))
-        req = _make_request(symbol="GARAN", mode=SignalMode.LIVE)
+        req = _make_request(symbol="GARAN")
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
@@ -160,7 +158,7 @@ class TestDeclineSymbols:
             totalAccountQty=20,
             accountAvailableQty=20,
             botPositionQty=10,
-            mode=SignalMode.LIVE,
+            
         )
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
         resp = engine.evaluate(req, dec)
@@ -190,7 +188,7 @@ class TestLockedLongTerm:
             totalAccountQty=20,
             accountAvailableQty=20,
             botPositionQty=10,
-            mode=SignalMode.LIVE,
+            
         )
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
         resp = engine.evaluate(req, dec)
@@ -200,7 +198,7 @@ class TestLockedLongTerm:
     def test_locked_symbol_buy_goes_through(self):
         """BUY on locked symbol should not be blocked — lock is sell-only."""
         engine = RiskEngine(_cfg(allowed_symbols="ASELS,THYAO"))
-        req = _make_request(symbol="ASELS", mode=SignalMode.LIVE)
+        req = _make_request(symbol="ASELS")
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -222,7 +220,7 @@ class TestSellPositionChecks:
     def test_sell_with_position_succeeds(self):
         engine = RiskEngine(_cfg())
         req = _make_request(
-            symbol="THYAO", totalAccountQty=20, botPositionQty=10, mode=SignalMode.LIVE
+            symbol="THYAO", totalAccountQty=20, botPositionQty=10
         )
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=5)
         resp = engine.evaluate(req, dec)
@@ -236,7 +234,7 @@ class TestSellQtyClamp:
     def test_sell_qty_exceeds_position_clamped(self):
         engine = RiskEngine(_cfg())
         req = _make_request(
-            symbol="THYAO", totalAccountQty=30, botPositionQty=10, mode=SignalMode.LIVE
+            symbol="THYAO", totalAccountQty=30, botPositionQty=10
         )
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=20)
         resp = engine.evaluate(req, dec)
@@ -271,7 +269,7 @@ class TestLockedLongTermQty:
             totalAccountQty=8,
             botPositionQty=10,
             lockedLongTermQty=3,
-            mode=SignalMode.LIVE,
+            
         )
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=10)
         resp = engine.evaluate(req, dec)
@@ -288,7 +286,7 @@ class TestLockedLongTermQty:
             totalAccountQty=120,
             botPositionQty=50,
             lockedLongTermQty=100,
-            mode=SignalMode.LIVE,
+            
         )
         dec = RiskDecision(action=SignalAction.SELL, confidence=85.0, qty=40)
         resp = engine.evaluate(req, dec)
@@ -328,84 +326,35 @@ class TestLockedLongTermQty:
         assert "no sellable qty" in resp.reason.lower()
 
 
-class TestPaperMode:
-    """PAPER mode — never allowOrder, never requiresConfirmation."""
+# v2: TestPaperMode / TestManualMode kaldırıldı. PAPER/MANUAL çalışma modları
+# yok; allow_order artık yalnızca risk geçişini gösterir (dispatch systemMode
+# ile scanner'da kapılanır), requires_confirmation her zaman False.
 
-    def test_paper_mode_blocks_order(self):
+
+class TestRiskPassAllowsOrder:
+    """v2: risk geçen BUY/SELL için allow_order=True, requires_confirmation=False."""
+
+    def test_valid_buy_allows_order_without_confirmation(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", mode=SignalMode.PAPER)
-        dec = _make_buy_decision(confidence=95.0)
-        resp = engine.evaluate(req, dec)
-        assert resp.allow_order is False
-        assert resp.requires_confirmation is False
-        assert "PAPER mode" in resp.reason
-
-    def test_paper_mode_even_with_perfect_confidence(self):
-        engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", mode=SignalMode.PAPER)
-        dec = _make_buy_decision(confidence=100.0)
-        resp = engine.evaluate(req, dec)
-        assert resp.allow_order is False
-        assert resp.requires_confirmation is False
-
-    def test_paper_mode_sell_also_blocked(self):
-        engine = RiskEngine(_cfg())
-        req = _make_request(
-            symbol="THYAO", mode=SignalMode.PAPER, totalAccountQty=20, botPositionQty=10
-        )
-        dec = RiskDecision(action=SignalAction.SELL, confidence=95.0, qty=5)
-        resp = engine.evaluate(req, dec)
-        assert resp.allow_order is False
-        assert resp.requires_confirmation is False
-        assert "PAPER mode" in resp.reason
-
-
-class TestManualMode:
-    """MANUAL mode — never allowOrder, requiresConfirmation for BUY/SELL."""
-
-    def test_manual_buy_requires_confirmation(self):
-        engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", mode=SignalMode.MANUAL)
+        req = _make_request(symbol="THYAO")
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
-        assert resp.allow_order is False
-        assert resp.requires_confirmation is True
+        assert resp.allow_order is True
+        assert resp.requires_confirmation is False
         assert resp.action == SignalAction.BUY
-        assert resp.qty > 0
-        assert "requires user confirmation" in resp.reason
 
-    def test_manual_wait_no_confirmation(self):
+    def test_wait_never_allows_order(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", mode=SignalMode.MANUAL)
+        req = _make_request(symbol="THYAO")
         dec = RiskDecision(action=SignalAction.WAIT, confidence=90.0)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
         assert resp.requires_confirmation is False
         assert resp.action == SignalAction.WAIT
 
-    def test_manual_sell_requires_confirmation(self):
+    def test_valid_buy_preserves_order_details(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(
-            symbol="THYAO",
-            mode=SignalMode.MANUAL,
-            totalAccountQty=20,
-            botPositionQty=10,
-        )
-        dec = RiskDecision(
-            action=SignalAction.SELL,
-            confidence=85.0,
-            qty=5,
-            entry_range=EntryRange(min=97, max=102),
-        )
-        resp = engine.evaluate(req, dec)
-        assert resp.allow_order is False
-        assert resp.requires_confirmation is True
-        assert resp.action == SignalAction.SELL
-
-    def test_manual_preserves_buy_details(self):
-        """MANUAL keeps entryRange, stopLoss, targetPrice even though allowOrder=false."""
-        engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", mode=SignalMode.MANUAL)
+        req = _make_request(symbol="THYAO")
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.entry_range is not None
@@ -415,11 +364,11 @@ class TestManualMode:
 
 
 class TestLiveMode:
-    """LIVE mode — allowOrder when risk passes, never requiresConfirmation."""
+    """v2: risk geçince allow_order=True, requires_confirmation asla True olmaz."""
 
     def test_live_mode_allows_order(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE)
+        req = _make_request(symbol="THYAO")
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -427,7 +376,7 @@ class TestLiveMode:
 
     def test_live_low_confidence_blocked(self):
         engine = RiskEngine(_cfg(min_confidence_for_buy=80))
-        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE)
+        req = _make_request(symbol="THYAO")
         dec = _make_buy_decision(confidence=70.0)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
@@ -436,26 +385,25 @@ class TestLiveMode:
 
     def test_live_wait_no_confirmation(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE)
+        req = _make_request(symbol="THYAO")
         dec = RiskDecision(action=SignalAction.WAIT, confidence=90.0)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
         assert resp.requires_confirmation is False
         assert resp.action == SignalAction.WAIT
 
-    def test_demo_live_mode_allows_order_after_risk_checks(self):
+    def test_risk_pass_produces_limit_order(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", mode=SignalMode.DEMO_LIVE)
+        req = _make_request(symbol="THYAO")
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
         assert resp.requires_confirmation is False
         assert resp.order_type == OrderType.LIMIT
-        assert "DEMO_LIVE mode" in resp.reason
 
-    def test_demo_live_low_confidence_blocked(self):
+    def test_low_confidence_blocked_no_order_type(self):
         engine = RiskEngine(_cfg(min_confidence_for_buy=90))
-        req = _make_request(symbol="THYAO", mode=SignalMode.DEMO_LIVE)
+        req = _make_request(symbol="THYAO")
         dec = _make_buy_decision(confidence=80.0)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
@@ -463,22 +411,13 @@ class TestLiveMode:
         assert resp.order_type == OrderType.NONE
         assert "Confidence" in resp.reason
 
-    def test_real_live_mode_is_explicit_and_requires_client_gate(self):
-        engine = RiskEngine(_cfg())
-        req = _make_request(symbol="THYAO", mode=SignalMode.REAL_LIVE)
-        dec = _make_buy_decision()
-        resp = engine.evaluate(req, dec)
-        assert resp.allow_order is True
-        assert resp.requires_confirmation is False
-        assert "client-side real order gate required" in resp.reason
-
 
 class TestConfidenceThreshold:
     """Check 7: Confidence below threshold → allowOrder=False."""
 
     def test_buy_below_threshold_blocked(self):
         engine = RiskEngine(_cfg(min_confidence_for_buy=75))
-        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE)
+        req = _make_request(symbol="THYAO")
         dec = _make_buy_decision(confidence=70.0, stop_loss=None)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
@@ -487,7 +426,7 @@ class TestConfidenceThreshold:
 
     def test_buy_at_threshold_succeeds(self):
         engine = RiskEngine(_cfg(min_confidence_for_buy=75))
-        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE)
+        req = _make_request(symbol="THYAO")
         dec = _make_buy_decision(confidence=75.0)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -495,7 +434,7 @@ class TestConfidenceThreshold:
     def test_sell_below_threshold_blocked(self):
         engine = RiskEngine(_cfg(min_confidence_for_sell=70))
         req = _make_request(
-            symbol="THYAO", totalAccountQty=20, botPositionQty=10, mode=SignalMode.LIVE
+            symbol="THYAO", totalAccountQty=20, botPositionQty=10
         )
         dec = RiskDecision(action=SignalAction.SELL, confidence=65.0, qty=5)
         resp = engine.evaluate(req, dec)
@@ -504,7 +443,7 @@ class TestConfidenceThreshold:
     def test_sell_at_threshold_succeeds(self):
         engine = RiskEngine(_cfg(min_confidence_for_sell=70))
         req = _make_request(
-            symbol="THYAO", totalAccountQty=20, botPositionQty=10, mode=SignalMode.LIVE
+            symbol="THYAO", totalAccountQty=20, botPositionQty=10
         )
         dec = RiskDecision(action=SignalAction.SELL, confidence=70.0, qty=5)
         resp = engine.evaluate(req, dec)
@@ -515,7 +454,7 @@ class TestConfidenceThreshold:
         100.0 fallback (for unrecognized action values) must not leak into the
         reason text as if a real 100%-confidence threshold were configured."""
         engine = RiskEngine(_cfg(min_confidence_for_buy=75, min_confidence_for_sell=70))
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = RiskDecision(
             action=SignalAction.WAIT, confidence=20.0, reason="No clear signal"
         )
@@ -550,7 +489,7 @@ class TestBuyPreflight:
 
     def test_buy_missing_entry_range_blocked(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = _make_buy_decision(entry_range=None)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
@@ -558,7 +497,7 @@ class TestBuyPreflight:
 
     def test_buy_missing_stop_loss_blocked(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = _make_buy_decision(stop_loss=None)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
@@ -566,7 +505,7 @@ class TestBuyPreflight:
 
     def test_buy_missing_target_price_blocked(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = _make_buy_decision(target_price=None)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
@@ -574,7 +513,7 @@ class TestBuyPreflight:
 
     def test_buy_all_params_present_succeeds(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = _make_buy_decision()  # all three present
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -583,7 +522,7 @@ class TestBuyPreflight:
     def test_buy_missing_entry_range_waits(self):
         """Missing entryRange → action WAIT."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = RiskDecision(action=SignalAction.BUY, confidence=90.0, qty=5)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
@@ -593,7 +532,7 @@ class TestBuyPreflight:
     def test_buy_stop_loss_not_below_entry_min(self):
         """stopLoss >= entryRange.min → WAIT."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=102.0),
             stop_loss=96.0,  # above entry.min
@@ -606,7 +545,7 @@ class TestBuyPreflight:
     def test_buy_stop_loss_equal_entry_min_blocked(self):
         """stopLoss == entryRange.min → WAIT."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=102.0),
             stop_loss=95.0,
@@ -619,7 +558,7 @@ class TestBuyPreflight:
     def test_buy_target_price_not_above_entry_max(self):
         """targetPrice <= entryRange.max → WAIT."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=102.0),
             target_price=100.0,  # below entry.max
@@ -632,7 +571,7 @@ class TestBuyPreflight:
     def test_buy_target_price_equal_entry_max_blocked(self):
         """targetPrice == entryRange.max → WAIT."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=102.0),
             target_price=102.0,
@@ -645,7 +584,7 @@ class TestBuyPreflight:
     def test_buy_entry_min_gt_max_blocked(self):
         """entryRange.min > entryRange.max → WAIT."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = _make_buy_decision(
             entry_range=EntryRange(min=105.0, max=100.0),
         )
@@ -657,7 +596,7 @@ class TestBuyPreflight:
     def test_buy_valid_range_passes_preflight(self):
         """Valid entryRange/stopLoss/targetPrice → risk kontrolleri devam eder."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=102.0),
             stop_loss=93.0,
@@ -670,7 +609,7 @@ class TestBuyPreflight:
     def test_buy_missing_all_three_fields(self):
         """All three fields missing → WAIT with all listed."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = RiskDecision(action=SignalAction.BUY, confidence=90.0, qty=5)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
@@ -680,7 +619,7 @@ class TestBuyPreflight:
     def test_buy_symmetric_reward_risk_blocked(self):
         """R/G < 1.5 (ör. 1:1 setup) → BUY bloklanır."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=102.0),
             stop_loss=93.0,  # risk = 9
@@ -694,7 +633,7 @@ class TestBuyPreflight:
     def test_buy_exact_minimum_reward_risk_passes(self):
         """R/G tam 1.5 → sınır dahil, geçer."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=102.0),
             stop_loss=94.0,  # risk = 8
@@ -710,7 +649,7 @@ class TestLimitOrderBehaviour:
 
     def test_buy_produces_limit_order(self):
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE)
+        req = _make_request()
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -719,7 +658,7 @@ class TestLimitOrderBehaviour:
     def test_buy_price_uses_entry_max(self):
         """BUY limit price = entryRange.max (110.0), cap uygulanmaz."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE, lastPrice=100.0)
+        req = _make_request(lastPrice=100.0)
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=110.0),
             target_price=136.0,
@@ -732,7 +671,7 @@ class TestLimitOrderBehaviour:
     def test_buy_price_uses_entry_max_when_below_last(self):
         """entryRange.max (98) < lastPrice (100) → price = 98.0."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.LIVE, lastPrice=100.0)
+        req = _make_request(lastPrice=100.0)
         dec = _make_buy_decision(
             entry_range=EntryRange(min=92.0, max=98.0),
             stop_loss=88.0,
@@ -745,7 +684,7 @@ class TestLimitOrderBehaviour:
     def test_sell_produces_limit_order(self):
         engine = RiskEngine(_cfg())
         req = _make_request(
-            mode=SignalMode.LIVE, symbol="THYAO", totalAccountQty=20, botPositionQty=10
+            symbol="THYAO", totalAccountQty=20, botPositionQty=10
         )
         dec = RiskDecision(
             action=SignalAction.SELL,
@@ -762,7 +701,7 @@ class TestLimitOrderBehaviour:
         """SELL limit price = request.lastPrice always."""
         engine = RiskEngine(_cfg())
         req = _make_request(
-            mode=SignalMode.LIVE,
+            
             symbol="THYAO",
             totalAccountQty=20,
             botPositionQty=10,
@@ -784,7 +723,7 @@ class TestLimitOrderBehaviour:
         """SELL limit price = request.lastPrice (100.0), floor uygulanmaz."""
         engine = RiskEngine(_cfg())
         req = _make_request(
-            mode=SignalMode.LIVE,
+            
             symbol="THYAO",
             totalAccountQty=20,
             botPositionQty=10,
@@ -808,11 +747,11 @@ class TestLimitOrderBehaviour:
 
         scenarios = [
             # (name, request, decision)
-            ("LIVE BUY", _make_request(mode=SignalMode.LIVE), _make_buy_decision()),
-            ("PAPER BUY", _make_request(mode=SignalMode.PAPER), _make_buy_decision()),
+            ("LIVE BUY", _make_request(), _make_buy_decision()),
+            ("PAPER BUY", _make_request(), _make_buy_decision()),
             (
                 "WAIT decision",
-                _make_request(mode=SignalMode.LIVE),
+                _make_request(),
                 RiskDecision(action=SignalAction.WAIT),
             ),
             ("_block path", _make_request(symbol="GARAN"), _make_buy_decision()),
@@ -825,26 +764,25 @@ class TestLimitOrderBehaviour:
                 f"{name}: unexpected orderType {resp.order_type}"
             )
 
-    def test_manual_buy_produces_limit_with_price(self):
-        """MANUAL BUY → LIMIT, price=entryRange.max, requiresConfirmation=True."""
+    def test_buy_produces_limit_with_price(self):
+        """v2: geçerli BUY → LIMIT, price=entryRange.max, allow_order=True."""
         engine = RiskEngine(_cfg())
-        req = _make_request(mode=SignalMode.MANUAL)
+        req = _make_request()
         dec = _make_buy_decision(
             entry_range=EntryRange(min=95.0, max=102.0),
             stop_loss=93.0,
             target_price=116.0,
         )
         resp = engine.evaluate(req, dec)
-        assert resp.allow_order is False
-        assert resp.requires_confirmation is True
+        assert resp.allow_order is True
+        assert resp.requires_confirmation is False
         assert resp.order_type == OrderType.LIMIT
         assert resp.price == 102.0
 
-    def test_manual_sell_produces_limit_with_price(self):
-        """MANUAL SELL → LIMIT, price=lastPrice, requiresConfirmation=True."""
+    def test_sell_produces_limit_with_price(self):
+        """v2: geçerli SELL → LIMIT, price=lastPrice, allow_order=True."""
         engine = RiskEngine(_cfg())
         req = _make_request(
-            mode=SignalMode.MANUAL,
             symbol="THYAO",
             botPositionQty=10,
             totalAccountQty=20,
@@ -858,8 +796,8 @@ class TestLimitOrderBehaviour:
             entry_range=EntryRange(min=97.0, max=102.0),
         )
         resp = engine.evaluate(req, dec)
-        assert resp.allow_order is False
-        assert resp.requires_confirmation is True
+        assert resp.allow_order is True
+        assert resp.requires_confirmation is False
         assert resp.order_type == OrderType.LIMIT
         assert resp.price == 100.0
 
@@ -969,7 +907,7 @@ class TestDailyTradeCount:
     def test_buy_blocked_at_limit(self):
         """dailyTradeCount=3, maxDailyTradeCount=3 → BUY blocked."""
         engine = RiskEngine(_cfg(max_daily_trade_count=3))
-        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE, dailyTradeCount=3)
+        req = _make_request(symbol="THYAO", dailyTradeCount=3)
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
@@ -980,7 +918,7 @@ class TestDailyTradeCount:
     def test_buy_blocked_over_limit(self):
         """dailyTradeCount=5, maxDailyTradeCount=3 → BUY blocked."""
         engine = RiskEngine(_cfg(max_daily_trade_count=3))
-        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE, dailyTradeCount=5)
+        req = _make_request(symbol="THYAO", dailyTradeCount=5)
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
@@ -992,7 +930,7 @@ class TestDailyTradeCount:
         engine = RiskEngine(_cfg(max_daily_trade_count=3))
         req = _make_request(
             symbol="THYAO",
-            mode=SignalMode.LIVE,
+            
             totalAccountQty=20,
             botPositionQty=10,
             dailyTradeCount=3,
@@ -1006,7 +944,7 @@ class TestDailyTradeCount:
     def test_buy_succeeds_below_limit(self):
         """dailyTradeCount=2, maxDailyTradeCount=3 → BUY risk kontrollerine devam eder."""
         engine = RiskEngine(_cfg(max_daily_trade_count=3))
-        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE, dailyTradeCount=2)
+        req = _make_request(symbol="THYAO", dailyTradeCount=2)
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -1017,7 +955,7 @@ class TestDailyTradeCount:
         engine = RiskEngine(_cfg(max_daily_trade_count=3))
         req = _make_request(
             symbol="THYAO",
-            mode=SignalMode.LIVE,
+            
             totalAccountQty=20,
             botPositionQty=10,
             dailyTradeCount=2,
@@ -1030,7 +968,7 @@ class TestDailyTradeCount:
     def test_wait_not_blocked_at_limit(self):
         """WAIT kararları dailyTradeCount'tan etkilenmez."""
         engine = RiskEngine(_cfg(max_daily_trade_count=3))
-        req = _make_request(symbol="THYAO", mode=SignalMode.MANUAL, dailyTradeCount=5)
+        req = _make_request(symbol="THYAO", dailyTradeCount=5)
         dec = RiskDecision(action=SignalAction.WAIT, confidence=90.0)
         resp = engine.evaluate(req, dec)
         assert resp.action == SignalAction.WAIT
@@ -1042,7 +980,7 @@ class TestDailyTradeCount:
         """dailyTradeCount belirtilmezse 0 kabul edilir → limiti aşmaz."""
         engine = RiskEngine(_cfg(max_daily_trade_count=3))
         req = _make_request(
-            symbol="THYAO", mode=SignalMode.LIVE
+            symbol="THYAO"
         )  # dailyTradeCount defaults to 0
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
@@ -1094,7 +1032,7 @@ class TestCutoffTime:
 
         monkeypatch.setattr(RiskConfig, "can_trade_now", lambda self, now=None: False)
         engine = RiskEngine(_cfg(disable_trading_after="17:30"))
-        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE)
+        req = _make_request(symbol="THYAO")
 
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
@@ -1110,7 +1048,7 @@ class TestCutoffTime:
         engine = RiskEngine(_cfg(disable_trading_after="17:30"))
         req = _make_request(
             symbol="THYAO",
-            mode=SignalMode.LIVE,
+            
             totalAccountQty=20,
             botPositionQty=10,
         )
@@ -1127,7 +1065,7 @@ class TestCutoffTime:
 
         monkeypatch.setattr(RiskConfig, "can_trade_now", lambda self, now=None: False)
         engine = RiskEngine(_cfg(disable_trading_after="17:30"))
-        req = _make_request(symbol="THYAO", mode=SignalMode.MANUAL)
+        req = _make_request(symbol="THYAO")
 
         dec = RiskDecision(action=SignalAction.WAIT, confidence=90.0)
         resp = engine.evaluate(req, dec)
@@ -1150,7 +1088,7 @@ class TestMaxPositionValue:
 
     def test_buy_within_limit_succeeds(self):
         engine = RiskEngine(_cfg(max_position_value_per_symbol=500))
-        req = _make_request(symbol="THYAO", lastPrice=100, mode=SignalMode.LIVE)
+        req = _make_request(symbol="THYAO", lastPrice=100)
         dec = _make_buy_decision(confidence=85.0, qty=5)  # 5*100 = 500
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
@@ -1163,7 +1101,7 @@ class TestTechnicalFeatureGuards:
         engine = RiskEngine(_cfg())
         req = _make_request(
             symbol="THYAO",
-            mode=SignalMode.LIVE,
+            
             alphaTrendSignal="SELL",
         )
         resp = engine.evaluate(req, _make_buy_decision())
@@ -1176,7 +1114,7 @@ class TestTechnicalFeatureGuards:
         engine = RiskEngine(_cfg())
         req = _make_request(
             symbol="THYAO",
-            mode=SignalMode.LIVE,
+            
             indicatorConsensus="SELL",
             indicatorSellCount=4,
         )
@@ -1190,7 +1128,7 @@ class TestTechnicalFeatureGuards:
         engine = RiskEngine(_cfg())
         req = _make_request(
             symbol="THYAO",
-            mode=SignalMode.LIVE,
+            
             indicatorConsensus="SELL",
             indicatorSellCount=2,
         )
@@ -1201,7 +1139,7 @@ class TestTechnicalFeatureGuards:
 
     def test_high_natr_blocks_new_buy(self):
         engine = RiskEngine(_cfg(max_natr_for_buy=8.0))
-        req = _make_request(symbol="THYAO", mode=SignalMode.LIVE, natr=12.5)
+        req = _make_request(symbol="THYAO", natr=12.5)
         resp = engine.evaluate(req, _make_buy_decision())
 
         assert resp.action == SignalAction.WAIT
@@ -1212,7 +1150,7 @@ class TestTechnicalFeatureGuards:
         engine = RiskEngine(_cfg(max_depth_queue_drop_pct_for_buy=35.0))
         req = _make_request(
             symbol="THYAO",
-            mode=SignalMode.LIVE,
+            
             depthQueueDropPct=42.0,
         )
         resp = engine.evaluate(req, _make_buy_decision())

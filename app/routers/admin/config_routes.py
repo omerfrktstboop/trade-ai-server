@@ -126,7 +126,7 @@ async def admin_emergency(request: Request) -> HTMLResponse:
         status_ctx = await _status_strip_context(session, configs=configs)
 
     kill_switch = configs["killSwitchEnabled"].value == "true"
-    current_mode = configs["tradingMode"].value
+    current_mode = configs["systemMode"].value
 
     return templates.TemplateResponse(
         request,
@@ -170,7 +170,7 @@ async def admin_emergency_action(
             configs = await _config_lookup(session)
             status_ctx = await _status_strip_context(session, configs=configs)
         kill_switch = configs["killSwitchEnabled"].value == "true"
-        current_mode = configs["tradingMode"].value
+        current_mode = configs["systemMode"].value
         return templates.TemplateResponse(
             request,
             "admin/emergency.html",
@@ -200,11 +200,12 @@ async def _apply_emergency_action(
     reason: str,
     confirmation: str | None,
 ) -> None:
-    if action == "force-paper":
+    if action in ("force-observe", "force-paper"):
+        # v2: "force-paper" → systemMode=OBSERVE_ONLY (analiz sürer, emir yok).
         await set_admin_config_value(
             session,
-            "tradingMode",
-            "PAPER",
+            "systemMode",
+            "OBSERVE_ONLY",
             changed_by=changed_by,
             reason=reason,
             confirmation=confirmation,
@@ -261,7 +262,7 @@ async def admin_api_update_config(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _notify_gateway_config_reload()
-    if key in {"killSwitchEnabled", "tradingMode"} or item.requires_confirmation:
+    if key in {"killSwitchEnabled", "systemMode"} or item.requires_confirmation:
         await notification_service.send(
             "warning",
             "Yönetim yapılandırması değişti",

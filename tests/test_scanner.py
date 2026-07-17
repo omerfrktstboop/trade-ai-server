@@ -11,13 +11,11 @@ from decimal import Decimal
 
 import pytest
 
-from app.config import Mode
 from app.core.risk_config import RiskConfig
 from app.models.signal import (
     EntryRange,
     OrderType,
     SignalAction,
-    SignalMode,
     SignalResponse,
 )
 from app.services import scanner as scanner_module
@@ -47,7 +45,7 @@ def make_result(
     order_type: OrderType = OrderType.LIMIT,
     qty: float = 1.0,
     price: float | None = 71.5,
-    mode: SignalMode = SignalMode.DEMO_LIVE,
+    dispatch_eligible: bool = True,
 ) -> EvaluationResult:
     response = SignalResponse(
         requestId=f"{symbol}-20260709-120000-scan",
@@ -65,7 +63,7 @@ def make_result(
         stopLoss=Decimal("68.00") if price else None,
         targetPrice=Decimal("75.00") if price else None,
     )
-    return EvaluationResult(response=response, mode=mode)
+    return EvaluationResult(response=response, dispatch_eligible=dispatch_eligible)
 
 
 def make_gateway_client(fake: FakeGateway) -> MatriksGatewayClient:
@@ -92,8 +90,8 @@ def evaluated_symbols(monkeypatch) -> list[str]:
 
     async def fake_evaluate(symbol: str, **kwargs: Any):
         calls.append(symbol)
-        # SCANNER_ALLOW_ORDERS=false (default) → force_paper zorunlu
-        assert kwargs.get("force_paper") is True
+        # v2: evaluate_symbol mod-bağımsız (mode/force_paper parametresi yok).
+        assert "mode" not in kwargs and "force_paper" not in kwargs
         return None
 
     monkeypatch.setattr(scanner_module, "evaluate_symbol", fake_evaluate)
@@ -211,28 +209,23 @@ class TestScannerTick:
         assert result == ["THYAO", "AKBNK", "OPT25F"]
         assert evaluated_symbols == ["THYAO", "AKBNK", "OPT25F"]
 
-    async def test_scanner_uses_configured_default_mode_when_no_db_override(
+    async def test_scanner_calls_evaluate_mode_independently(
         self, runtime_stubs, monkeypatch
     ):
-        calls: list[SignalMode] = []
+        """v2: evaluate_symbol mod/force_paper parametresi almadan çağrılır."""
+        calls: list[str] = []
 
-        async def fake_evaluate(_symbol: str, **kwargs: Any):
-            calls.append(kwargs["mode"])
-            assert kwargs["force_paper"] is False
+        async def fake_evaluate(symbol: str, **kwargs: Any):
+            calls.append(symbol)
+            assert "mode" not in kwargs and "force_paper" not in kwargs
             return None
 
         monkeypatch.setattr(scanner_module, "evaluate_symbol", fake_evaluate)
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
-        monkeypatch.setattr(
-            scanner_module.settings,
-            "default_mode",
-            Mode.DEMO_LIVE,
-        )
         scanner = SymbolScanner(gateway=make_gateway_client(FakeGateway()))
 
         await scanner.tick()
 
-        assert calls == [SignalMode.DEMO_LIVE, SignalMode.DEMO_LIVE]
+        assert calls == ["THYAO", "AKBNK"]
 
 
 class TestScannerLifecycleLogs:
@@ -543,7 +536,6 @@ class TestOrderPath:
         return SymbolScanner(gateway=make_gateway_client(fake))
 
     async def test_orders_disabled_sends_nothing(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", False)
         fake = FakeGateway()
 
         await self.make_scanner(fake)._maybe_send_order(make_result())
@@ -559,7 +551,6 @@ class TestOrderPath:
         from app.models.db import OrderLog
         from sqlalchemy import select as _select
 
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
 
         real_reserve = ledger_mod.reserve_order
 
@@ -589,7 +580,6 @@ class TestOrderPath:
         assert "account_ref" in (row.matrix_message or "")
 
     async def test_demo_live_buy_sends_order(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()
         fake.positions = []
 
@@ -601,7 +591,7 @@ class TestOrderPath:
         assert sent["side"] == "BUY"
         assert sent["qty"] == 1.0
         assert sent["limitPrice"] == "71.5"
-        assert sent["mode"] == "DEMO_LIVE"
+        assert sent["mode"] == "AUTO_TRADE"
         assert self.persisted == [
             (
                 "SENT_PENDING",
@@ -612,7 +602,6 @@ class TestOrderPath:
     async def test_research_candidate_outside_trade_watchlist_cannot_send_buy(
         self, monkeypatch
     ):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway(symbols=["THYAO", "GARAN"])
 
         await self.make_scanner(fake)._maybe_send_order(make_result(symbol="GARAN"))
@@ -620,7 +609,6 @@ class TestOrderPath:
         assert fake.orders == []
 
     async def test_order_time_sizing_can_only_reduce_qty(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()
         fake.positions = []
         fake.account_payload["account"]["OrderableCash"] = "300"
@@ -631,7 +619,6 @@ class TestOrderPath:
         assert fake.orders[0]["qty"] == 1
 
     async def test_order_time_sizing_never_increases_original_qty(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()
         fake.positions = []
         fake.account_payload["account"]["OrderableCash"] = "50000"
@@ -642,7 +629,6 @@ class TestOrderPath:
         assert fake.orders[0]["qty"] == 1
 
     async def test_buy_blocks_when_cash_becomes_insufficient(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()
         fake.positions = []
         fake.account_payload["account"]["OrderableCash"] = "100"
@@ -652,7 +638,6 @@ class TestOrderPath:
         assert fake.orders == []
 
     async def test_buy_blocks_stale_account_data(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()
         fake.positions = []
         fake.account_payload["accountDataAgeSeconds"] = "61"
@@ -664,7 +649,6 @@ class TestOrderPath:
     async def test_buy_blocks_when_position_price_snapshot_is_missing(
         self, monkeypatch
     ):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()
         fake.positions = [{"symbol": "UNMAPPED", "accountNetQty": 1}]
 
@@ -673,7 +657,6 @@ class TestOrderPath:
         assert fake.orders == []
 
     async def test_gateway_send_uncertainty_keeps_cash_reserved(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()
         fake.positions = []
         fake.order_transport_error = True
@@ -688,46 +671,24 @@ class TestOrderPath:
         assert reservation.remaining_qty == 1
         assert reservation.reserved_amount_tl == Decimal("71.5000000000")
 
-    async def test_paper_mode_never_sends(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+    async def test_research_decision_never_sends(self, monkeypatch):
+        """v2: dispatch_eligible=False (research) kararı asla emre dönüşmez."""
         fake = FakeGateway()
 
         await self.make_scanner(fake)._maybe_send_order(
-            make_result(mode=SignalMode.PAPER)
-        )
-
-        assert fake.orders == []
-
-    async def test_real_live_blocked_in_phase2(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
-        fake = FakeGateway()
-
-        await self.make_scanner(fake)._maybe_send_order(
-            make_result(mode=SignalMode.REAL_LIVE)
+            make_result(dispatch_eligible=False)
         )
 
         assert fake.orders == []
 
     async def test_allow_order_false_never_sends(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()
 
         await self.make_scanner(fake)._maybe_send_order(make_result(allow_order=False))
 
         assert fake.orders == []
 
-    async def test_requires_confirmation_never_sends(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
-        fake = FakeGateway()
-
-        await self.make_scanner(fake)._maybe_send_order(
-            make_result(requires_confirmation=True)
-        )
-
-        assert fake.orders == []
-
     async def test_wait_action_never_sends(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()
 
         await self.make_scanner(fake)._maybe_send_order(
@@ -737,7 +698,6 @@ class TestOrderPath:
         assert fake.orders == []
 
     async def test_non_limit_order_type_never_sends(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()
 
         await self.make_scanner(fake)._maybe_send_order(
@@ -747,7 +707,6 @@ class TestOrderPath:
         assert fake.orders == []
 
     async def test_invalid_price_never_sends(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()
 
         await self.make_scanner(fake)._maybe_send_order(make_result(price=None))
@@ -755,7 +714,6 @@ class TestOrderPath:
         assert fake.orders == []
 
     async def test_gateway_rejection_persisted(self, monkeypatch):
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
         fake = FakeGateway()
         fake.order_rejection = "EnableDemoOrders=false"
 
@@ -771,7 +729,6 @@ class TestOrderPath:
     ):
         import httpx
 
-        monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
 
         def refuse(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("connection refused", request=request)

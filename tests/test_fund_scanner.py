@@ -49,7 +49,7 @@ class TestGetFundContext:
 
 class TestFundInPayload:
     def test_build_payload_with_fund_context(self):
-        from app.models.signal import SignalMode, SignalRequest
+        from app.models.signal import SignalRequest
         from app.services.evaluator import build_payload as _build_payload
 
         req = SignalRequest(
@@ -64,7 +64,6 @@ class TestFundInPayload:
             rsi=50.0,
             ema20=98.0,
             ema50=95.0,
-            mode=SignalMode.MANUAL,
         )
 
         funds = {
@@ -89,7 +88,7 @@ class TestFundInPayload:
         assert payload["fundContext"]["THYAO"]["fundScore"] == 72
 
     def test_build_payload_without_fund_context_excluded(self):
-        from app.models.signal import SignalMode, SignalRequest
+        from app.models.signal import SignalRequest
         from app.services.evaluator import build_payload as _build_payload
 
         req = SignalRequest(
@@ -104,7 +103,6 @@ class TestFundInPayload:
             rsi=50.0,
             ema20=98.0,
             ema50=95.0,
-            mode=SignalMode.MANUAL,
         )
 
         payload = _build_payload(req)
@@ -112,7 +110,7 @@ class TestFundInPayload:
         assert "fundContext" not in payload
 
     def test_build_payload_with_none_fund_context_excluded(self):
-        from app.models.signal import SignalMode, SignalRequest
+        from app.models.signal import SignalRequest
         from app.services.evaluator import build_payload as _build_payload
 
         req = SignalRequest(
@@ -127,7 +125,6 @@ class TestFundInPayload:
             rsi=50.0,
             ema20=98.0,
             ema50=95.0,
-            mode=SignalMode.MANUAL,
         )
 
         payload = _build_payload(req, fund_context=None)
@@ -136,7 +133,7 @@ class TestFundInPayload:
 
     def test_both_contexts_injected_together(self):
         """When both news and fund context are supplied, both appear in payload."""
-        from app.models.signal import SignalMode, SignalRequest
+        from app.models.signal import SignalRequest
         from app.services.evaluator import build_payload as _build_payload
 
         req = SignalRequest(
@@ -151,7 +148,6 @@ class TestFundInPayload:
             rsi=50.0,
             ema20=98.0,
             ema50=95.0,
-            mode=SignalMode.MANUAL,
         )
 
         news = {"AKBNK": {"latestNews": [], "kapNews": [], "sentiment": "NEUTRAL"}}

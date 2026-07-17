@@ -218,7 +218,7 @@ class TestFailClosed:
 
 class TestBrokerFlowInPayload:
     def _req(self, symbol="THYAO"):
-        from app.models.signal import SignalMode, SignalRequest
+        from app.models.signal import SignalRequest
 
         return SignalRequest(
             requestId="test-1",
@@ -232,7 +232,6 @@ class TestBrokerFlowInPayload:
             rsi=50.0,
             ema20=98.0,
             ema50=95.0,
-            mode=SignalMode.MANUAL,
         )
 
     def test_build_payload_with_broker_flow_context(self):

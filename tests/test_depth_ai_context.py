@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from app.core.risk_config import RiskConfig
-from app.models.signal import SignalAction, SignalMode
+from app.models.signal import SignalAction
 from app.services.evaluator import build_payload, snapshot_to_signal_request
 from app.services.risk_engine import RiskEngine
 
@@ -33,7 +33,7 @@ def _payload():
 
 def test_snapshot_depth_maps_to_signal_and_ai_context():
     req = snapshot_to_signal_request(
-        "THYAO", _payload(), request_id="d1", mode=SignalMode.PAPER
+        "THYAO", _payload(), request_id="d1"
     )
     assert req.depth_levels_used == 25
     assert req.depth_bid_ask_ratio_top10 == 0.45
@@ -48,7 +48,6 @@ def test_old_snapshot_and_missing_depth_remain_compatible():
         "THYAO",
         {"lastPrice": 1, "open": 1, "high": 1, "low": 1, "volume": 0},
         request_id="old",
-        mode=SignalMode.PAPER,
     )
     assert req.depth_order_book_signal is None
     assert "depthContext" not in build_payload(req)
@@ -56,7 +55,7 @@ def test_old_snapshot_and_missing_depth_remain_compatible():
 
 def test_reliable_strong_sell_depth_blocks_buy_but_not_sell():
     req = snapshot_to_signal_request(
-        "THYAO", _payload(), request_id="d2", mode=SignalMode.DEMO_LIVE
+        "THYAO", _payload(), request_id="d2"
     )
     engine = RiskEngine(
         RiskConfig(allowed_symbols="THYAO", block_buy_on_strong_sell_pressure=True)

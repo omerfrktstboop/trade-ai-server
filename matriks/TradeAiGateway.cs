@@ -47,8 +47,9 @@ namespace Matriks.Lean.Algotrader
     ///   - MaxOrdersPerDay / MaxOrdersPerSymbolPerDay günlük tavanları
     ///   - SELL: kilitli uzun vade lotlar düşüldükten sonraki pozisyonu aşamaz
     ///   - Duplicate requestId reddi
-    ///   - Mode kapıları: PAPER/MANUAL → red; DEMO_LIVE → EnableDemoOrders +
-    ///     demo hesap onayı; REAL_LIVE → EnableRealOrders (+ RequireDemoAccount)
+    ///   - v2 dispatch kapısı (CheckDispatchGates): systemMode=AUTO_TRADE +
+    ///     accountType tespiti (DEMO serbest) + REAL arming. Eski PAPER/MANUAL/
+    ///     DEMO_LIVE/REAL_LIVE mod kapıları kaldırıldı.
     ///
     /// Emir sonuçları: OnOrderUpdate → server'ın /api/order-result endpoint'ine
     /// raporlanır (ServerBaseUrl + ServerApiToken parametreleri).
@@ -822,18 +823,23 @@ namespace Matriks.Lean.Algotrader
                         : new Dictionary<string, decimal>();
                     if (lockedLongTermQty.Any(x => x.Value < 0m))
                     { SafeDebug("Server config rejected: negative locked quantity"); return false; }
-                    string runtimeMode = NormalizeMode(cfg.Value<string>("mode"));
-                    bool enableDemoOrders = cfg.Value<bool?>("enableDemoOrders") ?? false;
-                    bool enableRealOrders = cfg.Value<bool?>("enableRealOrders") ?? false;
-                    bool realLiveModeAllowed = cfg.Value<bool?>("realLiveModeAllowed") ?? false;
-                    bool realLiveArmed = cfg.Value<bool?>("realLiveArmed") ?? false;
-                    bool tradingKillSwitchActive = cfg.Value<bool?>("tradingKillSwitchActive") ?? true;
-                    bool forceSafeMode = cfg.Value<bool?>("forceSafeMode") ?? false;
+                    // v2: eski mode/enableDemoOrders/enableRealOrders/realLive*
+                    // alanları kaldırıldı. Tek kill switch: killSwitchActive
+                    // (eksikse fail-closed true). runtimeMode yalnızca kayıt/log
+                    // için systemMode'a eşitlenir.
+                    bool killSwitchActive = cfg.Value<bool?>("killSwitchActive") ?? true;
+                    bool enableDemoOrders = false;
+                    bool enableRealOrders = false;
+                    bool realLiveModeAllowed = false;
+                    bool realLiveArmed = false;
+                    bool tradingKillSwitchActive = killSwitchActive;
+                    bool forceSafeMode = false;
                     string[] buyAllowedSymbols = (cfg["buyAllowedSymbols"] as JArray ?? new JArray()).Select(x => NormalizeSymbol(Convert.ToString(x))).ToArray();
                     string[] sellExitAllowedSymbols = (cfg["sellExitAllowedSymbols"] as JArray ?? new JArray()).Select(x => NormalizeSymbol(Convert.ToString(x))).ToArray();
                     string[] declineSymbols = (cfg["declineSymbols"] as JArray ?? new JArray()).Select(x => NormalizeSymbol(Convert.ToString(x))).ToArray();
-                    bool requireDemoAccount = cfg.Value<bool?>("requireDemoAccount") ?? true;
-                    bool demoAccountConfirmed = cfg.Value<bool?>("demoAccountConfirmed") ?? false;
+                    // v2: requireDemoAccount/demoAccountConfirmed kaldırıldı.
+                    bool requireDemoAccount = false;
+                    bool demoAccountConfirmed = false;
                     decimal maxOrderValueTl = cfg.Value<decimal?>("maxOrderValueTl") ?? 0m;
                     decimal maxQtyPerOrder = cfg.Value<decimal?>("maxQtyPerOrder") ?? 0m;
                     int maxOrdersPerDay = cfg.Value<int?>("maxOrdersPerDay") ?? 0;
@@ -920,7 +926,8 @@ namespace Matriks.Lean.Algotrader
                         .ToArray();
                     LockedLongTermQty = lockedLongTermQty;
                     BotOwnedQty = botOwnedQty;
-                    RuntimeMode = runtimeMode;
+                    // v2: RuntimeMode yalnızca log/kayıt için systemMode'a eşit.
+                    RuntimeMode = systemMode;
                     EnableDemoOrders = enableDemoOrders;
                     EnableRealOrders = enableRealOrders;
                     RealLiveModeAllowed = realLiveModeAllowed;
@@ -948,7 +955,7 @@ namespace Matriks.Lean.Algotrader
                     // Publish one immutable reference only after every parsed
                     // field was validated. Order handlers read this snapshot
                     // once, so config reloads cannot mix versions.
-                    _activeConfig = new GatewayConfigSnapshot(runtimeMode, enableDemoOrders, enableRealOrders, realLiveModeAllowed, realLiveArmed, requireDemoAccount, demoAccountConfirmed, tradingKillSwitchActive, forceSafeMode, buyAllowedSymbols, sellExitAllowedSymbols, declineSymbols, configVersion, activeProfileCode);
+                    _activeConfig = new GatewayConfigSnapshot(systemMode, enableDemoOrders, enableRealOrders, realLiveModeAllowed, realLiveArmed, requireDemoAccount, demoAccountConfirmed, tradingKillSwitchActive, forceSafeMode, buyAllowedSymbols, sellExitAllowedSymbols, declineSymbols, configVersion, activeProfileCode);
                     bool accountVerificationPolicyChanged =
                         RequireDemoAccount != requireDemoAccount
                         || DemoAccountConfirmed != demoAccountConfirmed;
@@ -1058,7 +1065,8 @@ namespace Matriks.Lean.Algotrader
             // GetTradeUser verification used immediately before /order.
             // v2: AUTO_TRADE modunda da hesap kimliği raporlanabilsin diye
             // aynı doğrulama ısıtılır (account watcher /health'ten okur).
-            if ((RuntimeMode == "DEMO_LIVE" && RequireDemoAccount) || SystemMode == "AUTO_TRADE")
+            // v2: AUTO_TRADE'de hesap kimliğini ısıt (watcher /health'ten okur).
+            if (SystemMode == "AUTO_TRADE")
                 VerifyDemoAccountFresh();
 
             var quoteAgeSeconds = new Dictionary<string, double?>();
@@ -2461,8 +2469,8 @@ namespace Matriks.Lean.Algotrader
                 });
                 return;
             }
-            // RuntimeMode from validated server config is the sole authority.
-            string requestMode = string.IsNullOrWhiteSpace(order.Mode) ? RuntimeMode : NormalizeMode(order.Mode);
+            // v2: order.Mode yalnızca kayıt amaçlı; emir yetkisi
+            // CheckDispatchGates ile verilir (RuntimeMode gating kaldırıldı).
             bool finiteOrderValues = !double.IsNaN(order.Qty) && !double.IsInfinity(order.Qty)
                 && !double.IsNaN(order.LimitPrice) && !double.IsInfinity(order.LimitPrice)
                 && Math.Abs(order.Qty) <= (double)decimal.MaxValue
@@ -2520,8 +2528,10 @@ namespace Matriks.Lean.Algotrader
                 rejection = "gateway config is stale";
             else if (MaxOrderValueTl <= 0m || MaxQtyPerOrder <= 0m || MaxOrdersPerDay <= 0 || MaxOrdersPerSymbolPerDay <= 0)
                 rejection = "live risk limits are not valid";
-            else if (!string.IsNullOrWhiteSpace(order.Mode) && requestMode != RuntimeMode)
-                rejection = "request mode does not match RuntimeMode";
+            // v2: eski "request mode == RuntimeMode" kontrolü kaldırıldı. Emirin
+            // "mode" alanı artık yalnızca kayıt amaçlıdır; emir yetkisi
+            // systemMode + accountType + REAL arming (CheckDispatchGates) ile
+            // belirlenir.
             else if (finalQty > MaxQtyPerOrder)
                 rejection = "qty exceeds MaxQtyPerOrder: " + finalQty;
             else if (orderValue > MaxOrderValueTl)
@@ -2538,11 +2548,11 @@ namespace Matriks.Lean.Algotrader
                     + " locked=" + GetLockedLongTermQty(symbol) + ")";
             else
                 rejection = ValidateOrderMarketData(symbol, side, roundedPrice);
-            if (rejection == null)
-                rejection = CheckModeGates(RuntimeMode);
-            // ── v2 kontrat + dispatch kapıları (Faz 3, eski kapılarla AND) ──
-            // Sürüm uyuşmazlığı (alan eksikliği dahil) fail-closed emir reddi:
-            // Python ve C# yalnızca atomik deploy ile birlikte yükseltilir.
+            // ── v2 kontrat + dispatch kapıları (TEK mod kapısı) ──
+            // Sürüm uyuşmazlığı (alan eksikliği dahil) fail-closed emir reddi.
+            // Eski CheckModeGates (PAPER/MANUAL/DEMO_LIVE/REAL_LIVE) kaldırıldı;
+            // yerini systemMode + accountType + REAL arming (CheckDispatchGates)
+            // aldı.
             if (rejection == null && _serverContractVersion != ExpectedContractVersion)
                 rejection = "contract version mismatch — dispatch disabled (expected "
                     + ExpectedContractVersion + ", got " + _serverContractVersion + ")";
@@ -2685,40 +2695,11 @@ namespace Matriks.Lean.Algotrader
             return time >= new TimeSpan(9, 30, 0) && time <= new TimeSpan(18, 15, 0);
         }
 
-        private string CheckModeGates(string mode)
-        {
-            if (mode == "PAPER")
-                return "Mode=PAPER — orders are never sent in paper mode";
-
-            if (mode == "MANUAL")
-                return "Mode=MANUAL requires human confirmation";
-
-            if (mode == "DEMO_LIVE")
-            {
-                if (!EnableDemoOrders)
-                    return "EnableDemoOrders=false";
-                if (!RequireDemoAccount)
-                    return "DEMO_LIVE blocked: RequireDemoAccount=false";
-                if (!VerifyDemoAccountFresh())
-                    return "DEMO_LIVE blocked: demo account verification failed or is not current";
-                return null;
-            }
-
-            if (mode == "REAL_LIVE")
-            {
-                if (!EnableRealOrders)
-                    return "REAL_LIVE blocked: EnableRealOrders=false";
-                if (!RealLiveModeAllowed)
-                    return "REAL_LIVE blocked: realLiveModeAllowed=false";
-                if (!RealLiveArmed)
-                    return "REAL_LIVE blocked: realLiveArmed=false";
-                if (RequireDemoAccount && !VerifyDemoAccountFresh())
-                    return "RequireDemoAccount=true and demo account is not confirmed";
-                return null;
-            }
-
-            return "unsupported mode=" + mode;
-        }
+        // v2: CheckModeGates (PAPER/MANUAL/DEMO_LIVE/REAL_LIVE) kaldırıldı.
+        // Emir yetkisi tek kapıdan verilir: CheckDispatchGates (systemMode=
+        // AUTO_TRADE + accountType tespiti + REAL arming). DEMO/REAL artık
+        // çalışma modu değil, GetTradeUser().TestAutoOrder ile tespit edilen
+        // accountType'tır.
 
         /// <summary>
         /// SELL üst sınırı: bot pozisyonundan kilitli uzun vade lotlar
@@ -5170,18 +5151,8 @@ namespace Matriks.Lean.Algotrader
             return (action ?? "WAIT").Trim().ToUpperInvariant();
         }
 
-        private static string NormalizeMode(string mode)
-        {
-            string value = (mode ?? "PAPER").Trim().ToUpperInvariant();
-            if (value != "PAPER"
-                && value != "MANUAL"
-                && value != "DEMO_LIVE"
-                && value != "REAL_LIVE")
-            {
-                return "PAPER";
-            }
-            return value;
-        }
+        // v2: NormalizeMode (PAPER/MANUAL/DEMO_LIVE/REAL_LIVE) kaldırıldı;
+        // çalışma modu artık NormalizeSystemMode ile OBSERVE_ONLY/AUTO_TRADE.
 
         private static string NormalizeOrderSide(string side)
         {

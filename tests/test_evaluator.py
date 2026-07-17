@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from app.models.signal import SignalAction, SignalMode, SignalRequest
+from app.models.signal import SignalAction, SignalRequest
 from app.services.evaluator import build_ai_decision_context, evaluate_symbol
 from app.services.matriks_gateway import GatewayError, MatriksGatewayClient
 from tests.fake_gateway import FakeGateway
@@ -208,48 +208,40 @@ class TestRelatedSymbols:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Mode / güvenlik davranışı
+# Dispatch eligibility / güvenlik davranışı (v2)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-class TestModeSafety:
-    async def test_force_paper_clamps_mode(self):
+class TestDispatchEligibility:
+    async def test_trading_evaluation_is_dispatch_eligible(self):
         fake = FakeGateway()
         provider = StubProvider(
-            raw={"action": "BUY", "confidence": 95.0, "qty": 10, "reason": "stub buy"}
+            raw={"action": "WAIT", "confidence": 20.0, "reason": "stub wait"}
+        )
+
+        result = await evaluate_symbol(
+            "THYAO", gateway=make_gateway_client(fake), provider=provider
+        )
+
+        # v2: TRADING amaçlı değerlendirme dispatch_eligible=True (gerçek dispatch
+        # scanner'da systemMode ile ayrıca kapılanır).
+        assert result.dispatch_eligible is True
+
+    async def test_research_evaluation_is_not_dispatch_eligible(self):
+        fake = FakeGateway()
+        provider = StubProvider(
+            raw={"action": "BUY", "confidence": 95.0, "reason": "stub research"}
         )
 
         result = await evaluate_symbol(
             "THYAO",
             gateway=make_gateway_client(fake),
             provider=provider,
-            mode=SignalMode.REAL_LIVE,
-            force_paper=True,
+            evaluation_purpose="RESEARCH_DISCOVERY",
         )
 
-        # PAPER'a sabitlendi: mode kanıtı + allowOrder asla true olamaz
-        assert result.mode == SignalMode.PAPER
-        assert result.response.allow_order is False
-
-    async def test_paper_mode_buy_decision_never_allows_order(self):
-        fake = FakeGateway()
-        provider = StubProvider(
-            raw={
-                "action": "BUY",
-                "confidence": 95.0,
-                "qty": 10,
-                "reason": "stub buy",
-                "entryRange": {"min": 70.0, "max": 71.5},
-            }
-        )
-
-        result = await evaluate_symbol(
-            "THYAO",
-            gateway=make_gateway_client(fake),
-            provider=provider,
-            mode=SignalMode.PAPER,
-        )
-
+        # Research kararları asla emre dönüşmez.
+        assert result.dispatch_eligible is False
         assert result.response.allow_order is False
 
     async def test_invalid_ai_action_falls_back_to_wait(self):

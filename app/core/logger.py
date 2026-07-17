@@ -33,7 +33,6 @@ def log_signal_evaluation(
     *,
     request_id: str,
     symbol: str,
-    mode: str,
     request: dict[str, Any],
     response: dict[str, Any],
 ) -> None:
@@ -47,7 +46,6 @@ def log_signal_evaluation(
         "timestamp": datetime.now(_LOG_TZ).isoformat(),
         "requestId": request_id,
         "symbol": symbol,
-        "mode": mode,
         "request": request,
         "response": response,
     }

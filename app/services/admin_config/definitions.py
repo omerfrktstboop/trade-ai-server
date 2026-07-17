@@ -36,10 +36,6 @@ class ConfigSectionDefinition:
     keys: tuple[str, ...]
 
 
-def _settings_default_mode() -> str:
-    return str(settings.default_mode.value).upper()
-
-
 CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
     "allowedSymbols": ConfigDefinition(
         "allowedSymbols",
@@ -73,50 +69,15 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         risk_config.timezone,
         "İşlem kesim saati kontrollerinde kullanılan IANA timezone değeri.",
     ),
-    "tradingMode": ConfigDefinition(
-        "tradingMode",
-        "mode",
-        _settings_default_mode(),
-        "Sistem geneli çalışma modu; tüm değerlendirmelerde istek modunu ezer. PAPER=simülasyon, DEMO_LIVE=demo hesapla gerçek emir.",
-    ),
     "killSwitchEnabled": ConfigDefinition(
         "killSwitchEnabled",
         "bool",
         "false",
         "Acil durdurma: açıkken tüm sinyal değerlendirmeleri WAIT döner, hiçbir emir gönderilmez.",
     ),
-    "botMode": ConfigDefinition(
-        "botMode",
-        "mode",
-        "PAPER",
-        "Matriks botun çalışma modu. Riskli modlara geçiş CONFIRM onayı ister.",
-    ),
-    "botEnableDemoOrders": ConfigDefinition(
-        "botEnableDemoOrders",
-        "bool",
-        "false",
-        "Matriks botun demo hesaba emir göndermesine izin verir.",
-    ),
-    "botEnableRealOrders": ConfigDefinition(
-        "botEnableRealOrders",
-        "bool",
-        "false",
-        "Matriks botun gerçek hesaba emir göndermesine izin verir.",
-    ),
-    "tradingKillSwitchActive": ConfigDefinition(
-        "tradingKillSwitchActive",
-        "bool",
-        "false",
-        "Açıkken tüm emir gönderim yolları kapanır; analiz devam eder.",
-    ),
-    "forceSafeMode": ConfigDefinition(
-        "forceSafeMode",
-        "bool",
-        "false",
-        "Açıkken analiz devam eder ama hiçbir emir gönderilmez (güvenli mod).",
-    ),
-    # ── v2 mod katmanı (Faz 4) — eski mod anahtarlarıyla PARALEL çalışır;
-    # geçiş döneminde dispatch için eski VE yeni kapılar birlikte açık olmalı.
+    # ── v2 mod katmanı: tek çalışma modu anahtarı systemMode. Eski
+    # tradingMode/botMode/botEnableDemoOrders/botEnableRealOrders/
+    # tradingKillSwitchActive/forceSafeMode kaldırıldı.
     "systemMode": ConfigDefinition(
         "systemMode",
         "system_mode",
@@ -182,19 +143,6 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "Tarama döngüsünü çalıştırır. Kapatılırsa AI değerlendirmesi VE stop-loss "
         "bekçisi dahil tüm otomasyon durur — kapatmak onay ister.",
     ),
-    "scannerAllowOrders": ConfigDefinition(
-        "scannerAllowOrders",
-        "bool",
-        str(settings.scanner_allow_orders).lower(),
-        "Tarama kararlarının gerçek emre dönüşmesine izin verir. Kapalıyken tüm "
-        "kararlar PAPER'a sabitlenir, emir yolu tamamen kapalıdır.",
-    ),
-    "manualApprovalAllowOrders": ConfigDefinition(
-        "manualApprovalAllowOrders",
-        "bool",
-        str(settings.manual_approval_allow_orders).lower(),
-        "Manuel onay kuyruğundan onaylanan emirlerin gönderilmesine izin verir.",
-    ),
     "portfolioScanIntervalMinutes": ConfigDefinition(
         "portfolioScanIntervalMinutes",
         "int",
@@ -213,30 +161,10 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         risk_config.allowed_symbols,
         "Mevcut pozisyonlardan SELL_EXIT izinli semboller.",
     ),
-    "botRealLiveModeAllowed": ConfigDefinition(
-        "botRealLiveModeAllowed",
-        "bool",
-        "false",
-        "REAL_LIVE modunun backend tarafından kullanılabilmesine izin verir.",
-    ),
-    "botRealLiveArmed": ConfigDefinition(
-        "botRealLiveArmed",
-        "bool",
-        "false",
-        "REAL_LIVE emir yolunu bilinçli olarak kurar; tek başına emir yetkisi vermez.",
-    ),
-    "botRequireDemoAccount": ConfigDefinition(
-        "botRequireDemoAccount",
-        "bool",
-        "true",
-        "Emir öncesi demo hesap doğrulaması zorunluluğunu belirler.",
-    ),
-    "botDemoAccountConfirmed": ConfigDefinition(
-        "botDemoAccountConfirmed",
-        "bool",
-        "false",
-        "Matriks tarafında demo hesap kullanıldığını onaylar.",
-    ),
+    # v2: botRealLiveModeAllowed/botRealLiveArmed/botRequireDemoAccount/
+    # botDemoAccountConfirmed kaldırıldı. REAL emir yetkisi artık
+    # realAccountArmed + armedAccountRef + oturum eşleşmesiyle verilir;
+    # DEMO/REAL gateway'in bildirdiği accountType'tır.
     "botAllowMarketOrders": ConfigDefinition(
         "botAllowMarketOrders",
         "bool",
@@ -539,22 +467,11 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
 }
 
 RISKY_CONFIG_KEYS = {
-    "tradingMode",
     "systemMode",
     "realAccountArmed",
     "dailyMaxLossTl",
     "killSwitchEnabled",
-    "tradingKillSwitchActive",
-    "forceSafeMode",
     "scannerEnabled",
-    "scannerAllowOrders",
-    "manualApprovalAllowOrders",
-    "botMode",
-    "botEnableRealOrders",
-    "botRealLiveModeAllowed",
-    "botRealLiveArmed",
-    "botRequireDemoAccount",
-    "botDemoAccountConfirmed",
     "sizingRiskPerTradePct",
     "sizingMaxCashUtilizationPct",
     "sizingMaxAccountExposurePct",
@@ -618,13 +535,8 @@ CONFIG_SECTION_DEFINITIONS = (
         ),
         keys=(
             "systemMode",
-            "tradingMode",
             "killSwitchEnabled",
-            "tradingKillSwitchActive",
-            "forceSafeMode",
             "scannerEnabled",
-            "scannerAllowOrders",
-            "manualApprovalAllowOrders",
             "aiToolCallingEnabled",
             "dailyMaxLossTl",
             "significancePriceMovePct",
@@ -647,21 +559,17 @@ CONFIG_SECTION_DEFINITIONS = (
         ),
     ),
     ConfigSectionDefinition(
-        title="Matriks gateway ve emir izinleri",
+        title="Matriks gateway ve REAL hesap arming",
         description=(
-            "Gateway çalışma modu, demo/gerçek emir kilitleri, hesap onayı ve "
-            "HTTP timeout ayarları. MARKET emri kod seviyesinde salt okunurdur."
+            "REAL hesap emir yolu arming durumu ve HTTP timeout. REAL emir "
+            "yalnızca 'CONFIRM REAL ACCOUNT' arming'iyle açılır; DEMO/REAL "
+            "gateway'in accountType'ıdır. MARKET emri kod seviyesinde salt okunur."
         ),
         keys=(
-            "botMode",
-            "botEnableDemoOrders",
-            "botEnableRealOrders",
-            "botRealLiveModeAllowed",
-            "botRealLiveArmed",
-            "botRequireDemoAccount",
-            "botDemoAccountConfirmed",
             "realAccountArmed",
             "armedAccountRef",
+            "armedAccountSessionRef",
+            "armedAccountType",
             "botHttpTimeoutSeconds",
             "botAllowMarketOrders",
         ),
@@ -783,23 +691,19 @@ CONFIG_LABELS: dict[str, str] = {
     "lockedLongTermSymbols": "Uzun Vade Kilitli Semboller",
     "disableTradingAfter": "İşlem Kesim Saati",
     "timezone": "Saat Dilimi",
-    "tradingMode": "İşlem Modu",
+    "systemMode": "Çalışma Modu (OBSERVE_ONLY / AUTO_TRADE)",
     "killSwitchEnabled": "Acil Durdurma (Kill Switch)",
-    "botMode": "Matriks Bot Modu",
-    "botEnableDemoOrders": "Demo Emirlere İzin",
-    "botEnableRealOrders": "Gerçek Emirlere İzin",
-    "tradingKillSwitchActive": "Emir Yolu Kill Switch",
-    "forceSafeMode": "Güvenli Mod Zorla",
     "scannerEnabled": "Tarayıcı Aktif",
-    "scannerAllowOrders": "Tarayıcı Emir Gönderebilir",
-    "manualApprovalAllowOrders": "Manuel Onaylı Emirlere İzin",
+    "aiToolCallingEnabled": "AI Tool-Calling Aktif",
+    "dailyMaxLossTl": "Günlük Maks. Zarar (TL)",
+    "significancePriceMovePct": "Önem Fiyat Eşiği (%)",
     "portfolioScanIntervalMinutes": "Portföy Tarama Aralığı (dk)",
     "buyAllowedSymbols": "BUY İzinli Semboller (gateway)",
     "sellExitAllowedSymbols": "SELL Çıkış İzinli Semboller",
-    "botRealLiveModeAllowed": "REAL_LIVE Moduna İzin",
-    "botRealLiveArmed": "REAL_LIVE Emir Yolu Kurulu",
-    "botRequireDemoAccount": "Demo Hesap Zorunlu",
-    "botDemoAccountConfirmed": "Demo Hesap Onaylandı",
+    "realAccountArmed": "REAL Hesap Arming",
+    "armedAccountRef": "Arm Edilen Hesap Ref (sha256)",
+    "armedAccountSessionRef": "Arm Edilen Oturum Ref (sha256)",
+    "armedAccountType": "Arm Edilen Hesap Türü",
     "botAllowMarketOrders": "MARKET Emirlere İzin (kilitli)",
     "botHttpTimeoutSeconds": "Bot HTTP Zaman Aşımı (sn)",
     "sizingRiskPerTradePct": "İşlem Başına Risk (%)",

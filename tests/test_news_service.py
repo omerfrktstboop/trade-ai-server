@@ -266,7 +266,7 @@ class TestNewsInPayload:
     """Verify _build_payload injects news_context when present."""
 
     def test_build_payload_with_news_context(self):
-        from app.models.signal import SignalMode, SignalRequest
+        from app.models.signal import SignalRequest
         from app.services.evaluator import build_payload as _build_payload
 
         req = SignalRequest(
@@ -281,7 +281,6 @@ class TestNewsInPayload:
             rsi=50.0,
             ema20=98.0,
             ema50=95.0,
-            mode=SignalMode.MANUAL,
         )
 
         news = {"THYAO": {"latestNews": [], "kapNews": [], "sentiment": "UNKNOWN"}}
@@ -293,7 +292,7 @@ class TestNewsInPayload:
         assert payload["newsContext"]["THYAO"]["sentiment"] == "UNKNOWN"
 
     def test_build_payload_without_news_context_still_works(self):
-        from app.models.signal import SignalMode, SignalRequest
+        from app.models.signal import SignalRequest
         from app.services.evaluator import build_payload as _build_payload
 
         req = SignalRequest(
@@ -308,7 +307,6 @@ class TestNewsInPayload:
             rsi=50.0,
             ema20=98.0,
             ema50=95.0,
-            mode=SignalMode.MANUAL,
         )
 
         payload = _build_payload(req)
@@ -317,7 +315,7 @@ class TestNewsInPayload:
         assert payload["symbol"] == "THYAO"
 
     def test_build_payload_with_none_news_context_excluded(self):
-        from app.models.signal import SignalMode, SignalRequest
+        from app.models.signal import SignalRequest
         from app.services.evaluator import build_payload as _build_payload
 
         req = SignalRequest(
@@ -332,7 +330,6 @@ class TestNewsInPayload:
             rsi=50.0,
             ema20=98.0,
             ema50=95.0,
-            mode=SignalMode.MANUAL,
         )
 
         payload = _build_payload(req, news_context=None)
@@ -340,7 +337,7 @@ class TestNewsInPayload:
         assert "newsContext" not in payload
 
     def test_build_payload_includes_technical_features_when_present(self):
-        from app.models.signal import SignalMode, SignalRequest
+        from app.models.signal import SignalRequest
         from app.services.evaluator import build_payload as _build_payload
 
         req = SignalRequest(
@@ -361,7 +358,6 @@ class TestNewsInPayload:
             indicatorConsensus="BUY",
             natr=2.4,
             depthQueueDropPct=12.0,
-            mode=SignalMode.MANUAL,
         )
 
         payload = _build_payload(req)

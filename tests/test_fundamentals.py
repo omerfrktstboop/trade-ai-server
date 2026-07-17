@@ -146,7 +146,7 @@ class TestFundamentalsService:
 
 class TestFundamentalsInPayload:
     def _req(self):
-        from app.models.signal import SignalMode, SignalRequest
+        from app.models.signal import SignalRequest
 
         return SignalRequest(
             requestId="f-1",
@@ -157,7 +157,6 @@ class TestFundamentalsInPayload:
             high=102.0,
             low=98.0,
             volume=1000.0,
-            mode=SignalMode.PAPER,
         )
 
     def test_build_payload_includes_fundamentals_context(self):

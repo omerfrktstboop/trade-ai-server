@@ -26,7 +26,7 @@ from app.models.db import (
     PositionStopEvent,
     RiskDecision,
 )
-from app.models.signal import SignalAction, SignalMode, SignalRequest, SignalResponse
+from app.models.signal import SignalAction, SignalRequest, SignalResponse
 from app.services.admin_config import get_fee_config, set_admin_config_value
 from app.services.fill_ledger import compute_fill_costs, compute_slippage, to_decimal
 from app.services.matriks_gateway import MatriksGatewayClient
@@ -449,7 +449,6 @@ class TestDecisionOutcome:
             low=98.0,
             close=100.0,
             volume=1000.0,
-            mode=SignalMode.PAPER,
         )
 
     def _response(self, action: SignalAction = SignalAction.BUY) -> SignalResponse:

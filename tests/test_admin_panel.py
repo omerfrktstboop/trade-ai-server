@@ -49,7 +49,6 @@ def _signal_payload(**kwargs: Any) -> dict[str, Any]:
         "requestId": "admin-test-signal",
         "symbol": "THYAO",
         "timeframe": "1h",
-        "mode": "LIVE",
         "lastPrice": 100.0,
         "open": 99.0,
         "high": 101.0,
@@ -126,14 +125,14 @@ class TestAdminConfig:
         assert audit.new_value == "30"
         assert audit.reason == "raise test limit"
 
-    @pytest.mark.parametrize("mode", ["LIVE", "DEMO_LIVE", "REAL_LIVE"])
-    def test_live_modes_require_confirmation(
-        self, client: TestClient, auth_headers: dict[str, str], mode: str
+    def test_auto_trade_requires_confirmation(
+        self, client: TestClient, auth_headers: dict[str, str]
     ):
+        """v2: systemMode=AUTO_TRADE'e geçiş CONFIRM ister."""
         resp = client.put(
-            "/api/admin/config/tradingMode",
+            "/api/admin/config/systemMode",
             headers=auth_headers,
-            json={"value": mode, "reason": "test live"},
+            json={"value": "AUTO_TRADE", "reason": "test auto trade"},
         )
 
         assert resp.status_code == 400
@@ -164,15 +163,16 @@ class TestAdminConfig:
             else:
                 assert f'name="{key}"' in resp.text
 
-    def test_newly_exposed_safety_config_can_be_updated_from_html(
+    def test_safety_config_can_be_updated_from_html(
         self, client: TestClient, auth_headers: dict[str, str]
     ):
+        """v2: tek kill switch + günlük zarar limiti HTML formundan güncellenir."""
         resp = client.post(
             "/admin/config",
             headers=auth_headers,
             data={
-                "tradingKillSwitchActive": "true",
-                "forceSafeMode": "true",
+                "dailyMaxLossTl": "500",
+                "significancePriceMovePct": "2.0",
                 "reason": "admin coverage test",
             },
             follow_redirects=False,
@@ -181,8 +181,8 @@ class TestAdminConfig:
         assert resp.status_code == 303
         config = client.get("/api/admin/config", headers=auth_headers).json()
         values = {item["key"]: item["value"] for item in config}
-        assert values["tradingKillSwitchActive"] == "true"
-        assert values["forceSafeMode"] == "true"
+        assert values["dailyMaxLossTl"] == "500"
+        assert values["significancePriceMovePct"] == "2.0"
 
     def test_config_page_no_longer_shows_profile_shadowed_keys(
         self, client: TestClient, auth_headers: dict[str, str]
@@ -317,7 +317,7 @@ class TestLogDetailView:
                     ema50=97.0,
                     macd=0.1,
                     macd_signal=0.05,
-                    mode="DEMO_LIVE",
+                    mode="AUTO_TRADE",
                 )
             )
             session.add(
@@ -348,7 +348,7 @@ class TestLogDetailView:
                     reason="RiskEngine approved",
                     qty=300.0,
                     order_type="LIMIT",
-                    mode="DEMO_LIVE",
+                    mode="AUTO_TRADE",
                 )
             )
             session.add(
@@ -359,7 +359,7 @@ class TestLogDetailView:
                     qty=300.0,
                     price=41.6,
                     status="FILLED",
-                    mode="DEMO_LIVE",
+                    mode="AUTO_TRADE",
                     matrix_message="Order accepted",
                 )
             )

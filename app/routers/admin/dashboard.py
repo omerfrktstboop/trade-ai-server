@@ -18,7 +18,7 @@ from app.models.db import (
     RiskDecision,
 )
 from app.services.admin_config import (
-    get_scanner_allow_orders,
+    get_system_mode,
     is_scanner_runtime_enabled,
 )
 from app.services.ai_provider import get_ai_provider_status
@@ -137,7 +137,7 @@ async def admin_api_dashboard(request: Request) -> dict[str, Any]:
         latest_orders = await _latest(session, OrderLog, 20)
 
     return {
-        "tradingMode": configs["tradingMode"].value,
+        "systemMode": configs["systemMode"].value,
         "killSwitchEnabled": configs["killSwitchEnabled"].value == "true",
         "todayTradeCount": today_counts.bot_count,
         "latestRiskDecisions": [_row_dict(row) for row in latest_risk],
@@ -317,7 +317,7 @@ async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
     # get_status() env varsayılanını gösterir; panel override'ı varsa onu yansıt.
     try:
         async with async_session_factory() as session:
-            result["scanner"]["allowOrders"] = await get_scanner_allow_orders(session)
+            result["scanner"]["systemMode"] = await get_system_mode(session)
             result["scanner"]["panelEnabled"] = await is_scanner_runtime_enabled(
                 session
             )
@@ -370,8 +370,8 @@ async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
         ).hexdigest()[:16]
         result["runtime"].update(
             {
-                "tradingMode": config_values.get("tradingMode", "UNKNOWN"),
-                "botMode": config_values.get("botMode", "UNKNOWN"),
+                "systemMode": config_values.get("systemMode", "OBSERVE_ONLY"),
+                "realAccountArmed": config_values.get("realAccountArmed") == "true",
                 "killSwitchEnabled": config_values.get("killSwitchEnabled") == "true",
                 "activeTradeProfile": {
                     "code": profile.code,

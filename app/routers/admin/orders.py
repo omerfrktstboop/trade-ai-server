@@ -14,7 +14,6 @@ from app.models.db import (
     AiDecision,
     ConfigAuditLog,
     MarketSnapshot,
-    ManualApprovalRequest,
     OrderLog,
     RiskDecision,
     TradeProfile,
@@ -23,7 +22,6 @@ from app.services.admin_config import (
     RISKY_CONFIRMATION,
 )
 from app.services.replay import replay_batch
-from app.services.manual_approvals import approve_request, reject_request
 from app.services.trade_profile import (
     list_profiles,
 )
@@ -287,39 +285,6 @@ async def admin_log_detail(request: Request, request_id: str) -> HTMLResponse:
     )
 
 
-@admin_router.get("/approvals", response_class=HTMLResponse)
-async def admin_approvals(request: Request) -> HTMLResponse:
-    identity = await require_admin(request)
-    async with async_session_factory() as session:
-        rows = list(
-            (
-                await session.execute(
-                    select(ManualApprovalRequest).order_by(
-                        ManualApprovalRequest.created_at.desc()
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-    return templates.TemplateResponse(
-        request,
-        "admin/approvals.html",
-        {"identity": identity, "active": "approvals", "rows": rows},
-    )
-
-
-@admin_router.post("/approvals/{approval_id}/approve")
-async def admin_approve(request: Request, approval_id: int) -> RedirectResponse:
-    identity = await require_admin(request)
-    form = await request.form()
-    await approve_request(approval_id, identity, str(form.get("admin_note") or ""))
-    return RedirectResponse("/admin/approvals", status_code=303)
-
-
-@admin_router.post("/approvals/{approval_id}/reject")
-async def admin_reject(request: Request, approval_id: int) -> RedirectResponse:
-    identity = await require_admin(request)
-    form = await request.form()
-    await reject_request(approval_id, identity, str(form.get("admin_note") or ""))
-    return RedirectResponse("/admin/approvals", status_code=303)
+# v2: manuel onay (MANUAL) akışı kaldırıldı — /admin/approvals route'ları
+# ve approve/reject uçları silindi. Emir yetkisi yalnızca systemMode=AUTO_TRADE
+# + account watcher + risk kapılarıyla verilir.

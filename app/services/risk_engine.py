@@ -31,7 +31,6 @@ from app.models.signal import (
     EntryRange,
     OrderType,
     SignalAction,
-    SignalMode,
     SignalRequest,
     SignalResponse,
 )
@@ -219,27 +218,10 @@ class RiskEngine:
                 f"Trading blocked: after cutoff time {self.config.disable_trading_after}",
             )
 
-        # ── 3.55. Trade-profile mode permission ──────────────────────
-        # Authoritative gate for allow_real_live/allow_demo_live, regardless
-        # of what mode the caller sent. The scanner and the Matriks gateway
-        # each apply their own mode checks too, but this is the layer every
-        # evaluation path passes through.
-        if (
-            request.mode == SignalMode.REAL_LIVE
-            and not self.config.real_live_mode_allowed
-        ):
-            return self._block(
-                request,
-                "REAL_LIVE blocked: not permitted by active trade profile / botEnableRealOrders",
-            )
-        if (
-            request.mode == SignalMode.DEMO_LIVE
-            and not self.config.demo_live_mode_allowed
-        ):
-            return self._block(
-                request,
-                "DEMO_LIVE blocked: not permitted by active trade profile",
-            )
+        # v2: eski trade-profile mod izni (REAL_LIVE/DEMO_LIVE) kaldırıldı.
+        # Emir yetkisi artık yalnızca systemMode=AUTO_TRADE + account watcher
+        # (DEMO serbest, REAL arming) tarafından, scanner ve C# gateway
+        # katmanlarında belirlenir. RiskEngine mod-bağımsızdır.
 
         # ── 3.6. Daily trade count limit ─────────────────────────────
         if (
@@ -374,33 +356,17 @@ class RiskEngine:
             # exist in any trade profile.
             confidence_ok = True
 
-        # ── 8. Mode-based allowOrder / requiresConfirmation ─────────
-        if request.mode == SignalMode.PAPER:
-            allow_order = False
-            requires_confirmation = False
-            reasons.append("PAPER mode — allowOrder forced to false")
-        elif request.mode == SignalMode.MANUAL:
-            allow_order = False
-            requires_confirmation = action != SignalAction.WAIT
-            if requires_confirmation:
-                reasons.append("MANUAL mode — requires user confirmation")
-            else:
-                reasons.append("MANUAL mode — allowOrder forced to false")
-        else:  # LIVE / DEMO_LIVE / REAL_LIVE
-            requires_confirmation = False
-            allow_order = confidence_ok and action != SignalAction.WAIT
-            if request.mode == SignalMode.DEMO_LIVE and allow_order:
-                reasons.append("DEMO_LIVE mode — demo order may be sent by client")
-            elif request.mode == SignalMode.REAL_LIVE and allow_order:
-                reasons.append("REAL_LIVE mode — client-side real order gate required")
+        # ── 8. allowOrder (mod-bağımsız) ────────────────────────────
+        # v2: allow_order yalnızca risk geçişini gösterir (confidence + geçerli
+        # aksiyon). Emrin GERÇEKTEN gönderilip gönderilmeyeceği systemMode
+        # (OBSERVE_ONLY/AUTO_TRADE) + account watcher + audit + gateway
+        # tarafından scanner katmanında belirlenir. MANUAL onayı kaldırıldı.
+        requires_confirmation = False
+        allow_order = confidence_ok and action != SignalAction.WAIT
 
         # ── 9. BUY pre-flight: entryRange / stopLoss / targetPrice ──
-        if action == SignalAction.BUY and request.mode in (
-            SignalMode.MANUAL,
-            SignalMode.LIVE,
-            SignalMode.DEMO_LIVE,
-            SignalMode.REAL_LIVE,
-        ):
+        # v2: her BUY için zorunlu (mod-bağımsız).
+        if action == SignalAction.BUY:
             missing: list[str] = []
             if decision.entry_range is None:
                 missing.append("entryRange")
@@ -455,12 +421,9 @@ class RiskEngine:
                 )
 
         # ── Determine order type and price ──────────────────────────
-        show_details = allow_order or request.mode == SignalMode.MANUAL
+        show_details = allow_order
 
-        if request.mode == SignalMode.PAPER:
-            order_type = OrderType.NONE
-            price = None
-        elif show_details:
+        if show_details:
             order_type = OrderType.LIMIT
             if action == SignalAction.BUY:
                 price = (

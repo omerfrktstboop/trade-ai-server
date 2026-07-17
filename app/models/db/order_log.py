@@ -29,7 +29,9 @@ class OrderLog(Base):
     status: Mapped[str] = mapped_column(String(16), default="PENDING")
     state: Mapped[str] = mapped_column(String(32), default="RESERVED")
 
-    mode: Mapped[str] = mapped_column(String(16), default="PAPER")
+    # v2: mod kavramı kaldırıldı; kolon geçmiş kayıtlar/gösterim için kalır ve
+    # dispatch edilen emirlerde "AUTO_TRADE" ile doldurulur.
+    mode: Mapped[str] = mapped_column(String(16), default="OBSERVE_ONLY")
     order_type: Mapped[str] = mapped_column(String(16), default="LIMIT")
     # Emir GÖNDERİM anında damgalanan hesap referansı (sha256). Callback fill'i
     # bu sabit değeri kullanır — callback anındaki canlı hesabı DEĞİL — böylece

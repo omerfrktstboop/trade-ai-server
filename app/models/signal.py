@@ -81,14 +81,9 @@ class OrderType(str, Enum):
     NONE = "NONE"
 
 
-class SignalMode(str, Enum):
-    """Signal processing mode — how aggressively orders are handled."""
-
-    PAPER = "PAPER"
-    MANUAL = "MANUAL"
-    LIVE = "LIVE"
-    DEMO_LIVE = "DEMO_LIVE"
-    REAL_LIVE = "REAL_LIVE"
+# v2: SignalMode (PAPER/MANUAL/LIVE/DEMO_LIVE/REAL_LIVE) kaldırıldı. Çalışma
+# modu artık yalnızca admin config'deki systemMode (OBSERVE_ONLY/AUTO_TRADE);
+# DEMO/REAL sadece gateway'in bildirdiği accountType'tır, çalışma modu değil.
 
 
 # ── Nested models ──────────────────────────────────────────────────────────
@@ -299,8 +294,7 @@ class SignalRequest(BaseModel):
     # clients posting sessionId to /signal/evaluate still validate.
     session_id: str = Field("", alias="sessionId")
 
-    # Mode
-    mode: SignalMode = SignalMode.PAPER
+    # v2: mode alanı kaldırıldı (çalışma modu artık global systemMode).
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
@@ -401,7 +395,6 @@ class AgenticSignalRequest(BaseModel):
     context_history: list[ContextStep] = Field(
         default_factory=list, alias="contextHistory"
     )
-    mode: SignalMode = SignalMode.PAPER
 
     model_config = ConfigDict(populate_by_name=True)
 

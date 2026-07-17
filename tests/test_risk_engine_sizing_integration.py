@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.core.risk_config import RiskConfig
-from app.models.signal import EntryRange, SignalAction, SignalMode, SignalRequest
+from app.models.signal import EntryRange, SignalAction, SignalRequest
 from app.services.effective_risk_config import EffectiveRiskConfig
 from app.services.position_sizing import AccountSizingContext
 from app.services.risk_engine import RiskDecision, RiskEngine
@@ -61,7 +61,6 @@ def request(*, with_account=True, **updates) -> SignalRequest:
         "high": 101,
         "low": 98,
         "volume": 1000,
-        "mode": SignalMode.DEMO_LIVE,
         "tradeEligible": True,
         "accountSizingContext": account if with_account else None,
     }

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from app.models.signal import SignalMode
 from app.services.evaluator import build_payload, snapshot_to_signal_request
 from app.services.market_data_contract import (
     canonical_period,
@@ -76,7 +75,6 @@ def test_signal_and_ai_payload_expose_explicit_semantics():
             "totalVol": 1_917_814_254.1,
         },
         request_id="contract-1",
-        mode=SignalMode.DEMO_LIVE,
     )
 
     ai_payload = build_payload(request)

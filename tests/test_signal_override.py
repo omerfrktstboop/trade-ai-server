@@ -14,7 +14,7 @@ from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
 from app.main import app
 from app.models.db import BotPosition, SignalOverride
-from app.models.signal import SignalMode
+# v2: SignalMode kaldırıldı
 from app.services.evaluator import evaluate_symbol
 from app.services.matriks_gateway import MatriksGatewayClient
 from app.services.signal_override import (
@@ -240,8 +240,8 @@ def _override_gateway() -> MatriksGatewayClient:
     )
 
 
-def _evaluate(symbol: str, mode: SignalMode):
-    return asyncio.run(evaluate_symbol(symbol, gateway=_override_gateway(), mode=mode))
+def _evaluate(symbol: str):
+    return asyncio.run(evaluate_symbol(symbol, gateway=_override_gateway()))
 
 
 class TestOverrideAppliedThroughEvaluator:
@@ -259,7 +259,7 @@ class TestOverrideAppliedThroughEvaluator:
 
         asyncio.run(_seed())
 
-        result = _evaluate("THYAO", SignalMode.DEMO_LIVE)
+        result = _evaluate("THYAO")
         response = result.response
 
         assert response.action.value == "SELL"
@@ -269,35 +269,8 @@ class TestOverrideAppliedThroughEvaluator:
         # 1e9 sentinel — proves the real RiskEngine SELL-qty clamp ran.
         assert response.qty == 500.0
 
-    def test_real_live_mode_ignores_override(self):
-        async def _seed():
-            async with async_session_factory() as session:
-                await create_override(
-                    session,
-                    "THYAO",
-                    "SELL",
-                    SELL_ALL_SENTINEL_QTY,
-                    reason="should not apply in REAL_LIVE",
-                    created_by="admin",
-                )
-
-        asyncio.run(_seed())
-
-        result = _evaluate("THYAO", SignalMode.REAL_LIVE)
-
-        # Mock provider (default AI_PROVIDER) always returns WAIT — proves
-        # the override was NOT consumed/applied for REAL_LIVE.
-        assert result.response.action.value == "WAIT"
-
-        async def _check_still_pending():
-            async with async_session_factory() as session:
-                stmt = select(SignalOverride).where(SignalOverride.symbol == "THYAO")
-                return (await session.execute(stmt)).scalar_one_or_none()
-
-        assert asyncio.run(_check_still_pending()) is not None
-
     def test_no_override_falls_back_to_ai_provider(self):
-        result = _evaluate("THYAO", SignalMode.DEMO_LIVE)
+        result = _evaluate("THYAO")
 
         assert result.response.action.value == "WAIT"  # mock provider default
 

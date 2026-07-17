@@ -542,25 +542,6 @@ class TestBotConfigIntegration:
         )
         assert after["activeTradeProfile"]["code"] == "AGGRESSIVE"
 
-    def test_high_risk_profile_disallows_real_live_mode(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ):
-        """HIGH_RISK has allow_real_live=False — even if botMode were set to
-        REAL_LIVE, /api/gateway/config must downgrade it to PAPER."""
-        client.post(
-            "/api/admin/trade-profiles/HIGH_RISK/activate",
-            json={"reason": "test", "confirmation": "CONFIRM"},
-            headers=auth_headers,
-        )
-        client.put(
-            "/api/admin/config/botMode",
-            json={"value": "REAL_LIVE", "reason": "test", "confirmation": "CONFIRM"},
-            headers=auth_headers,
-        )
-
-        config = client.get("/api/gateway/config", headers=auth_headers).json()
-        assert config["mode"] == "PAPER"
-
 
 class TestRiskEngineIntegration:
     def test_build_runtime_risk_config_reflects_active_profile(self):
@@ -590,37 +571,6 @@ class TestRiskEngineIntegration:
         )
         assert cfg.real_live_mode_allowed is False  # AGGRESSIVE.allow_real_live=False
 
-    def test_real_live_mode_blocked_by_risk_engine_when_profile_disallows(self):
-        from app.core.risk_config import RiskConfig
-        from app.models.signal import SignalAction, SignalMode, SignalRequest
-        from app.services.risk_engine import RiskDecision, RiskEngine
-
-        cfg = RiskConfig(
-            allowed_symbols="THYAO",
-            real_live_mode_allowed=False,
-            disable_trading_after="23:59",
-            _env_file=None,
-        )
-        engine = RiskEngine(cfg)
-        decision = RiskDecision(action=SignalAction.BUY, confidence=99.0, reason="test")
-        request = SignalRequest(
-            requestId="test-001",
-            symbol="THYAO",
-            timeframe="1h",
-            lastPrice=100.0,
-            open=99.0,
-            high=102.0,
-            low=98.0,
-            volume=1000.0,
-            tradeEligible=True,
-            mode=SignalMode.REAL_LIVE,
-        )
-        resp = engine.evaluate(request, decision)
-
-        assert resp.action == SignalAction.WAIT
-        assert resp.allow_order is False
-        assert "REAL_LIVE blocked" in resp.reason
-
 
 # ── Safety invariants unaffected by profiles ─────────────────────────────────
 
@@ -648,7 +598,6 @@ class TestProfileIndependentSafety:
                 "requestId": "kill-switch-test",
                 "symbol": "THYAO",
                 "timeframe": "1h",
-                "mode": "LIVE",
                 "lastPrice": 100.0,
                 "open": 99.0,
                 "high": 101.0,

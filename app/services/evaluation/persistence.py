@@ -157,7 +157,6 @@ async def persist_evaluation(
                     position_qty=req.bot_position_qty,
                     total_account_qty=req.total_account_qty,
                     locked_long_term_qty=req.locked_long_term_qty,
-                    mode=req.mode.value,
                 )
             )
             # Cache tekrarinda saglayicinin eski gecikmesini yazmak yaniltici
@@ -201,7 +200,6 @@ async def persist_evaluation(
                     target_price=response.target_price,
                     order_type=response.order_type.value,
                     qty=response.qty,
-                    mode=req.mode.value,
                 )
             )
             from app.services.outcome_tracking import create_decision_outcome

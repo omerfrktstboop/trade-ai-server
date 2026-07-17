@@ -46,9 +46,10 @@ def test_gateway_config_payload_carries_contract_version_2(_db):
     config = client.get("/api/gateway/config", headers=headers).json()
     assert config["ok"] is True
     assert config["contractVersion"] == 2
-    # Eski alanlar geçiş dönemi boyunca üretilmeye devam eder (ilke #1).
-    assert "mode" in config
-    assert "enableDemoOrders" in config
+    # v2 cutover: eski mode/enableDemoOrders alanları kaldırıldı.
+    assert "mode" not in config
+    assert "enableDemoOrders" not in config
+    assert config["killSwitchActive"] is False
 
 
 def test_gateway_config_carries_v2_mode_and_arming_fields(_db):
@@ -90,17 +91,19 @@ def test_gateway_rejects_contract_version_mismatch_fail_closed():
     source = _source()
     assert "private const int ExpectedContractVersion = 2;" in source
     handler = source.split("private async Task HandleOrderAsync", 1)[1]
-    handler = handler.split("private string CheckModeGates", 1)[0]
+    handler = handler.split("private decimal GetSellableQty", 1)[0]
     assert "_serverContractVersion != ExpectedContractVersion" in handler
     assert "contract version mismatch" in handler
     # Alan eksikliği de uyuşmazlıktır: default 0, asla 2 sayılmaz.
     assert 'cfg.Value<int?>("contractVersion") ?? 0' in source
 
 
-def test_dispatch_gates_are_additional_and_fail_closed():
+def test_dispatch_gate_is_the_only_mode_gate():
     source = _source()
-    # Eski CheckModeGates SİLİNMEDİ — çift kapı dönemi.
-    assert "rejection = CheckModeGates(RuntimeMode);" in source
+    # v2 cutover: eski CheckModeGates (PAPER/MANUAL/DEMO_LIVE/REAL_LIVE)
+    # tamamen kaldırıldı; tek kapı CheckDispatchGates.
+    assert "CheckModeGates(RuntimeMode)" not in source
+    assert "private string CheckModeGates" not in source
     assert "rejection = CheckDispatchGates();" in source
     gates = source.split("private string CheckDispatchGates()", 1)[1]
     gates = gates.split("private static string NormalizeSystemMode", 1)[0]
@@ -173,7 +176,7 @@ def test_hard_caps_untouched_by_v2_gates():
     eklendi — MaxQty/MaxOrderValue/günlük limit kontrolleri aynen duruyor."""
     source = _source()
     handler = source.split("private async Task HandleOrderAsync", 1)[1]
-    handler = handler.split("private string CheckModeGates", 1)[0]
+    handler = handler.split("private decimal GetSellableQty", 1)[0]
     assert "finalQty > MaxQtyPerOrder" in handler
     assert "orderValue > MaxOrderValueTl" in handler
     assert "GetTotalDailyOrderCount() >= MaxOrdersPerDay" in handler

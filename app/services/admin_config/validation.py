@@ -9,8 +9,6 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.models.signal import SignalMode
-
 from app.services.admin_config.definitions import (
     CONFIG_DEFINITIONS,
     SECRET_CONFIG_KEYS,
@@ -60,10 +58,6 @@ def _serialize_value(key: str, raw_value: Any, value_type: str) -> str:
         if key == "marketDataDiagnosticSampleRatePct" and value > 100:
             raise ValueError(f"{key} must be <= 100")
         return str(value)
-    if value_type == "mode":
-        value = str(raw_value).upper()
-        SignalMode(value)
-        return value
     if value_type == "system_mode":
         value = str(raw_value).strip().upper()
         if value not in {"OBSERVE_ONLY", "AUTO_TRADE"}:
@@ -144,16 +138,6 @@ def _parse_bool(raw_value: Any) -> bool:
 def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
     if key not in RISKY_CONFIG_KEYS:
         return False
-    if key == "tradingMode":
-        return (
-            new_value
-            in {
-                SignalMode.LIVE.value,
-                SignalMode.DEMO_LIVE.value,
-                SignalMode.REAL_LIVE.value,
-            }
-            and old_value != new_value
-        )
     if key == "systemMode":
         # AUTO_TRADE'e geçiş gerçek emir yolunu kurar — onay ister.
         return new_value == "AUTO_TRADE" and old_value != new_value
@@ -163,33 +147,13 @@ def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
         # Limiti yükseltmek veya kapatmak (0) korumayı gevşetir — onay ister.
         old_d, new_d = Decimal(old_value), Decimal(new_value)
         return old_d > 0 and (new_d == 0 or new_d > old_d)
-    if key in {"killSwitchEnabled", "tradingKillSwitchActive", "forceSafeMode"}:
+    if key == "killSwitchEnabled":
         return _parse_bool(old_value) is True and _parse_bool(new_value) is False
     if key == "scannerEnabled":
         # Kapatmak stop-loss bekçisi dahil tüm otomasyonu durdurur — onay ister.
         return _parse_bool(old_value) is True and _parse_bool(new_value) is False
-    if key in {"scannerAllowOrders", "manualApprovalAllowOrders"}:
-        # Açmak gerçek emir yolunu kurar — onay ister.
+    if key == "sizingAllowMarginBuying":
         return _parse_bool(new_value) is True and old_value != new_value
-    if key == "botMode":
-        return (
-            new_value
-            in {
-                SignalMode.DEMO_LIVE.value,
-                SignalMode.REAL_LIVE.value,
-            }
-            and old_value != new_value
-        )
-    if key in {
-        "botEnableRealOrders",
-        "botRealLiveModeAllowed",
-        "botRealLiveArmed",
-        "botDemoAccountConfirmed",
-        "sizingAllowMarginBuying",
-    }:
-        return _parse_bool(new_value) is True and old_value != new_value
-    if key == "botRequireDemoAccount":
-        return _parse_bool(old_value) is True and _parse_bool(new_value) is False
     if key == "accountReservationHandling":
         return old_value == "UNKNOWN" and new_value != "UNKNOWN"
     increase_is_risky = {

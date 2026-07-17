@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.core.risk_config import RiskConfig
-from app.models.signal import EntryRange, SignalAction, SignalMode, SignalRequest
+from app.models.signal import EntryRange, SignalAction, SignalRequest
 from app.services import market_regime as mr
 from app.services.market_regime import _classify, get_index_regime
 from app.services.matriks_gateway import GatewayUnavailable
@@ -117,7 +117,7 @@ def _cfg(**kwargs) -> RiskConfig:
     return RiskConfig(**defaults, _env_file=None)
 
 
-def _req(mode=SignalMode.DEMO_LIVE) -> SignalRequest:
+def _req() -> SignalRequest:
     return SignalRequest(
         requestId="t-1",
         symbol="THYAO",
@@ -129,7 +129,6 @@ def _req(mode=SignalMode.DEMO_LIVE) -> SignalRequest:
         volume=1000.0,
         rsi=35.0,
         tradeEligible=True,
-        mode=mode,
     )
 
 

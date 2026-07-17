@@ -1,8 +1,8 @@
-"""v2 systemMode çift kapısı testleri (Faz 4).
+"""v2 systemMode emir kapısı testleri.
 
-Geçiş dönemi invariant'ı: dispatch için ESKİ kapılar (scannerAllowOrders +
-DEMO_LIVE modu + ...) VE YENİ kapı (systemMode=AUTO_TRADE) birlikte açık
-olmalı. OBSERVE_ONLY (default) tek başına tüm emirleri keser.
+Emir dispatch'i TEK anahtardan gelir: systemMode=AUTO_TRADE. OBSERVE_ONLY
+(default) tek başına tüm emirleri keser. Eski scannerAllowOrders/DEMO_LIVE
+mod kapıları kaldırıldı.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ import pytest
 from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
 from app.models.db import RiskDecision, SystemConfig, TradeWatchlistSymbol
-from app.services import scanner as scanner_module
 from app.services.admin_config import (
     RISKY_CONFIRMATION,
     get_system_mode,
@@ -103,10 +102,9 @@ async def test_default_system_mode_is_observe_only():
         assert await is_auto_trade(session) is False
 
 
-async def test_observe_only_blocks_dispatch_even_when_legacy_gates_open(monkeypatch):
-    """Eski kapıların tamamı açıkken (allow_orders + DEMO_LIVE + eligible +
-    audit satırı) systemMode default'u tek başına emri kesmeli."""
-    monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+async def test_observe_only_blocks_dispatch(monkeypatch):
+    """OBSERVE_ONLY (default): diğer tüm kapılar açık (eligible + audit +
+    kill switch kapalı) olsa bile systemMode tek başına emri keser."""
     fake = FakeGateway()
     fake.positions = []
 
@@ -115,8 +113,7 @@ async def test_observe_only_blocks_dispatch_even_when_legacy_gates_open(monkeypa
     assert fake.orders == []
 
 
-async def test_auto_trade_with_legacy_gates_allows_dispatch(monkeypatch):
-    monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
+async def test_auto_trade_allows_dispatch(monkeypatch):
     await _set_system_mode("AUTO_TRADE")
     fake = FakeGateway()
     fake.positions = []
@@ -124,19 +121,6 @@ async def test_auto_trade_with_legacy_gates_allows_dispatch(monkeypatch):
     await _scanner(fake)._maybe_send_order(make_result())
 
     assert len(fake.orders) == 1
-
-
-async def test_auto_trade_alone_cannot_bypass_legacy_gates(monkeypatch):
-    """Yeni kapı eskisinin YERİNE geçmez: scannerAllowOrders kapalıyken
-    AUTO_TRADE emir gönderemez (fail-closed AND)."""
-    monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", False)
-    await _set_system_mode("AUTO_TRADE")
-    fake = FakeGateway()
-    fake.positions = []
-
-    await _scanner(fake)._maybe_send_order(make_result())
-
-    assert fake.orders == []
 
 
 async def test_switching_to_auto_trade_requires_confirmation():
@@ -160,7 +144,6 @@ async def test_startup_disarm_failure_hard_blocks_dispatch(monkeypatch):
     diğer tüm kapılar açık olsa bile hiçbir emir gönderilmez (fail-closed)."""
     from app.core import runtime_flags
 
-    monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
     await _set_system_mode("AUTO_TRADE")
     runtime_flags.block_dispatch("test: startup disarm failed")
     try:
@@ -175,7 +158,6 @@ async def test_startup_disarm_failure_hard_blocks_dispatch(monkeypatch):
 async def test_missing_decision_audit_blocks_dispatch(monkeypatch):
     """Audit-yoksa-emir-yok (ilke #6): risk_decisions satırı olmayan bir
     karar, diğer tüm kapılar açıkken bile gönderilemez."""
-    monkeypatch.setattr(scanner_module.settings, "scanner_allow_orders", True)
     await _set_system_mode("AUTO_TRADE")
     async with async_session_factory() as session:
         row = (

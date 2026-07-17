@@ -138,7 +138,6 @@ async def health_ready() -> JSONResponse:
         "ok": scanner_ok,
         "enabled": settings.scanner_enabled,
         "running": scanner.running,
-        "allowOrders": settings.scanner_allow_orders,
     }
     return JSONResponse(
         status_code=200 if ready else 503,

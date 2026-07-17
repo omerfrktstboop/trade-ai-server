@@ -1,5 +1,5 @@
 """Admin config DB reads/writes: SystemConfig get/set + audit log, plus
-the composite resolvers (is_kill_switch_enabled, get_trading_mode_override,
+the composite resolvers (is_kill_switch_enabled, get_system_mode,
 build_runtime_risk_config) that other services call as their single entry
 point for DB-backed runtime config.
 """
@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.risk_config import RiskConfig, risk_config
 from app.models.db import ConfigAuditLog, SystemConfig
-from app.models.signal import SignalMode
 from app.services.trade_profile import get_active_profile
 
 from app.services.admin_config.definitions import (
@@ -178,18 +177,9 @@ async def set_admin_config_values(
 
 
 async def is_kill_switch_enabled(session: AsyncSession) -> bool:
-    return (
-        _parse_bool(await get_admin_config_value(session, "killSwitchEnabled"))
-        or _parse_bool(await get_admin_config_value(session, "tradingKillSwitchActive"))
-        or _parse_bool(await get_admin_config_value(session, "forceSafeMode"))
-    )
-
-
-async def get_trading_mode_override(session: AsyncSession) -> SignalMode | None:
-    if not await has_admin_config_row(session, "tradingMode"):
-        return None
-    value = await get_admin_config_value(session, "tradingMode")
-    return SignalMode(value.upper())
+    # v2: tek kill switch anahtarı. Eski tradingKillSwitchActive/forceSafeMode
+    # kaldırıldı.
+    return _parse_bool(await get_admin_config_value(session, "killSwitchEnabled"))
 
 
 # ── v2 mod katmanı (Faz 4) ──────────────────────────────────────────────────
@@ -241,28 +231,11 @@ async def _env_overridable_bool(
     return env_value
 
 
-async def get_scanner_allow_orders(session: AsyncSession) -> bool:
-    """Single entry point for the order-dispatch master switch (panel > env)."""
-    from app.config import settings
-
-    return await _env_overridable_bool(
-        session, "scannerAllowOrders", settings.scanner_allow_orders
-    )
-
-
 async def is_scanner_runtime_enabled(session: AsyncSession) -> bool:
     """Panel-controlled scanner pause. Default true: the env SCANNER_ENABLED
     flag still gates whether the background loop starts at all; this key only
     pauses ticks of an already-running scanner."""
     return _parse_bool(await get_admin_config_value(session, "scannerEnabled"))
-
-
-async def get_manual_approval_allow_orders(session: AsyncSession) -> bool:
-    from app.config import settings
-
-    return await _env_overridable_bool(
-        session, "manualApprovalAllowOrders", settings.manual_approval_allow_orders
-    )
 
 
 async def get_ai_tool_calling_enabled(session: AsyncSession) -> bool:
@@ -341,9 +314,6 @@ async def build_runtime_risk_config(session: AsyncSession) -> RiskConfig:
     """
     values = {item.key: item.value for item in await list_admin_configs(session)}
     profile = await get_active_profile(session)
-    bot_enable_real_orders = _parse_bool(values["botEnableRealOrders"])
-    real_live_mode_allowed = _parse_bool(values["botRealLiveModeAllowed"])
-    real_live_armed = _parse_bool(values["botRealLiveArmed"])
     return RiskConfig(
         allowed_symbols=values["allowedSymbols"],
         decline_symbols=values.get("declineSymbols", ""),
@@ -367,12 +337,10 @@ async def build_runtime_risk_config(session: AsyncSession) -> RiskConfig:
         block_buy_on_strong_sell_pressure=profile.block_buy_on_strong_sell_pressure,
         block_buy_on_near_ask_wall=profile.block_buy_on_near_ask_wall,
         near_wall_distance_pct=profile.near_wall_distance_pct,
-        real_live_mode_allowed=(
-            profile.allow_real_live
-            and bot_enable_real_orders
-            and real_live_mode_allowed
-            and real_live_armed
-        ),
+        # v2: RiskEngine mod-bağımsız; bu alanlar artık emir yetkisini
+        # belirlemez (dispatch systemMode + arming ile). Geriye dönük RiskConfig
+        # şeması için korunur.
+        real_live_mode_allowed=False,
         demo_live_mode_allowed=profile.allow_demo_live,
         disable_trading_after=values["disableTradingAfter"],
         timezone=values["timezone"],

@@ -15,7 +15,6 @@ from app.models.signal import (
     EntryRange,
     OrderType,
     SignalAction,
-    SignalMode,
     SignalRequest,
     SignalResponse,
 )
@@ -110,7 +109,6 @@ def _result(
     )
     return EvaluationResult(
         response=response,
-        mode=SignalMode.PAPER,
         evaluation_purpose="RESEARCH_DISCOVERY",
         research_score=research_score,
         raw_action=action,
@@ -257,8 +255,8 @@ class TestResearchBudget:
         async def fake_evaluator(symbol: str, **kwargs: Any) -> EvaluationResult:
             nonlocal active, max_active
             assert kwargs["evaluation_purpose"] == "RESEARCH_DISCOVERY"
-            assert kwargs["force_paper"] is True
-            assert kwargs["mode"] is SignalMode.PAPER
+            # v2: mod/force_paper parametresi kaldırıldı.
+            assert "mode" not in kwargs and "force_paper" not in kwargs
             active += 1
             max_active = max(max_active, active)
             calls.append(symbol)
@@ -313,7 +311,6 @@ class TestResearchOrderIsolation:
             low=Decimal("70"),
             volume=Decimal("1000"),
             tradeEligible=True,
-            mode=SignalMode.DEMO_LIVE,
         )
 
         resolved = await with_trade_eligibility(request)
@@ -329,11 +326,11 @@ class TestResearchOrderIsolation:
             "THYAO",
             gateway=gateway,
             provider=_ResearchProvider(),
-            mode=SignalMode.DEMO_LIVE,
             evaluation_purpose="RESEARCH_DISCOVERY",
         )
         assert result is not None
-        assert result.mode == SignalMode.PAPER
+        # v2: research kararı dispatch_eligible=False.
+        assert result.dispatch_eligible is False
         assert result.response.action == SignalAction.BUY
         assert result.response.allow_order is False
         assert result.response.qty == 0

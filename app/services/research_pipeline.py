@@ -18,7 +18,7 @@ from app.models.db import (
     ResearchCandidateEvent,
     TradeWatchlistSymbol,
 )
-from app.models.signal import SignalAction, SignalMode
+from app.models.signal import SignalAction
 from app.services.admin_config import list_admin_configs
 from app.services.evaluator import EvaluationResult, evaluate_symbol
 from app.services.matriks_gateway import MatriksGatewayClient, gateway_client
@@ -141,8 +141,6 @@ async def run_research_cycle(
                 result = await evaluator(
                     symbol,
                     gateway=gw,
-                    mode=SignalMode.PAPER,
-                    force_paper=True,
                     evaluation_purpose="RESEARCH_DISCOVERY",
                     research_context=context,
                 )

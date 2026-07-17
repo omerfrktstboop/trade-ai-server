@@ -74,8 +74,7 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
         log_signal_evaluation(
             request_id=body.request_id,
             symbol=body.symbol,
-            mode=body.mode.value,
-            request=body.model_dump(by_alias=True, exclude={"mode"}, mode="json"),
+            request=body.model_dump(by_alias=True, mode="json"),
             response=response.model_dump(by_alias=True, mode="json"),
         )
         await persist_evaluation(body, payload, raw, response)
@@ -110,8 +109,7 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
     log_signal_evaluation(
         request_id=body.request_id,
         symbol=body.symbol,
-        mode=body.mode.value,
-        request=body.model_dump(by_alias=True, exclude={"mode"}, mode="json"),
+        request=body.model_dump(by_alias=True, mode="json"),
         response=response.model_dump(by_alias=True, mode="json"),
     )
 

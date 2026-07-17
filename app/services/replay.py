@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.db.session import async_session_factory
 from app.models.db import AiDecision, MarketSnapshot, RiskDecision as RiskDecisionModel
-from app.models.signal import SignalMode, SignalRequest
+from app.models.signal import SignalRequest
 from app.services.admin_config import build_runtime_risk_config
 from app.services.evaluator import dict_to_risk_decision
 from app.services.risk_engine import RiskEngine
@@ -110,12 +110,9 @@ async def replay_request(
                 "botPositionQty": snapshot.position_qty,
                 "totalAccountQty": snapshot.total_account_qty,
                 "lockedLongTermQty": snapshot.locked_long_term_qty,
-                "mode": mode or snapshot.mode or "PAPER",
             }
         )
         request = SignalRequest.model_validate(request_data)
-        if request.mode == SignalMode.REAL_LIVE:
-            request.mode = SignalMode.PAPER
         replay = RiskEngine(config).evaluate(
             request,
             dict_to_risk_decision(ai.raw_response, request),
@@ -131,7 +128,7 @@ async def replay_request(
             "replayAllowOrder": replay.allow_order,
             "replayReason": replay.reason,
             "profileCode": profile_code,
-            "mode": request.mode.value,
+            "mode": mode or snapshot.mode or "OBSERVE_ONLY",
         }
 
 

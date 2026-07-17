@@ -3,10 +3,10 @@
 Fail-closed guarantees enforced here (the gateway re-checks its own hard
 limits on top):
 
-- ``mode`` is downgraded to ``PAPER`` when the active trade profile does not
-  allow the configured ``botMode`` (e.g. ``REAL_LIVE`` while the profile has
-  ``allow_real_live=False``). A misconfigured admin panel can never leak a
-  live mode to the gateway past its profile.
+- v2: ``systemMode`` (OBSERVE_ONLY/AUTO_TRADE), ``realAccountArmed`` ve
+  ``armedAccountRef`` gönderilir; C# CheckDispatchGates bunları + accountType
+  ile emir yetkisini belirler. Eski mode/DEMO_LIVE/REAL_LIVE downgrade mantığı
+  kaldırıldı. ``contractVersion=2`` uyuşmazlığında iki taraf da fail-closed.
 - ``configHash`` fingerprints the full response so the gateway (and tests)
   can cheaply detect "did anything change?" across polls.
 """
@@ -34,10 +34,6 @@ from app.services.trade_profile import get_active_profile
 
 router = APIRouter(tags=["Gateway"], dependencies=[Depends(verify_gateway_token)])
 
-_LIVE_REAL_MODES = {"REAL_LIVE"}
-_LIVE_DEMO_MODES = {"DEMO_LIVE"}
-
-
 def _is_index_symbol(symbol: str, configured_market_index: str) -> bool:
     normalized = symbol.strip().upper()
     return bool(
@@ -53,22 +49,8 @@ def _is_index_symbol(symbol: str, configured_market_index: str) -> bool:
     )
 
 
-def _effective_mode(
-    bot_mode: str, profile, *, real_live_mode_allowed: bool, real_live_armed: bool
-) -> str:
-    """Downgrade the configured mode to PAPER when the profile disallows it."""
-    mode = (bot_mode or "PAPER").strip().upper()
-    # LIVE is deliberately never an alias for REAL_LIVE.  Keeping an
-    # ambiguous historical value fail-closed avoids an accidental real route.
-    if mode == "LIVE":
-        return "PAPER"
-    if mode in _LIVE_REAL_MODES and not (
-        profile.allow_real_live and real_live_mode_allowed and real_live_armed
-    ):
-        return "PAPER"
-    if mode in _LIVE_DEMO_MODES and not profile.allow_demo_live:
-        return "PAPER"
-    return mode
+# v2: _effective_mode ve eski mod downgrade mantığı kaldırıldı. Gateway artık
+# yalnızca systemMode + accountType + REAL arming kullanır.
 
 
 @router.get("/gateway/config")
@@ -193,29 +175,19 @@ async def gateway_runtime_config() -> dict:
         "tradeEligibleSymbols": sorted(eligible_symbols),
         "sellExitAllowedSymbols": sorted(set(sell_symbols)),
         "declineSymbols": sorted(set(decline_symbols)),
-        "tradingKillSwitchActive": values["tradingKillSwitchActive"] == "true"
-        or values["killSwitchEnabled"] == "true",
-        "forceSafeMode": values["forceSafeMode"] == "true",
+        # v2: tek kill switch. Eski tradingKillSwitchActive/forceSafeMode kaldırıldı.
+        "killSwitchActive": values["killSwitchEnabled"] == "true",
         "lockedLongTermQty": locked_qty,
         "botOwnedQty": bot_owned_qty,
         "dailyCounterDate": datetime.now().date().isoformat(),
         "dailyAcceptedOrderCountsBySymbol": daily_counts.accepted_by_symbol,
         "dailyFilledOrderCountsBySymbol": daily_counts.filled_by_symbol,
         "dailyReservedOrderCountsBySymbol": daily_counts.reserved_or_sent_by_symbol,
-        "mode": _effective_mode(
-            values["botMode"],
-            profile,
-            real_live_mode_allowed=values["botRealLiveModeAllowed"] == "true",
-            real_live_armed=values["botRealLiveArmed"] == "true",
-        ),
-        "enableDemoOrders": values["botEnableDemoOrders"] == "true",
-        "enableRealOrders": values["botEnableRealOrders"] == "true",
-        "realLiveModeAllowed": values["botRealLiveModeAllowed"] == "true",
-        "realLiveArmed": values["botRealLiveArmed"] == "true",
-        "requireDemoAccount": values["botRequireDemoAccount"] == "true",
-        "demoAccountConfirmed": values["botDemoAccountConfirmed"] == "true",
-        # v2 mod/arming kontratı (Faz 4 — C# CheckDispatchGates bunları okur;
-        # eksik gönderilirse gateway fail-closed OBSERVE_ONLY'ye düşer).
+        # v2 mod/arming kontratı (C# CheckDispatchGates bunları okur; eksik
+        # gönderilirse gateway fail-closed OBSERVE_ONLY'ye düşer). Eski
+        # mode/enableDemoOrders/enableRealOrders/realLive*/requireDemoAccount/
+        # demoAccountConfirmed alanları kaldırıldı — DEMO/REAL artık gateway'in
+        # tespit ettiği accountType'tır.
         "systemMode": (
             "AUTO_TRADE"
             if values.get("systemMode", "OBSERVE_ONLY").strip().upper() == "AUTO_TRADE"

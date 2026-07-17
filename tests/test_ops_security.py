@@ -37,14 +37,16 @@ async def test_batch_config_rolls_back_all_values_on_validation_error():
     await drop_all()
     await init_db()
     async with async_session_factory() as session:
+        # İlk anahtar geçerli, ikincisi kod-kilitli (botAllowMarketOrders yazılamaz)
+        # → tüm batch geri sarılır; dailyMaxLossTl default'ta kalır.
         with pytest.raises(ValueError):
             await set_admin_config_values(
                 session,
-                {"botEnableDemoOrders": True, "botAllowMarketOrders": True},
+                {"dailyMaxLossTl": "500", "botAllowMarketOrders": True},
                 changed_by="test",
             )
     async with async_session_factory() as session:
-        assert await get_admin_config_value(session, "botEnableDemoOrders") == "false"
+        assert await get_admin_config_value(session, "dailyMaxLossTl") == "0"
 
 
 def test_gateway_masks_account_ids_and_migration_merges_duplicates():

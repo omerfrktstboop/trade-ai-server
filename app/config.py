@@ -58,13 +58,8 @@ def is_supported_ai_provider(value: object) -> bool:
     return isinstance(value, str) and value.lower() in SUPPORTED_AI_PROVIDERS
 
 
-class Mode(str, Enum):
-    """Trading mode."""
-
-    PAPER = "paper"
-    LIVE = "live"
-    DEMO_LIVE = "demo_live"
-    REAL_LIVE = "real_live"
+# v2: Mode enum (paper/live/demo_live/real_live) kaldırıldı. Çalışma modu
+# artık admin config'deki systemMode (OBSERVE_ONLY/AUTO_TRADE).
 
 
 class Settings(BaseSettings):
@@ -141,10 +136,6 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
-    # ── Trading ───────────────────────────────────────────────────────────
-
-    default_mode: Mode = Mode.PAPER
-
     # ── Matriks gateway (full-inversion mimarisi) ─────────────────────────
 
     matriks_gateway_url: str = "http://127.0.0.1:8787"
@@ -157,13 +148,6 @@ class Settings(BaseSettings):
     # otomasyonu keser (kill switch'e ek ikinci fren).
     scanner_enabled: bool = False
     scanner_tick_seconds: float = 60.0
-    # false → tüm kararlar PAPER'a sabitlenir, emir yolu tamamen kapalı
-    # (Phase 1 davranışı). true → mode admin panelden gelir ve DEMO_LIVE
-    # kararları gateway'e emir olarak gönderilir. REAL_LIVE scanner'da
-    # Phase 2 boyunca kod seviyesinde bloklu.
-    scanner_allow_orders: bool = False
-    # Manual admin approval is a separate order gate and defaults closed.
-    manual_approval_allow_orders: bool = False
     # Operational data refresh; it never evaluates symbols or sends orders.
     position_sync_enabled: bool = True
     position_sync_interval_seconds: int = 60

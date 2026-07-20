@@ -78,7 +78,7 @@ async def test_live_and_ready_health_are_separate(monkeypatch):
             "configAgeSeconds": 1,
             "runtimeMode": "DEMO_LIVE",
             "testAutoOrderEnabled": True,
-            "orderLimits": {"demoAccountConfirmed": True},
+            "orderLimits": {},
             "accountVerificationAgeSeconds": 1,
             "positionSyncAgeSeconds": 1,
             "quoteAgeSeconds": {"THYAO": 1},

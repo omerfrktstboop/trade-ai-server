@@ -89,6 +89,7 @@ class TestAllowedSymbols:
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
         assert resp.action == SignalAction.BUY
+        assert "requiresConfirmation" not in resp.model_dump(by_alias=True)
 
     def test_disallowed_symbol_research_only(self):
         """İzin dışı sembol: analiz korunur, emir yolu kapalı kalır."""
@@ -100,7 +101,6 @@ class TestAllowedSymbols:
         assert resp.confidence_score == 85.0
         assert resp.allow_order is False
         assert resp.qty == 0
-        assert resp.requires_confirmation is False
         assert "not in the allowed order list" in resp.reason
 
     def test_case_insensitive_symbol_lookup(self):
@@ -327,20 +327,19 @@ class TestLockedLongTermQty:
 
 
 # v2: TestPaperMode / TestManualMode kaldırıldı. PAPER/MANUAL çalışma modları
-# yok; allow_order artık yalnızca risk geçişini gösterir (dispatch systemMode
-# ile scanner'da kapılanır), requires_confirmation her zaman False.
+# yok; allow_order artık yalnızca risk geçişini gösterir ve dispatch systemMode
+# ile scanner'da kapılanır.
 
 
 class TestRiskPassAllowsOrder:
-    """v2: risk geçen BUY/SELL için allow_order=True, requires_confirmation=False."""
+    """v2: risk geçen BUY/SELL için allow_order=True."""
 
-    def test_valid_buy_allows_order_without_confirmation(self):
+    def test_valid_buy_allows_order(self):
         engine = RiskEngine(_cfg())
         req = _make_request(symbol="THYAO")
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
-        assert resp.requires_confirmation is False
         assert resp.action == SignalAction.BUY
 
     def test_wait_never_allows_order(self):
@@ -349,7 +348,6 @@ class TestRiskPassAllowsOrder:
         dec = RiskDecision(action=SignalAction.WAIT, confidence=90.0)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
-        assert resp.requires_confirmation is False
         assert resp.action == SignalAction.WAIT
 
     def test_valid_buy_preserves_order_details(self):
@@ -364,7 +362,7 @@ class TestRiskPassAllowsOrder:
 
 
 class TestLiveMode:
-    """v2: risk geçince allow_order=True, requires_confirmation asla True olmaz."""
+    """v2: risk geçince allow_order=True."""
 
     def test_live_mode_allows_order(self):
         engine = RiskEngine(_cfg())
@@ -372,7 +370,6 @@ class TestLiveMode:
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
-        assert resp.requires_confirmation is False
 
     def test_live_low_confidence_blocked(self):
         engine = RiskEngine(_cfg(min_confidence_for_buy=80))
@@ -380,16 +377,14 @@ class TestLiveMode:
         dec = _make_buy_decision(confidence=70.0)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
-        assert resp.requires_confirmation is False
         assert "confidence" in resp.reason.lower()
 
-    def test_live_wait_no_confirmation(self):
+    def test_live_wait_never_allows_order(self):
         engine = RiskEngine(_cfg())
         req = _make_request(symbol="THYAO")
         dec = RiskDecision(action=SignalAction.WAIT, confidence=90.0)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
-        assert resp.requires_confirmation is False
         assert resp.action == SignalAction.WAIT
 
     def test_risk_pass_produces_limit_order(self):
@@ -398,7 +393,6 @@ class TestLiveMode:
         dec = _make_buy_decision()
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
-        assert resp.requires_confirmation is False
         assert resp.order_type == OrderType.LIMIT
 
     def test_low_confidence_blocked_no_order_type(self):
@@ -407,7 +401,6 @@ class TestLiveMode:
         dec = _make_buy_decision(confidence=80.0)
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is False
-        assert resp.requires_confirmation is False
         assert resp.order_type == OrderType.NONE
         assert "Confidence" in resp.reason
 
@@ -775,7 +768,6 @@ class TestLimitOrderBehaviour:
         )
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
-        assert resp.requires_confirmation is False
         assert resp.order_type == OrderType.LIMIT
         assert resp.price == 102.0
 
@@ -797,7 +789,6 @@ class TestLimitOrderBehaviour:
         )
         resp = engine.evaluate(req, dec)
         assert resp.allow_order is True
-        assert resp.requires_confirmation is False
         assert resp.order_type == OrderType.LIMIT
         assert resp.price == 100.0
 

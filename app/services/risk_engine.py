@@ -16,7 +16,7 @@ Checks applied (in order):
 7. **Locked qty** — ``lockedLongTermQty`` deducted from available SELL qty
 8. **Max position value** — BUY value > ``maxPositionValuePerSymbol`` → WAIT
 9. **Confidence floor** — below ``minConfidence`` threshold → ``allowOrder=False``
-10. **Mode-based allowOrder / requiresConfirmation** — PAPER/MANUAL/LIVE/DEMO_LIVE/REAL_LIVE rules
+10. **allowOrder decision** — confidence and action must pass
 11. **BUY pre-flight** — missing ``entryRange`` / ``stopLoss`` / ``targetPrice`` → blocked
 """
 
@@ -361,7 +361,6 @@ class RiskEngine:
         # aksiyon). Emrin GERÇEKTEN gönderilip gönderilmeyeceği systemMode
         # (OBSERVE_ONLY/AUTO_TRADE) + account watcher + audit + gateway
         # tarafından scanner katmanında belirlenir. MANUAL onayı kaldırıldı.
-        requires_confirmation = False
         allow_order = confidence_ok and action != SignalAction.WAIT
 
         # ── 9. BUY pre-flight: entryRange / stopLoss / targetPrice ──
@@ -469,7 +468,6 @@ class RiskEngine:
             confidenceScore=decision.confidence,
             riskScore=decision.risk_score,
             allowOrder=allow_order,
-            requiresConfirmation=requires_confirmation,
             reason=base_reason,
             entryRange=decision.entry_range if show_details else None,
             stopLoss=decision.stop_loss if show_details else None,
@@ -614,7 +612,6 @@ class RiskEngine:
             confidenceScore=decision.confidence,
             riskScore=decision.risk_score,
             allowOrder=False,
-            requiresConfirmation=False,
             reason=base_reason,
             entryRange=decision.entry_range,
             stopLoss=decision.stop_loss,
@@ -633,7 +630,6 @@ class RiskEngine:
             confidenceScore=0.0,
             riskScore=0.0,
             allowOrder=False,
-            requiresConfirmation=False,
             reason=reason,
             entryRange=None,
             stopLoss=None,

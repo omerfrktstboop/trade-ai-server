@@ -21,7 +21,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db import ConfigAuditLog, SystemConfig, TradeProfile
 
-RISKY_CONFIRMATION = "CONFIRM"
 ACTIVE_PROFILE_CONFIG_KEY = "activeTradeProfileCode"
 
 # Fields editable via update_profile / clone_profile — everything except
@@ -397,66 +396,6 @@ async def create_profile(
     return profile
 
 
-def profile_requires_confirmation(old: TradeProfile, changes: dict[str, Any]) -> bool:
-    """True if ``changes`` applied to ``old`` loosen a safety-relevant field."""
-
-    def _decimal(value: Any) -> Decimal:
-        return value if isinstance(value, Decimal) else Decimal(str(value))
-
-    def _increased(field: str) -> bool:
-        return field in changes and _decimal(changes[field]) > _decimal(
-            getattr(old, field)
-        )
-
-    def _decreased(field: str) -> bool:
-        return field in changes and _decimal(changes[field]) < _decimal(
-            getattr(old, field)
-        )
-
-    if any(
-        _increased(f)
-        for f in (
-            "max_order_value_tl",
-            "max_qty_per_order",
-            "max_position_value_per_symbol",
-            "max_orders_per_day",
-            "risk_per_trade_pct",
-            "max_cash_utilization_pct",
-            "max_account_exposure_pct",
-            "max_stop_distance_pct",
-            "max_account_data_age_seconds",
-        )
-    ):
-        return True
-    if any(
-        _decreased(f)
-        for f in (
-            "min_confidence_for_buy",
-            "min_confidence_for_sell",
-            "min_stop_distance_pct",
-            "minimum_stop_slippage_pct",
-            "profile_stop_slippage_pct",
-            "maximum_stop_slippage_pct",
-        )
-    ):
-        return True
-    if changes.get("allow_real_live") is True and not old.allow_real_live:
-        return True
-    if changes.get("allow_margin_buying") is True and not old.allow_margin_buying:
-        return True
-    if (
-        changes.get("require_alpha_trend_alignment") is False
-        and old.require_alpha_trend_alignment
-    ):
-        return True
-    if (
-        changes.get("require_indicator_consensus_alignment") is False
-        and old.require_indicator_consensus_alignment
-    ):
-        return True
-    return False
-
-
 async def update_profile(
     session: AsyncSession,
     code: str,
@@ -464,7 +403,6 @@ async def update_profile(
     *,
     changed_by: str,
     reason: str | None = None,
-    confirmation: str | None = None,
 ) -> TradeProfile:
     profile = await get_profile(session, code)
     if profile is None:
@@ -473,12 +411,6 @@ async def update_profile(
     unknown = set(changes) - set(EDITABLE_FIELDS)
     if unknown:
         raise ValueError(f"Unknown trade profile fields: {sorted(unknown)}")
-
-    if (
-        profile_requires_confirmation(profile, changes)
-        and confirmation != RISKY_CONFIRMATION
-    ):
-        raise ValueError(f"This change requires confirmation={RISKY_CONFIRMATION}")
 
     for field, value in changes.items():
         setattr(profile, field, value)
@@ -604,16 +536,10 @@ async def activate_profile(
     *,
     changed_by: str,
     reason: str | None = None,
-    confirmation: str | None = None,
 ) -> TradeProfile:
     profile = await get_profile(session, code)
     if profile is None or not profile.is_enabled:
         raise ValueError(f"Unknown or disabled trade profile: {code}")
-
-    if profile.risk_level in {"HIGH", "EXTREME"} and confirmation != RISKY_CONFIRMATION:
-        raise ValueError(
-            f"Activating {code} ({profile.risk_level} risk) requires confirmation={RISKY_CONFIRMATION}"
-        )
 
     stmt = select(SystemConfig).where(SystemConfig.key == ACTIVE_PROFILE_CONFIG_KEY)
     row = (await session.execute(stmt)).scalar_one_or_none()

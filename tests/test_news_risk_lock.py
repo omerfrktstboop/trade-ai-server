@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import pytest
-
 import app.services.news_risk_lock as news_lock
 from app.models.signal import OrderType, SignalAction, SignalResponse
 
 
-def _response(action=SignalAction.BUY, *, allowed=False, confirmation=False):
+def _response(action=SignalAction.BUY, *, allowed=False):
     return SignalResponse(
         requestId="news-risk",
         symbol="THYAO",
@@ -17,25 +15,20 @@ def _response(action=SignalAction.BUY, *, allowed=False, confirmation=False):
         confidenceScore=80,
         riskScore=10,
         allowOrder=allowed,
-        requiresConfirmation=confirmation,
         reason="proposal",
     )
 
 
-@pytest.mark.parametrize(("allowed", "confirmation"), [(True, False), (False, True)])
-async def test_negative_news_blocks_live_and_manual_buy(
-    monkeypatch, allowed, confirmation
-):
+async def test_negative_news_blocks_actionable_buy(monkeypatch):
     async def risky(_symbol):
         return "tedbir", "SPK tedbir kararı"
 
     monkeypatch.setattr(news_lock, "active_news_risk", risky)
     response = await news_lock.apply_news_risk_lock(
-        _response(allowed=allowed, confirmation=confirmation), "THYAO"
+        _response(allowed=True), "THYAO"
     )
     assert response.action == SignalAction.WAIT
     assert response.allow_order is False
-    assert response.requires_confirmation is False
     assert response.order_type == OrderType.NONE
     assert response.qty == 0
     assert response.price is None

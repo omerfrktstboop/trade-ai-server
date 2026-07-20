@@ -2,9 +2,8 @@
 
 Gerçek hesapta emir gönderebilmenin TEK yolu buradaki arming akışıdır:
 
-- ``POST /api/admin/arm-real-account`` — body'de birebir
-  ``{"confirmText": "CONFIRM REAL ACCOUNT"}`` zorunlu; gateway'den CANLI
-  hesap okunur; hesap REAL değilse veya kimlik alanları eksikse reddedilir.
+- ``POST /api/admin/arm-real-account`` — gateway'den CANLI hesap okunur;
+  hesap REAL değilse veya kimlik alanları eksikse reddedilir.
   ``armedAccountRef``'e gateway'in verdiği sha256 referansı DOĞRUDAN yazılır
   (yeniden hash yok).
 - ``POST /api/admin/disarm-real-account`` — koşulsuz disarm (fail-closed yön,
@@ -27,7 +26,6 @@ from app.routers.admin._shared import (
     require_admin,
 )
 from app.services.admin_config import (
-    RISKY_CONFIRMATION,
     disarm_real_account,
     get_admin_config_value,
     set_admin_config_value,
@@ -40,11 +38,8 @@ from app.services.matriks_gateway import (
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_CONFIRM_TEXT = "CONFIRM REAL ACCOUNT"
-
 
 class ArmRequest(BaseModel):
-    confirmText: str = ""
     reason: str | None = None
 
 
@@ -53,14 +48,8 @@ class DisarmRequest(BaseModel):
 
 
 @admin_api_router.post("/arm-real-account")
-async def arm_real_account(request: Request, body: ArmRequest) -> dict:
+async def arm_real_account(request: Request, body: ArmRequest | None = None) -> dict:
     identity = await require_admin(request)
-
-    if body.confirmText != REQUIRED_CONFIRM_TEXT:
-        raise HTTPException(
-            status_code=400,
-            detail=f'confirmText must be exactly "{REQUIRED_CONFIRM_TEXT}"',
-        )
 
     try:
         account = await gateway_client.get_account()
@@ -86,7 +75,7 @@ async def arm_real_account(request: Request, body: ArmRequest) -> dict:
             "(DEMO account needs no arming)",
         )
 
-    reason = body.reason or "manual arming via admin API"
+    reason = (body.reason if body else None) or "manual arming via admin API"
     async with async_session_factory() as session:
         # armedAccountRef = gateway'in verdiği sha256, olduğu gibi.
         await set_admin_config_value(
@@ -104,15 +93,12 @@ async def arm_real_account(request: Request, body: ArmRequest) -> dict:
         await set_admin_config_value(
             session, "armedAccountType", account_type, changed_by=identity, reason=reason
         )
-        # confirmText doğrulaması yukarıda yapıldı — RISKY onayı bu akışın
-        # kendisidir (panelin genel CONFIRM'i değil).
         await set_admin_config_value(
             session,
             "realAccountArmed",
             "true",
             changed_by=identity,
             reason=reason,
-            confirmation=RISKY_CONFIRMATION,
         )
         session.add(
             AccountEvent(

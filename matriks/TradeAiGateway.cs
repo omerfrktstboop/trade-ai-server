@@ -102,8 +102,6 @@ namespace Matriks.Lean.Algotrader
         private bool MarketDataDiagnosticsEnabled;
         private decimal MarketDataDiagnosticSampleRatePct = 10m;
         private int MarketDataWarningRateLimitSeconds = 60;
-        private bool RequireDemoAccount = true;
-        private bool DemoAccountConfirmed;
         private decimal MaxOrderValueTl;
         private decimal MaxQtyPerOrder;
         private int MaxOrdersPerDay;
@@ -157,6 +155,8 @@ namespace Matriks.Lean.Algotrader
         private const int MaxDepthAgeSecondsForOrder = 10;
         private const string IndexDepthSkipReason = "INDEX_SYMBOL_NOT_APPLICABLE";
         private static readonly TimeSpan IdempotencyTtl = TimeSpan.FromHours(24);
+        private static readonly TimeZoneInfo IstanbulTimeZone =
+            TimeZoneInfo.FindSystemTimeZoneById("Turkey Standard Time");
 
         // ── HTTP server state ────────────────────────────────────────
 
@@ -219,7 +219,6 @@ namespace Matriks.Lean.Algotrader
         private bool _realPositionsLoadedFromSnapshot;
         private bool? _autoOrderEnabled;
         private bool? _testAutoOrderEnabled;
-        private bool _demoAccountVerified;
         private DateTime _lastAccountVerificationUtc = DateTime.MinValue;
         private string _lastVerifiedAccountId = string.Empty;
         private bool _subscriptionsInitialized;
@@ -293,7 +292,6 @@ namespace Matriks.Lean.Algotrader
                     + " indicatorPeriod=" + IndicatorPeriod
                     + " enableDemoOrders=" + EnableDemoOrders
                     + " enableRealOrders=" + EnableRealOrders
-                    + " demoConfirmed=" + DemoAccountConfirmed
                     + " maxOrderValueTl=" + MaxOrderValueTl
                     + " maxQtyPerOrder=" + MaxQtyPerOrder
                     + " server=" + ServerBaseUrl);
@@ -312,7 +310,7 @@ namespace Matriks.Lean.Algotrader
             {
                 DateTime lastTickTime = barData.LastTickTime;
                 if (lastTickTime != DateTime.MinValue)
-                    _lastTradeUtcBySymbol[eventSymbol] = lastTickTime.ToUniversalTime();
+                    _lastTradeUtcBySymbol[eventSymbol] = NormalizeMatriksLastTickUtc(lastTickTime);
             }
             UpdateOhlcvSnapshotFromBarData(barData);
         }
@@ -837,9 +835,6 @@ namespace Matriks.Lean.Algotrader
                     string[] buyAllowedSymbols = (cfg["buyAllowedSymbols"] as JArray ?? new JArray()).Select(x => NormalizeSymbol(Convert.ToString(x))).ToArray();
                     string[] sellExitAllowedSymbols = (cfg["sellExitAllowedSymbols"] as JArray ?? new JArray()).Select(x => NormalizeSymbol(Convert.ToString(x))).ToArray();
                     string[] declineSymbols = (cfg["declineSymbols"] as JArray ?? new JArray()).Select(x => NormalizeSymbol(Convert.ToString(x))).ToArray();
-                    // v2: requireDemoAccount/demoAccountConfirmed kaldırıldı.
-                    bool requireDemoAccount = false;
-                    bool demoAccountConfirmed = false;
                     decimal maxOrderValueTl = cfg.Value<decimal?>("maxOrderValueTl") ?? 0m;
                     decimal maxQtyPerOrder = cfg.Value<decimal?>("maxQtyPerOrder") ?? 0m;
                     int maxOrdersPerDay = cfg.Value<int?>("maxOrdersPerDay") ?? 0;
@@ -957,19 +952,7 @@ namespace Matriks.Lean.Algotrader
                     // Publish one immutable reference only after every parsed
                     // field was validated. Order handlers read this snapshot
                     // once, so config reloads cannot mix versions.
-                    _activeConfig = new GatewayConfigSnapshot(systemMode, enableDemoOrders, enableRealOrders, realLiveModeAllowed, realLiveArmed, requireDemoAccount, demoAccountConfirmed, tradingKillSwitchActive, forceSafeMode, buyAllowedSymbols, sellExitAllowedSymbols, declineSymbols, configVersion, activeProfileCode);
-                    bool accountVerificationPolicyChanged =
-                        RequireDemoAccount != requireDemoAccount
-                        || DemoAccountConfirmed != demoAccountConfirmed;
-                    RequireDemoAccount = requireDemoAccount;
-                    DemoAccountConfirmed = demoAccountConfirmed;
-                    // A server-side confirmation/account policy change must
-                    // never inherit a previous five-second verification.
-                    if (accountVerificationPolicyChanged)
-                    {
-                        _demoAccountVerified = false;
-                        _lastAccountVerificationUtc = DateTime.MinValue;
-                    }
+                    _activeConfig = new GatewayConfigSnapshot(systemMode, enableDemoOrders, enableRealOrders, realLiveModeAllowed, realLiveArmed, tradingKillSwitchActive, forceSafeMode, buyAllowedSymbols, sellExitAllowedSymbols, declineSymbols, configVersion, activeProfileCode);
                     MaxOrderValueTl = maxOrderValueTl;
                     MaxQtyPerOrder = maxQtyPerOrder;
                     MaxOrdersPerDay = maxOrdersPerDay;
@@ -1009,8 +992,6 @@ namespace Matriks.Lean.Algotrader
                         EnableRealOrders.ToString(),
                         RealLiveModeAllowed.ToString(),
                         RealLiveArmed.ToString(),
-                        RequireDemoAccount.ToString(),
-                        DemoAccountConfirmed.ToString(),
                         MaxOrderValueTl.ToString(),
                         MaxQtyPerOrder.ToString(),
                         MaxOrdersPerDay.ToString(),
@@ -1069,25 +1050,19 @@ namespace Matriks.Lean.Algotrader
             // aynı doğrulama ısıtılır (account watcher /health'ten okur).
             // v2: AUTO_TRADE'de hesap kimliğini ısıt (watcher /health'ten okur).
             if (SystemMode == "AUTO_TRADE")
-                VerifyDemoAccountFresh();
+                RefreshAccountVerification();
 
             var quoteAgeSeconds = new Dictionary<string, double?>();
             var depthAgeSeconds = new Dictionary<string, double?>();
             foreach (string symbolRaw in AllowedSymbols)
             {
                 string symbol = NormalizeSymbol(symbolRaw);
-                if (_lastValidQuoteBySymbol.TryGetValue(symbol, out var quote))
-                {
-                    quoteAgeSeconds[symbol] = quote.LastTradeUtc == DateTime.MinValue
-                        ? (double?)null
-                        : Math.Round((DateTime.UtcNow - quote.LastTradeUtc).TotalSeconds, 1);
-                    depthAgeSeconds[symbol] = null;
-                }
-                else
-                {
-                    quoteAgeSeconds[symbol] = null;
-                    depthAgeSeconds[symbol] = null;
-                }
+                DateTime eventUtc;
+                quoteAgeSeconds[symbol] = _lastTradeUtcBySymbol.TryGetValue(symbol, out eventUtc)
+                    && eventUtc != DateTime.MinValue
+                        ? (double?)Math.Round((DateTime.UtcNow - eventUtc).TotalSeconds, 1)
+                        : null;
+                depthAgeSeconds[symbol] = null;
             }
 
             await WriteJsonAsync(stream, 200, new
@@ -1138,8 +1113,6 @@ namespace Matriks.Lean.Algotrader
                     enableRealOrders = EnableRealOrders,
                     realLiveModeAllowed = RealLiveModeAllowed,
                     realLiveArmed = RealLiveArmed,
-                    requireDemoAccount = RequireDemoAccount,
-                    demoAccountConfirmed = DemoAccountConfirmed,
                     maxOrderValueTl = ToDouble(MaxOrderValueTl),
                     maxQtyPerOrder = ToDouble(MaxQtyPerOrder),
                     maxOrdersPerDay = MaxOrdersPerDay,
@@ -2697,6 +2670,19 @@ namespace Matriks.Lean.Algotrader
             return time >= new TimeSpan(9, 30, 0) && time <= new TimeSpan(18, 15, 0);
         }
 
+        private static DateTime NormalizeMatriksLastTickUtc(DateTime timestamp)
+        {
+            if (timestamp == DateTime.MinValue)
+                return DateTime.MinValue;
+
+            // Matriks LastTickTime is an Istanbul wall-clock value even when
+            // its DateTime.Kind is UTC. ToUniversalTime() would therefore keep
+            // it three hours in the future. Ignore Kind and convert the wall
+            // clock explicitly from the exchange timezone.
+            DateTime istanbulWallClock = DateTime.SpecifyKind(timestamp, DateTimeKind.Unspecified);
+            return TimeZoneInfo.ConvertTimeToUtc(istanbulWallClock, IstanbulTimeZone);
+        }
+
         // v2: CheckModeGates (PAPER/MANUAL/DEMO_LIVE/REAL_LIVE) kaldırıldı.
         // Emir yetkisi tek kapıdan verilir: CheckDispatchGates (systemMode=
         // AUTO_TRADE + accountType tespiti + REAL arming). DEMO/REAL artık
@@ -2979,14 +2965,14 @@ namespace Matriks.Lean.Algotrader
         }
 
         /// <summary>
-        /// Re-check the only compile-safe account API immediately before a
-        /// DEMO_LIVE order when the cached result is older than five seconds.
-        /// A failed read never reuses a previous successful verification.
+        /// Refresh the only compile-safe account API when the cached result is
+        /// older than five seconds. A failed read never reuses a previous
+        /// successful verification.
         /// </summary>
-        private bool VerifyDemoAccountFresh()
+        private void RefreshAccountVerification()
         {
             if ((DateTime.UtcNow - _lastAccountVerificationUtc).TotalSeconds <= AccountVerificationMaxAgeSeconds)
-                return _demoAccountVerified;
+                return;
 
             try
             {
@@ -3015,18 +3001,12 @@ namespace Matriks.Lean.Algotrader
                 _lastVerifiedAccountType = testAutoOrder ? "DEMO" : "REAL";
                 _lastAccountChanged = accountChanged;
                 _lastAccountVerificationUtc = DateTime.UtcNow;
-                // Reject the first order after an account switch. A new
-                // verification is required before a subsequent order can run.
-                _demoAccountVerified = DemoAccountConfirmed && testAutoOrder && !accountChanged;
-                return _demoAccountVerified;
             }
             catch (Exception ex)
             {
-                _demoAccountVerified = false;
                 _lastAccountVerificationUtc = DateTime.MinValue;
                 _lastVerifiedAccountType = "UNKNOWN";
                 SafeDebug("Demo account verification failed: " + ex.Message);
-                return false;
             }
         }
 
@@ -3039,14 +3019,14 @@ namespace Matriks.Lean.Algotrader
         }
 
         /// <summary>
-        /// v2 hesap doğrulaması: VerifyDemoAccountFresh ile AYNI 5 saniyelik
+        /// v2 hesap doğrulaması: RefreshAccountVerification ile AYNI 5 saniyelik
         /// tazelik penceresini ve GetTradeUser okumasını paylaşır; başarısız
         /// veya bayat doğrulamada null döner (fail-closed).
         /// </summary>
         private AccountVerification VerifyAccountFresh()
         {
             if ((DateTime.UtcNow - _lastAccountVerificationUtc).TotalSeconds > AccountVerificationMaxAgeSeconds)
-                VerifyDemoAccountFresh();
+                RefreshAccountVerification();
             if (_lastAccountVerificationUtc == DateTime.MinValue
                 || (DateTime.UtcNow - _lastAccountVerificationUtc).TotalSeconds > AccountVerificationMaxAgeSeconds
                 || string.IsNullOrEmpty(_lastVerifiedAccountRef)
@@ -3394,6 +3374,9 @@ namespace Matriks.Lean.Algotrader
             bool supportsEquityDepth = IsEquitySymbol(symbol);
 
             MarketQuoteSnapshot quote = ReadMarketQuote(symbol);
+            double? quoteAgeSeconds = quote.LastTradeUtc == DateTime.MinValue
+                ? (double?)null
+                : (DateTime.UtcNow - quote.LastTradeUtc).TotalSeconds;
             decimal lastPrice = quote.Last;
             decimal bidPrice = quote.Bid;
             decimal askPrice = quote.Ask;
@@ -3549,8 +3532,9 @@ namespace Matriks.Lean.Algotrader
             payload["priceSource"] = quote.Source;
             payload["quoteReliable"] = quote.Reliable;
             payload["quoteAvailable"] = quote.Last > 0m || (quote.Bid > 0m && quote.Ask > 0m);
-            payload["quoteFresh"] = quote.Reliable && quote.LastTradeUtc != DateTime.MinValue
-                && (DateTime.UtcNow - quote.LastTradeUtc).TotalSeconds <= MaxQuoteAgeSecondsForOrder;
+            payload["quoteFresh"] = quote.Reliable && quoteAgeSeconds.HasValue
+                && quoteAgeSeconds.Value >= 0
+                && quoteAgeSeconds.Value <= MaxQuoteAgeSecondsForOrder;
             payload["lastTradeUtc"] = quote.LastTradeUtc == DateTime.MinValue ? null : quote.LastTradeUtc.ToString("o");
             payload["quoteReadUtc"] = quote.ReadUtc == DateTime.MinValue ? null : quote.ReadUtc.ToString("o");
             payload["quoteTimestampSource"] = quote.TimestampSource;
@@ -3602,29 +3586,53 @@ namespace Matriks.Lean.Algotrader
             payload["barDataIndex"] = ohlc.BarDataIndex;
             payload["lastTickTime"] = ohlc.LastTickTime == DateTime.MinValue
                 ? null
-                : ohlc.LastTickTime.ToUniversalTime().ToString("o");
+                : NormalizeMatriksLastTickUtc(ohlc.LastTickTime).ToString("o");
             payload["rsi"] = rsi;
             payload["ema20"] = ema20;
             payload["ema50"] = ema50;
             payload["macd"] = macd;
             payload["macdSignal"] = macdSignal;
             payload["indicatorSource"] = indicatorSource;
+            // quote.Bid/Ask (SymbolUpdateField.Bid/Ask) can lag or return 0
+            // during a live session even while the order book is fully
+            // populated. The depth best bid/ask is structurally validated
+            // (bid<ask and positive top sizes gate DepthReliable above), so
+            // prefer it for order pricing whenever the quote field is missing.
+            // This also gives the Python order_preflight a resilient ask price:
+            // it already falls back to bestBid for the bid side, but had no
+            // bestAsk source, so a racy quote.Ask=0 blocked every order.
+            if (bidPrice <= 0m && bestBid > 0m) bidPrice = bestBid;
+            if (askPrice <= 0m && depthAnalysis.BestAsk > 0m) askPrice = depthAnalysis.BestAsk;
             payload["bidPrice"] = ToDouble(bidPrice);
             payload["askPrice"] = ToDouble(askPrice);
             payload["bidVolume"] = ToDouble(bid1Size);
             payload["askVolume"] = ToDouble(ask1Size);
             payload["bestBid"] = ToDouble(bestBid);
+            payload["bestAsk"] = ToDouble(depthAnalysis.BestAsk);
             payload["secondBid"] = ToDouble(secondBid);
             payload["thirdBid"] = ToDouble(thirdBid);
             payload["depthSummary"] = depthSummary;
             payload["depthAnalysis"] = depthAnalysis;
-            payload["quoteAgeSeconds"] = quote.LastTradeUtc == DateTime.MinValue
-                ? null
-                : (object)Math.Max(0.0, (DateTime.UtcNow - quote.LastTradeUtc).TotalSeconds);
+            payload["quoteAgeSeconds"] = quoteAgeSeconds.HasValue
+                ? (object)quoteAgeSeconds.Value
+                : null;
             payload["ohlcvAgeSeconds"] = ohlc.BarEventUtc == DateTime.MinValue
                 ? null
                 : (object)Math.Max(0.0, (DateTime.UtcNow - ohlc.BarEventUtc).TotalSeconds);
-            payload["depthAgeSeconds"] = null;
+            // Surface the same-session depth freshness proxy that the C# order
+            // gate (ValidateOrderMarketData, MaxDepthAgeSecondsForOrder) already
+            // trusts, so the independent Python order_preflight sees the same
+            // age instead of a hardcoded null. The null was honest on older
+            // builds with no depth event timestamp, but the depth read now
+            // computes a real same-session age (DepthEventTimestampAvailable),
+            // and the hardcoded null was silently failing preflight's depth
+            // freshness check on every order. Stays null when no real timestamp
+            // exists, so preflight remains fail-closed for that case.
+            payload["depthAgeSeconds"] = depthAnalysis != null
+                && depthAnalysis.DepthEventTimestampAvailable
+                && depthAnalysis.DepthAgeSeconds < double.MaxValue
+                ? (object)Math.Round(depthAnalysis.DepthAgeSeconds, 3)
+                : null;
             decimal botOwnedQty = GetBotOwnedQty(symbol);
             decimal accountNetQty = GetTotalAccountQty(symbol);
             decimal accountAvailableQty = GetAccountAvailableQty(symbol);
@@ -4332,7 +4340,12 @@ namespace Matriks.Lean.Algotrader
             {
                 DateTime lastTradeUtc;
                 bool hasLastTradeTime = _lastTradeUtcBySymbol.TryGetValue(symbol, out lastTradeUtc);
-                bool quoteFresh = hasLastTradeTime && (quoteReadUtc - lastTradeUtc).TotalSeconds <= MaxQuoteAgeSecondsForOrder;
+                double quoteAgeSeconds = hasLastTradeTime
+                    ? (quoteReadUtc - lastTradeUtc).TotalSeconds
+                    : double.MaxValue;
+                bool quoteFresh = hasLastTradeTime
+                    && quoteAgeSeconds >= 0
+                    && quoteAgeSeconds <= MaxQuoteAgeSecondsForOrder;
                 if (_lastValidQuoteBySymbol.TryGetValue(symbol, out var previous))
                 {
                     if (rawLast <= 0m) rawLast = previous.Last;
@@ -4359,6 +4372,7 @@ namespace Matriks.Lean.Algotrader
 
             if (_lastValidQuoteBySymbol.TryGetValue(symbol, out var cached)
                 && cached.LastTradeUtc != DateTime.MinValue
+                && (quoteReadUtc - cached.LastTradeUtc).TotalHours >= 0
                 && (quoteReadUtc - cached.LastTradeUtc).TotalHours <= 8)
             {
                 cached.Source = "LAST_VALID";
@@ -5419,6 +5433,43 @@ namespace Matriks.Lean.Algotrader
             catch
             {
             }
+
+            try
+            {
+                _ = PostGatewayLogAsync(message);
+            }
+            catch
+            {
+            }
+        }
+
+        private async Task PostGatewayLogAsync(string message)
+        {
+            HttpClient client = _http;
+            if (client == null || string.IsNullOrWhiteSpace(message))
+                return;
+
+            try
+            {
+                string safeMessage = message.Length <= 4000
+                    ? message
+                    : message.Substring(0, 4000);
+                string json = JsonConvert.SerializeObject(new
+                {
+                    timestamp = DateTime.UtcNow.ToString("o"),
+                    level = "INFO",
+                    message = safeMessage
+                });
+                using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
+                using (var result = await client.PostAsync("api/gateway-log", content))
+                {
+                    // Logging is best-effort. A failed sink must never affect
+                    // market data, account checks, or order processing.
+                }
+            }
+            catch
+            {
+            }
         }
 
         // ── Internal types ──────────────────────────────────────────
@@ -5833,11 +5884,11 @@ namespace Matriks.Lean.Algotrader
         private sealed class GatewayConfigSnapshot
         {
             public readonly string RuntimeMode, ConfigVersion, ProfileCode;
-            public readonly bool EnableDemoOrders, EnableRealOrders, RealLiveModeAllowed, RealLiveArmed, RequireDemoAccount, DemoAccountConfirmed, TradingKillSwitchActive, ForceSafeMode;
+            public readonly bool EnableDemoOrders, EnableRealOrders, RealLiveModeAllowed, RealLiveArmed, TradingKillSwitchActive, ForceSafeMode;
             public readonly string[] BuyAllowedSymbols, SellExitAllowedSymbols, DeclineSymbols;
-            public GatewayConfigSnapshot(string runtimeMode, bool demo, bool real, bool realAllowed, bool armed, bool requireDemo, bool confirmed, bool kill, bool safe, string[] buy, string[] sell, string[] decline, string version, string profile)
-            { RuntimeMode = runtimeMode; EnableDemoOrders = demo; EnableRealOrders = real; RealLiveModeAllowed = realAllowed; RealLiveArmed = armed; RequireDemoAccount = requireDemo; DemoAccountConfirmed = confirmed; TradingKillSwitchActive = kill; ForceSafeMode = safe; BuyAllowedSymbols = buy ?? new string[0]; SellExitAllowedSymbols = sell ?? new string[0]; DeclineSymbols = decline ?? new string[0]; ConfigVersion = version; ProfileCode = profile; }
-            public static GatewayConfigSnapshot SafeDefault() { return new GatewayConfigSnapshot("PAPER", false, false, false, false, true, false, true, true, new string[0], new string[0], new string[0], "UNAVAILABLE", "UNAVAILABLE"); }
+            public GatewayConfigSnapshot(string runtimeMode, bool demo, bool real, bool realAllowed, bool armed, bool kill, bool safe, string[] buy, string[] sell, string[] decline, string version, string profile)
+            { RuntimeMode = runtimeMode; EnableDemoOrders = demo; EnableRealOrders = real; RealLiveModeAllowed = realAllowed; RealLiveArmed = armed; TradingKillSwitchActive = kill; ForceSafeMode = safe; BuyAllowedSymbols = buy ?? new string[0]; SellExitAllowedSymbols = sell ?? new string[0]; DeclineSymbols = decline ?? new string[0]; ConfigVersion = version; ProfileCode = profile; }
+            public static GatewayConfigSnapshot SafeDefault() { return new GatewayConfigSnapshot("PAPER", false, false, false, false, true, true, new string[0], new string[0], new string[0], "UNAVAILABLE", "UNAVAILABLE"); }
         }
 
         private sealed class IdempotencyEntry

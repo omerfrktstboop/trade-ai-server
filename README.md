@@ -106,7 +106,7 @@ Aşağıdaki adımları **LIVE** moda geçmeden önce mutlaka tamamlayın:
 | 1 | **Default mod PAPER** | `.env` → `DEFAULT_MODE=paper` | İsteklerde `mode` belirtilmezse PAPER çalışır |
 | 2 | **Mock AI test** | `AI_PROVIDER=mock` + `uvicorn` ile test | Tüm istekler `WAIT` döner, emir oluşmaz |
 | 3 | **DeepSeek test (PAPER)** | `AI_PROVIDER=deepseek`, `mode=PAPER` | AI karar üretir ama `allowOrder=false` |
-| 4 | **MANUAL test** | `mode=MANUAL` ile test istekleri | `requiresConfirmation=true`, emir otomatik gönderilmez |
+| 4 | **OBSERVE_ONLY test** | Admin panelde `systemMode=OBSERVE_ONLY` | Kararlar izlenir, emir otomatik gönderilmez |
 | 5 | **LIVE test (gerçek AI)** | `mode=LIVE` test istekleri | `allowOrder=true` olabilir, emirler gerçek gönderilir |
 | 6 | **Uzun vade lotlar** | `RISK_LOCKED_LONG_TERM_SYMBOLS=ASELS,EREGL` ayarlandı mı? | Kilitli semboller asla satılmaz |
 | 7 | **Günlük limit** | `RISK_MAX_DAILY_TRADE_COUNT=3` doğru mu? | Aşılınca BUY/SELL bloklanır |
@@ -116,7 +116,7 @@ Aşağıdaki adımları **LIVE** moda geçmeden önce mutlaka tamamlayın:
 | 11 | **Scanner önce PAPER'da** | `SCANNER_ENABLED=true`, `SCANNER_ALLOW_ORDERS=false` ile birkaç gün çalıştır | Kararlar `ai_decisions`'a düşer, emir gitmez |
 | 12 | **Emir yolu DEMO_LIVE'da** | `SCANNER_ALLOW_ORDERS=true` + admin panelden `tradingMode=DEMO_LIVE` | Gateway `order_logs`'a `SENT_PENDING` yazar |
 
-> **⚠️ LIVE mod gerçek emir gönderir.** Sadece PAPER → MANUAL → LIVE sırasıyla
+> **⚠️ LIVE mod gerçek emir gönderir.** Sadece PAPER → OBSERVE_ONLY → LIVE sırasıyla
 > test ettikten ve tüm kontrolleri tamamladıktan sonra aktif edin.
 
 ## API Endpoints
@@ -145,15 +145,15 @@ Aşağıdaki adımları **LIVE** moda geçmeden önce mutlaka tamamlayın:
 - Browser login uses `ADMIN_PASSWORD`; admin API calls accept `ADMIN_API_TOKEN`.
 - Secrets are not exposed by admin config endpoints: scoped API tokens, `DEEPSEEK_API_KEY`, and `DATABASE_URL` are not returned.
 - Config edits are stored in `system_configs`; every changed value writes `config_audit_logs`.
-- Risky changes require confirmation value `CONFIRM`: switching `tradingMode` or `botMode` to a live mode, disabling `killSwitchEnabled`, and enabling `botEnableRealOrders`/`botDemoAccountConfirmed`.
+- Authenticated admin changes are applied directly; audit reason and actor are retained.
 - `killSwitchEnabled=true` makes `/api/signal/evaluate` return `WAIT` with `allowOrder=false`.
 - If `tradingMode` exists in DB, it overrides the incoming request mode; otherwise request mode defaults remain unchanged.
-- Order limits, confidence thresholds, signal filters, and scan interval are no longer standalone admin config keys — they're managed by the active Trade Profile (`/admin/trade-profiles`), which also requires `CONFIRM` for risky changes (raising limits, lowering confidence thresholds, disabling alignment guards, enabling `allowRealLive`, or activating a HIGH/EXTREME risk-level profile).
+- Order limits, confidence thresholds, signal filters, and scan interval are managed by the active Trade Profile (`/admin/trade-profiles`).
 
 ### Signal Evaluate
 
 ```bash
-# PAPER mode — always returns allowOrder: false, requiresConfirmation: false
+# PAPER mode — always returns allowOrder: false
 curl -X POST http://localhost:8000/api/signal/evaluate \
   -H "Authorization: Bearer *** \
   -H "Content-Type: application/json" \
@@ -183,7 +183,6 @@ curl -X POST http://localhost:8000/api/signal/evaluate \
   "confidenceScore": 0.0,
   "riskScore": 0.0,
   "allowOrder": false,
-  "requiresConfirmation": false,
   "reason": "Safe default: PAPER mode or no decision.",
   "entryRange": null,
   "stopLoss": null,
@@ -203,7 +202,6 @@ curl -X POST http://localhost:8000/api/signal/evaluate \
   "confidenceScore": 82,
   "riskScore": 15,
   "allowOrder": true,
-  "requiresConfirmation": false,
   "reason": "RSI oversold bounce with MACD golden cross.",
   "entryRange": {"min": 70.80, "max": 71.50},
   "stopLoss": 68.90,
@@ -230,7 +228,6 @@ curl -X POST http://localhost:8000/api/signal/evaluate \
 | `orderType` | enum | `"LIMIT"` / `"NONE"` — **MARKET order asla üretilmez** |
 | `price` | float\|null | BUY → `entryRange.max`, SELL → `lastPrice`, WAIT → `null` |
 | `allowOrder` | bool | `true` ise emri gönder (live modes), `false` ise emir yok |
-| `requiresConfirmation` | bool | `true` ise kullanıcıya sor (MANUAL mode), `false` ise onaysız |
 | `entryRange` | object\|null | `{"min": ..., "max": ...}` — limit emir için fiyat aralığı |
 | `stopLoss` | float\|null | Önerilen zarar-kes |
 | `targetPrice` | float\|null | Önerilen hedef fiyat |
@@ -265,7 +262,7 @@ gateway decides *whether it is allowed to*. The gateway's limits are fixed
 in its algo parameters and cannot be raised by the server: LIMIT orders
 only (it has no notion of MARKET), max qty and value per order, daily order
 caps, locked long-term lots that can never be sold, and demo/real account
-confirmation flags. Two independent brakes, one in each process.
+identity and REAL-account arming gates. Two independent brakes, one in each process.
 
 Two environment switches gate the automation, both defaulting to off:
 `SCANNER_ENABLED` starts the scan loop at all, and `SCANNER_ALLOW_ORDERS`
@@ -276,6 +273,11 @@ The Matriks-side gateway is configured through its algo parameters
 (`Port`, `ApiToken`, `SymbolsCsv`, `LockedLongTermCsv`, `ServerBaseUrl`,
 `ServerApiToken`, plus the order limits). `ApiToken` must match the
 server's `MATRIKS_GATEWAY_TOKEN`.
+
+Gateway `SafeDebug` events remain visible in Matriks IQ and are also sent to
+the authenticated `POST /api/gateway-log` endpoint. The server stores them as
+JSON lines in `logs/matriks.log`; signal evaluations remain in
+`logs/signal.log`.
 
 Verify the gateway end-to-end with:
 
@@ -393,7 +395,6 @@ AI_PROVIDER=mock
 DEFAULT_MODE=paper
 SCANNER_ENABLED=false
 SCANNER_ALLOW_ORDERS=false
-MANUAL_APPROVAL_ALLOW_ORDERS=false
 ```
 
 Immediately before a controlled DEMO_LIVE test, use only after the PAPER
@@ -404,14 +405,12 @@ APP_ENV=development
 AI_PROVIDER=deepseek
 SCANNER_ENABLED=true
 SCANNER_ALLOW_ORDERS=true
-MANUAL_APPROVAL_ALLOW_ORDERS=true
 ```
 
 In the admin panel verify all of the following: `killSwitchEnabled=false`,
 `tradingMode=DEMO_LIVE` (or `botMode=DEMO_LIVE`),
-`botEnableDemoOrders=true`, `botDemoAccountConfirmed=true`, and
-`botEnableRealOrders=false`, `botRealLiveModeAllowed=false`, and
-`botRealLiveArmed=false`. `REAL_LIVE` remains disabled in this phase,
+the gateway account type is `DEMO`, and REAL account arming is disabled.
+`REAL_LIVE` remains disabled in this phase,
 including in production. `LIVE` is not accepted as a real-order alias; the
 gateway resolves it to `PAPER`.
 
@@ -446,8 +445,6 @@ blocks the order.
    | `ServerBaseUrl` | `http://127.0.0.1:8000` | where this FastAPI server listens |
    | `ServerApiToken` | same as `GATEWAY_API_TOKEN` in `.env` | used for callback and config APIs |
    | `EnableDemoOrders` / `EnableRealOrders` | `false` / `false` | flip on only when you're ready (see checklist) |
-   | `RequireDemoAccount` | `true` | extra guard before any real-mode order |
-   | `DemoAccountConfirmed` | `false` | manual confirmation flag |
    | `MaxOrderValueTl`, `MaxQtyPerOrder`, `MaxOrdersPerDay`, `MaxOrdersPerSymbolPerDay` | conservative values | hard caps the server cannot override |
    | `OrderTimeInForce` | `Day` | or `GTC` |
 
@@ -467,7 +464,7 @@ nssm set TradeAiServer AppDirectory "C:\trade-ai-server"
 nssm start TradeAiServer
 ```
 
-Confirm liveness with `curl http://localhost:8000/api/health/live`, then verify
+Check liveness with `curl http://localhost:8000/api/health/live`, then verify
 readiness with `curl http://localhost:8000/api/health/ready`.
 
 ### 7. Remote access to the admin panel

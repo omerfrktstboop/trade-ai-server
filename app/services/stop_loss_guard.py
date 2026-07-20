@@ -333,7 +333,6 @@ async def check_stop_loss_positions(
             confidenceScore=100.0,
             riskScore=100.0,
             allowOrder=True,
-            requiresConfirmation=False,
             reason=(
                 f"Stop-loss guard: lastPrice={last_price_d} <= stopLoss={stop_loss}, "
                 "deterministic exit independent of AI"

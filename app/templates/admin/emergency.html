@@ -32,10 +32,6 @@
         <label class="form-label" for="ksd_reason">Devre dışı bırakma nedeni</label>
         <input class="form-input" id="ksd_reason" name="reason" placeholder="Neden tekrar açmak güvenli?" style="max-width:400px" value="{{ submitted_reason or '' }}" required>
       </div>
-      <div class="form-group">
-        <label class="form-label" for="ksd_conf">Onay ({{ confirmation }} yazın)</label>
-        <input class="form-input" id="ksd_conf" name="confirmation" placeholder="{{ confirmation }}" style="max-width:400px" required>
-      </div>
       <button class="btn btn-outline" type="submit">🟢 Kill Switch'i Devre Dışı Bırak</button>
     </form>
     {% endif %}

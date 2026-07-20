@@ -153,7 +153,6 @@ def kill_switch_response(req: SignalRequest) -> SignalResponse:
         confidenceScore=0.0,
         riskScore=0.0,
         allowOrder=False,
-        requiresConfirmation=False,
         reason="Kill switch enabled: trading disabled by admin",
         entryRange=None,
         stopLoss=None,

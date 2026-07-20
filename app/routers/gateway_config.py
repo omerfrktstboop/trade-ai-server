@@ -69,8 +69,7 @@ async def gateway_runtime_config() -> dict:
                         ResearchCandidate.status.in_(
                             ("DETECTED", "RESEARCH_PENDING", "RESEARCHED", "QUALIFIED")
                         ),
-                        (ResearchCandidate.expires_at.is_(None))
-                        | (ResearchCandidate.expires_at >= datetime.now(UTC)),
+                        ResearchCandidate.expires_at >= datetime.now(UTC),
                     )
                     .order_by(
                         ResearchCandidate.trend_pre_score.desc(),
@@ -186,7 +185,7 @@ async def gateway_runtime_config() -> dict:
         # v2 mod/arming kontratı (C# CheckDispatchGates bunları okur; eksik
         # gönderilirse gateway fail-closed OBSERVE_ONLY'ye düşer). Eski
         # mode/enableDemoOrders/enableRealOrders/realLive*/requireDemoAccount/
-        # demoAccountConfirmed alanları kaldırıldı — DEMO/REAL artık gateway'in
+        # Eski DEMO mod alanları kaldırıldı — DEMO/REAL artık gateway'in
         # tespit ettiği accountType'tır.
         "systemMode": (
             "AUTO_TRADE"

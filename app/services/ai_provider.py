@@ -39,6 +39,10 @@ _BUDGET_EXHAUSTED_NUDGE = (
     "Tool budget exhausted — return the final JSON decision now, "
     "using the data you already have."
 )
+_JSON_ONLY_NUDGE = (
+    "Your previous response was not valid JSON. Return only the final JSON "
+    "decision object now, with no analysis, markdown, or commentary."
+)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -415,6 +419,7 @@ class DeepSeekProvider(AiProvider):
         tools = openai_tool_definitions("ai")
         tool_names_used: list[str] = []
         executions = 0
+        force_json_final = False
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": get_trading_system_prompt(tools_enabled=True)},
@@ -423,11 +428,12 @@ class DeepSeekProvider(AiProvider):
 
         for round_index in range(MAX_TOOL_ROUNDS + 1):
             force_final = (
-                round_index >= MAX_TOOL_ROUNDS
+                force_json_final
+                or round_index >= MAX_TOOL_ROUNDS
                 or executions >= MAX_TOOL_EXECUTIONS
                 or time.monotonic() >= deadline
             )
-            if force_final and round_index > 0:
+            if force_final and round_index > 0 and not force_json_final:
                 messages.append({"role": "user", "content": _BUDGET_EXHAUSTED_NUDGE})
 
             body: dict[str, Any] = {
@@ -435,6 +441,7 @@ class DeepSeekProvider(AiProvider):
                 "messages": messages,
                 "temperature": 0.3,
                 "max_tokens": 500,
+                "response_format": {"type": "json_object"},
                 "tools": tools,
                 "tool_choice": "none" if force_final else "auto",
             }
@@ -495,6 +502,11 @@ class DeepSeekProvider(AiProvider):
             content = message.get("content") or ""
             parsed = _extract_json(content) if content else None
             if parsed is None:
+                if not force_final and round_index < MAX_TOOL_ROUNDS:
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({"role": "user", "content": _JSON_ONLY_NUDGE})
+                    force_json_final = True
+                    continue
                 logger.warning(
                     "DeepSeek tool-loop JSON parse failed (round=%d). Raw (200): %s",
                     round_index,

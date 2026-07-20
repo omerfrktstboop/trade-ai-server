@@ -1,4 +1,4 @@
-"""Signal request/response logging — JSON-lines format to logs/signal.log.
+"""Application file logging in JSON-lines format.
 
 No token or sensitive field is ever written.
 """
@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "signal.log"
+MATRIKS_LOG_FILE = LOG_DIR / "matriks.log"
 
 # Timestamps are written in Europe/Istanbul local time (with an explicit
 # offset, so still unambiguous/machine-parseable) rather than UTC, since
@@ -27,6 +28,12 @@ _LOG_TZ = ZoneInfo("Europe/Istanbul")
 def _ensure_log_dir() -> None:
     """Create the log directory if it does not exist."""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _append_json_line(path: Path, entry: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as file:
+        file.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 def log_signal_evaluation(
@@ -51,7 +58,23 @@ def log_signal_evaluation(
     }
 
     try:
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        _append_json_line(LOG_FILE, entry)
     except OSError:
         logger.exception("Failed to write signal log entry")
+
+
+def log_matriks_gateway(
+    *,
+    gateway_timestamp: datetime,
+    level: str,
+    message: str,
+) -> None:
+    """Append one authenticated Matriks gateway event to ``matriks.log``."""
+    entry = {
+        "timestamp": gateway_timestamp.isoformat(),
+        "receivedAt": datetime.now(_LOG_TZ).isoformat(),
+        "level": level,
+        "source": "TradeAiGateway",
+        "message": message,
+    }
+    _append_json_line(MATRIKS_LOG_FILE, entry)

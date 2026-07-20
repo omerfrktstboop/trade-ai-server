@@ -74,21 +74,57 @@ class TestQuoteFreshness:
         payload = await _ready_payload(monkeypatch, quoteAgeSeconds={"THYAO": 16})
         assert payload["checks"]["marketData"]["ok"] is False
 
-    async def test_one_stale_symbol_among_fresh_is_not_ready(self, monkeypatch):
-        """max() yerine all(): tek bir bayat sembol de readiness'i düşürür."""
+    async def test_one_stale_symbol_among_fresh_keeps_global_feed_ready(
+        self, monkeypatch
+    ):
+        """Readiness global akışı, order preflight sembolü ayrı doğrular."""
         payload = await _ready_payload(
-            monkeypatch, quoteAgeSeconds={"THYAO": 1, "GARAN": -500}
+            monkeypatch, quoteAgeSeconds={"THYAO": 1, "GARAN": 16}
         )
-        assert payload["checks"]["marketData"]["ok"] is False
+        market_data = payload["checks"]["marketData"]
+        assert market_data["ok"] is True
+        assert market_data["freshSymbols"] == ["THYAO"]
+        assert market_data["staleSymbols"] == ["GARAN"]
+        assert payload["status"] == "ready"
+
+    async def test_one_fresh_symbol_among_missing_keeps_global_feed_ready(
+        self, monkeypatch
+    ):
+        payload = await _ready_payload(
+            monkeypatch,
+            symbols=["THYAO", "GARAN"],
+            quoteAgeSeconds={"THYAO": 1, "GARAN": None},
+        )
+        market_data = payload["checks"]["marketData"]
+        assert market_data["ok"] is True
+        assert market_data["freshSymbolCount"] == 1
+        assert market_data["missingSymbols"] == ["GARAN"]
 
     async def test_missing_quote_timestamps_are_not_ready(self, monkeypatch):
         """Tüm damgalar null → tazelik kanıtlanamaz → hazır değil."""
         payload = await _ready_payload(monkeypatch, quoteAgeSeconds={"THYAO": None})
         assert payload["checks"]["marketData"]["ok"] is False
 
+    async def test_future_timestamp_symbol_is_reported(self, monkeypatch):
+        payload = await _ready_payload(
+            monkeypatch, quoteAgeSeconds={"THYAO": -9011.8}
+        )
+        assert payload["checks"]["marketData"]["futureTimestampSymbols"] == [
+            "THYAO"
+        ]
+
     async def test_negative_depth_age_is_not_ready(self, monkeypatch):
         payload = await _ready_payload(monkeypatch, depthAgeSeconds={"THYAO": -300})
         assert payload["checks"]["marketData"]["ok"] is False
+
+    async def test_invalid_depth_age_is_not_treated_as_absent(self, monkeypatch):
+        payload = await _ready_payload(
+            monkeypatch, depthAgeSeconds={"THYAO": "invalid"}
+        )
+        assert payload["checks"]["marketData"]["ok"] is False
+        assert payload["checks"]["marketData"][
+            "depthEventFreshnessAvailable"
+        ] is True
 
     async def test_absent_depth_timestamps_do_not_block(self, monkeypatch):
         """Desteklenen Matriks build'lerinde derinlik damgası hiç gelmiyor;

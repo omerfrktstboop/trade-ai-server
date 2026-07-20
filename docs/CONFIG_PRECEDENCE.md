@@ -15,16 +15,12 @@ test monkeypatching keep working until the panel writes a row):
 | Panel key | .env fallback | Single entry point |
 |---|---|---|
 | `scannerAllowOrders` | `SCANNER_ALLOW_ORDERS` | `admin_config.get_scanner_allow_orders(session)` |
-| `manualApprovalAllowOrders` | `MANUAL_APPROVAL_ALLOW_ORDERS` | `admin_config.get_manual_approval_allow_orders(session)` |
 | `portfolioScanIntervalMinutes` | `PORTFOLIO_SCAN_INTERVAL_MINUTES` | `admin_config.get_portfolio_scan_interval_minutes(session)` |
 | `scannerEnabled` | *(none — default `true`)* | `admin_config.is_scanner_runtime_enabled(session)` |
 
 `scannerEnabled` is a runtime *pause* for an already-running scanner loop;
 the env `SCANNER_ENABLED` still decides whether the background task starts
-at process boot (a deployment definition, needs restart). Turning
-`scannerEnabled` off requires CONFIRM because it also stops the stop-loss
-guard; turning `scannerAllowOrders`/`manualApprovalAllowOrders` on requires
-CONFIRM because it arms a real order path.
+at process boot (a deployment definition, needs restart).
 
 .env itself now holds only identity/connection definitions (API keys, DB
 URL, gateway URL/token, Telegram) plus process-boot definitions and the
@@ -40,8 +36,8 @@ initial defaults for the keys above — see `.env.example`.
    `build_runtime_risk_config`.
 
 2. **`app/services/admin_config.py`** — the DB-backed config store. Each
-   key has a `ConfigDefinition` (default value, type, description,
-   "requires confirmation" flag). `SystemConfig` rows are created **lazily**:
+   key has a `ConfigDefinition` (default value, type and description).
+   `SystemConfig` rows are created **lazily**:
    `get_admin_config_value(session, key)` returns the DB row's value if one
    exists, otherwise `CONFIG_DEFINITIONS[key].default` (fail-open to the
    default — a fresh database has *no* `SystemConfig` rows at all). Two
@@ -146,19 +142,6 @@ when available) changes which signals get how far through the pipeline and
 what reason text they get, which is a real behavior change outside this
 cleanup's scope. Flagging here in detail so it isn't mistaken for an
 oversight, and so whoever picks it up next doesn't have to re-derive it.
-
-### Kill switch: one call site checked only 1 of 3 flags — fixed
-
-`app/services/manual_approvals.py`'s `_approval_block_reason` used to check
-`values["killSwitchEnabled"].lower() == "true"` directly, missing
-`tradingKillSwitchActive` and `forceSafeMode`. An operator flipping either
-of those two (without also setting `killSwitchEnabled`) would halt the main
-scanner/evaluator order path (which correctly calls
-`is_kill_switch_enabled`, e.g. `evaluator.py:476`, `scanner.py:236,641`)
-but **not** the manual-approval order path. Fixed to call
-`is_kill_switch_enabled(session)` directly — same fail-closed direction
-(can only block *more* orders, never fewer), so this is a safety fix, not
-a loosening of trading logic.
 
 ### `accountReservationHandling`: raw SystemConfig query — fixed
 

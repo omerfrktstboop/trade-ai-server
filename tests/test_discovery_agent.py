@@ -14,6 +14,7 @@ from app.models.db import (
     SystemConfig,
     WatchlistQualityScore,
 )
+from app.routers.gateway_config import gateway_runtime_config
 from app.services.discovery_agent import (
     _HISTORICAL_BARS_CACHE,
     _ask_bid_ratio,
@@ -282,6 +283,36 @@ class TestFailOpenAndUpsert:
             rows = (await session.execute(select(ResearchCandidate))).scalars().all()
         assert len(rows) == 1
         assert rows[0].change_pct_daily == 5.1
+
+    async def test_missing_candidate_ttl_is_not_active_and_expires(self):
+        async with async_session_factory() as session:
+            session.add(
+                ResearchCandidate(
+                    symbol="LEGACY",
+                    status="RESEARCH_PENDING",
+                    source=["LEGACY"],
+                    trend_pre_score=0,
+                    expires_at=None,
+                )
+            )
+            await session.commit()
+
+        config = await gateway_runtime_config()
+        assert "LEGACY" not in config["subscriptionSymbols"]
+        assert await list_active_watchlist_symbols() == []
+
+        await run_discovery_scan(FakeGateway(_movers([])))
+
+        async with async_session_factory() as session:
+            candidate = (
+                await session.execute(
+                    select(ResearchCandidate).where(
+                        ResearchCandidate.symbol == "LEGACY"
+                    )
+                )
+            ).scalar_one()
+        assert candidate.status == "EXPIRED"
+        assert candidate.expires_at is None
 
 
 class TestHistoricalBarsFallback:

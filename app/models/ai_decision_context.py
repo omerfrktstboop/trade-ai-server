@@ -77,7 +77,7 @@ class DepthContext(_ContextModel):
     buyPressure: FiniteFloat | None = Field(default=None, ge=0, le=1)
     signal: str | None = None
     bidAskRatio: FiniteFloat | None = Field(default=None, ge=0)
-    nearestBidWallDistancePct: FiniteFloat | None = Field(default=None, ge=0)
+    nearestBidWallDistancePct: FiniteFloat | None = Field(default=None, le=0)
     nearestAskWallDistancePct: FiniteFloat | None = Field(default=None, ge=0)
     wallConcentrationRisk: bool | None = None
 

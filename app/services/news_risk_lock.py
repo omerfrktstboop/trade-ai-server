@@ -58,10 +58,8 @@ async def active_news_risk(symbol: str) -> tuple[str, str] | None:
 
 
 async def apply_news_risk_lock(response: SignalResponse, symbol: str) -> SignalResponse:
-    """Block actionable or confirmable BUY proposals; fail open on lookup errors."""
-    if response.action != SignalAction.BUY or not (
-        response.allow_order or response.requires_confirmation
-    ):
+    """Block actionable BUY proposals; fail open on lookup errors."""
+    if response.action != SignalAction.BUY or not response.allow_order:
         return response
     try:
         risk = await active_news_risk(symbol)
@@ -73,7 +71,6 @@ async def apply_news_risk_lock(response: SignalResponse, symbol: str) -> SignalR
     keyword, headline = risk
     response.action = SignalAction.WAIT
     response.allow_order = False
-    response.requires_confirmation = False
     response.order_type = OrderType.NONE
     response.qty = 0
     response.price = None

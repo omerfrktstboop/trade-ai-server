@@ -1,8 +1,8 @@
 """Runtime admin configuration backed by ``system_configs``.
 
 Split into definitions.py (the ConfigDefinition table + admin-panel
-section grouping), validation.py (value serialization + CONFIRM-required
-rules), and store.py (DB reads/writes + composite resolvers). This
+section grouping), validation.py (value serialization), and store.py
+(DB reads/writes + composite resolvers). This
 package re-exports everything under the original ``app.services.admin_config``
 import path so existing callers don't need to change.
 """
@@ -16,7 +16,6 @@ from app.services.admin_config.definitions import (
     EMPTY_ALLOWED_CONFIG_KEYS,
     READ_ONLY_CONFIG_KEYS,
     RISKY_CONFIG_KEYS,
-    RISKY_CONFIRMATION,
     SECRET_CONFIG_KEYS,
     AdminConfigItem,
     AdminConfigSection,
@@ -28,7 +27,6 @@ from app.services.admin_config.definitions import (
 from app.services.admin_config.validation import (
     _ensure_allowed_key,
     _parse_bool,
-    _requires_confirmation,
     _serialize_value,
 )
 from app.services.admin_config.store import (
@@ -59,7 +57,6 @@ __all__ = [
     "EMPTY_ALLOWED_CONFIG_KEYS",
     "READ_ONLY_CONFIG_KEYS",
     "RISKY_CONFIG_KEYS",
-    "RISKY_CONFIRMATION",
     "SECRET_CONFIG_KEYS",
     "AdminConfigItem",
     "AdminConfigSection",
@@ -69,7 +66,6 @@ __all__ = [
     "public_config_keys",
     "_ensure_allowed_key",
     "_parse_bool",
-    "_requires_confirmation",
     "_serialize_value",
     "FeeConfig",
     "build_runtime_risk_config",

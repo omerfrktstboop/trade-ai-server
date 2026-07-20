@@ -101,7 +101,6 @@ def _result(
         confidenceScore=confidence,
         riskScore=risk,
         allowOrder=False,
-        requiresConfirmation=False,
         reason="research result",
         entryRange=EntryRange(min=Decimal("99"), max=Decimal("100")),
         stopLoss=Decimal("95"),

@@ -19,14 +19,12 @@ from app.services.trade_profile import get_active_profile
 
 from app.services.admin_config.definitions import (
     CONFIG_DEFINITIONS,
-    RISKY_CONFIRMATION,
     AdminConfigItem,
     public_config_keys,
 )
 from app.services.admin_config.validation import (
     _ensure_allowed_key,
     _parse_bool,
-    _requires_confirmation,
     _serialize_value,
 )
 
@@ -79,17 +77,12 @@ async def set_admin_config_value(
     *,
     changed_by: str,
     reason: str | None = None,
-    confirmation: str | None = None,
     commit: bool = True,
 ) -> AdminConfigItem:
     """Validate, persist, and audit one admin config value."""
     definition = _ensure_allowed_key(key)
     new_value = _serialize_value(key, raw_value, definition.value_type)
     old_value = await get_admin_config_value(session, key)
-
-    if _requires_confirmation(key, old_value, new_value):
-        if confirmation != RISKY_CONFIRMATION:
-            raise ValueError(f"{key} requires confirmation={RISKY_CONFIRMATION}")
 
     stmt = select(SystemConfig).where(SystemConfig.key == key)
     row = (await session.execute(stmt)).scalar_one_or_none()
@@ -151,7 +144,6 @@ async def set_admin_config_values(
     *,
     changed_by: str,
     reason: str | None = None,
-    confirmation: str | None = None,
 ) -> list[AdminConfigItem]:
     """Validate and persist a config snapshot in one DB transaction."""
     if not values:
@@ -166,7 +158,6 @@ async def set_admin_config_values(
                     value,
                     changed_by=changed_by,
                     reason=reason,
-                    confirmation=confirmation,
                     commit=False,
                 )
             )
@@ -198,7 +189,7 @@ async def is_auto_trade(session: AsyncSession) -> bool:
 async def disarm_real_account(
     session: AsyncSession, reason: str, *, changed_by: str = "SYSTEM_WATCHER"
 ) -> None:
-    """REAL hesap arming'ini koşulsuz düşür (fail-closed yön — onay gerekmez).
+    """REAL hesap arming'ini koşulsuz düşür (fail-closed yön).
 
     Hesap kimliği/türü/oturumu değiştiğinde watcher, manuel istekte admin
     endpoint'i çağırır. Config audit satırları set_admin_config_value içinde

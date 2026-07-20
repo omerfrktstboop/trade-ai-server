@@ -786,7 +786,8 @@ async def _expire_stale_candidates() -> None:
             (
                 await session.execute(
                     select(ResearchCandidate).where(
-                        ResearchCandidate.expires_at < now,
+                        (ResearchCandidate.expires_at.is_(None))
+                        | (ResearchCandidate.expires_at < now),
                         ResearchCandidate.status.not_in(("PROMOTED", "EXPIRED")),
                     )
                 )
@@ -796,12 +797,17 @@ async def _expire_stale_candidates() -> None:
         )
         for row in rows:
             row.status = "EXPIRED"
+            reason = (
+                "candidate TTL missing"
+                if row.expires_at is None
+                else "candidate TTL elapsed"
+            )
             session.add(
                 ResearchCandidateEvent(
                     candidate_id=row.id,
                     symbol=row.symbol,
                     event_type="EXPIRED",
-                    details={"reason": "candidate TTL elapsed"},
+                    details={"reason": reason},
                 )
             )
         await session.commit()
@@ -809,6 +815,7 @@ async def _expire_stale_candidates() -> None:
 
 async def list_active_watchlist_symbols() -> list[str]:
     """Compatibility alias: active discovery candidates, never order eligibility."""
+    now = datetime.now(UTC)
     async with async_session_factory() as session:
         rows = (
             (
@@ -822,7 +829,8 @@ async def list_active_watchlist_symbols() -> list[str]:
                                 "QUALIFIED",
                                 "PROMOTED",
                             )
-                        )
+                        ),
+                        ResearchCandidate.expires_at >= now,
                     )
                 )
             )

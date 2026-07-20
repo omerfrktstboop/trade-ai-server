@@ -901,6 +901,29 @@ class TestDeepSeekToolLoop:
 
         assert result["action"] == "WAIT"
         assert "Could not parse model response" in result["reason"]
+        assert session.post.call_count == 2
+        assert session.post.call_args.kwargs["json"]["tool_choice"] == "none"
+
+    @pytest.mark.asyncio
+    async def test_prose_response_gets_one_forced_json_correction(self, monkeypatch):
+        self._patch_call_tool(monkeypatch)
+        provider = self._tools_provider()
+        prose_round = _mock_session(
+            _msg_resp({"content": "I will now synthesize the findings."})
+        )
+        corrected_round = _mock_session(_msg_resp(FINAL_BUY))
+
+        with patch(
+            "aiohttp.ClientSession", side_effect=[prose_round, corrected_round]
+        ):
+            result = await provider.decide(COMPACT_CONTEXT)
+
+        assert result["action"] == "BUY"
+        corrected_body = corrected_round.post.call_args.kwargs["json"]
+        assert corrected_body["tool_choice"] == "none"
+        assert corrected_body["messages"][-1]["content"].startswith(
+            "Your previous response was not valid JSON"
+        )
 
     @pytest.mark.asyncio
     async def test_evaluation_request_id_forwarded_to_call_tool(self, monkeypatch):
@@ -947,6 +970,7 @@ class TestDeepSeekToolLoop:
         body = session.post.call_args.kwargs["json"]
         assert "TOOLS" in body["messages"][0]["content"]
         assert isinstance(body["tools"], list)
+        assert body["response_format"] == {"type": "json_object"}
         names = {t["function"]["name"] for t in body["tools"]}
         assert "get_snapshot" in names
         assert "get_account_summary" not in names

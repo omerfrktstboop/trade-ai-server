@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from app.db.session import async_session_factory
 from app.services.admin_config import (
-    RISKY_CONFIRMATION,
+    RISKY_CONFIG_KEYS,
     build_admin_config_sections,
     list_admin_configs,
     public_config_keys,
@@ -34,18 +34,15 @@ from app.routers.admin._shared import (
 class AdminConfigUpdate(BaseModel):
     value: Any
     reason: str | None = None
-    confirmation: str | None = None
 
 
 class AdminConfigBatchUpdate(BaseModel):
     values: dict[str, Any]
     reason: str | None = None
-    confirmation: str | None = None
 
 
 class EmergencyAction(BaseModel):
     reason: str | None = None
-    confirmation: str | None = None
 
 
 @admin_router.get("/config", response_class=HTMLResponse)
@@ -64,7 +61,6 @@ async def admin_config_page(request: Request) -> HTMLResponse:
             "active": "config",
             "configs": configs,
             "config_sections": config_sections,
-            "confirmation": RISKY_CONFIRMATION,
             "error": None,
             "message": None,
             "form_values": {},
@@ -79,7 +75,6 @@ async def admin_config_update(request: Request) -> Any:
     identity = await require_admin(request)
     form = await request.form()
     reason = str(form.get("reason") or "Admin panel update")
-    confirmation = str(form.get("confirmation") or "")
 
     try:
         async with async_session_factory() as session:
@@ -89,7 +84,6 @@ async def admin_config_update(request: Request) -> Any:
                 values,
                 changed_by=identity,
                 reason=reason,
-                confirmation=confirmation,
             )
     except ValueError as exc:
         async with async_session_factory() as session:
@@ -104,7 +98,6 @@ async def admin_config_update(request: Request) -> Any:
                 "active": "config",
                 "configs": configs,
                 "config_sections": config_sections,
-                "confirmation": RISKY_CONFIRMATION,
                 "error": str(exc),
                 "message": None,
                 "form_values": form,
@@ -137,7 +130,6 @@ async def admin_emergency(request: Request) -> HTMLResponse:
             "configs": configs,
             "kill_switch": kill_switch,
             "current_mode": current_mode,
-            "confirmation": RISKY_CONFIRMATION,
             "error": None,
             "message": None,
             "submitted_reason": "",
@@ -154,7 +146,6 @@ async def admin_emergency_action(
     identity = await require_admin(request)
     form = await request.form()
     reason = str(form.get("reason") or f"Emergency action: {action}")
-    confirmation = str(form.get("confirmation") or "")
 
     try:
         async with async_session_factory() as session:
@@ -163,7 +154,6 @@ async def admin_emergency_action(
                 action,
                 changed_by=identity,
                 reason=reason,
-                confirmation=confirmation,
             )
     except ValueError as exc:
         async with async_session_factory() as session:
@@ -180,7 +170,6 @@ async def admin_emergency_action(
                 "configs": configs,
                 "kill_switch": kill_switch,
                 "current_mode": current_mode,
-                "confirmation": RISKY_CONFIRMATION,
                 "error": str(exc),
                 "message": None,
                 "submitted_reason": reason,
@@ -198,7 +187,6 @@ async def _apply_emergency_action(
     *,
     changed_by: str,
     reason: str,
-    confirmation: str | None,
 ) -> None:
     if action in ("force-observe", "force-paper"):
         # v2: "force-paper" → systemMode=OBSERVE_ONLY (analiz sürer, emir yok).
@@ -208,7 +196,6 @@ async def _apply_emergency_action(
             "OBSERVE_ONLY",
             changed_by=changed_by,
             reason=reason,
-            confirmation=confirmation,
         )
         return
     if action == "enable-kill-switch":
@@ -218,7 +205,6 @@ async def _apply_emergency_action(
             True,
             changed_by=changed_by,
             reason=reason,
-            confirmation=confirmation,
         )
         return
     if action == "disable-kill-switch":
@@ -228,7 +214,6 @@ async def _apply_emergency_action(
             False,
             changed_by=changed_by,
             reason=reason,
-            confirmation=confirmation,
         )
         return
     raise ValueError(f"Unsupported emergency action: {action}")
@@ -257,12 +242,11 @@ async def admin_api_update_config(
                 body.value,
                 changed_by=identity,
                 reason=body.reason,
-                confirmation=body.confirmation,
             )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _notify_gateway_config_reload()
-    if key in {"killSwitchEnabled", "systemMode"} or item.requires_confirmation:
+    if key in RISKY_CONFIG_KEYS:
         await notification_service.send(
             "warning",
             "Yönetim yapılandırması değişti",
@@ -284,7 +268,6 @@ async def admin_api_update_config_batch(
                 body.values,
                 changed_by=identity,
                 reason=body.reason,
-                confirmation=body.confirmation,
             )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -307,7 +290,6 @@ async def admin_api_emergency(
                 action,
                 changed_by=identity,
                 reason=payload.reason or f"Emergency action: {action}",
-                confirmation=payload.confirmation,
             )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

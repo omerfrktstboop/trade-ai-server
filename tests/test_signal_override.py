@@ -287,11 +287,11 @@ class TestAdminForceOverrideRoutes:
         )
         assert login.status_code == 303
 
-    def test_force_override_requires_confirmation(self, client: TestClient):
+    def test_force_override_rejects_invalid_action(self, client: TestClient):
         self._login(client)
         resp = client.post(
             "/admin/positions/THYAO/force-override",
-            data={"action": "SELL", "confirmation": "wrong"},
+            data={"action": "HOLD"},
         )
         assert resp.status_code == 400
 
@@ -302,13 +302,11 @@ class TestAdminForceOverrideRoutes:
 
         assert asyncio.run(_check()) is None
 
-    def test_force_override_creates_row_with_correct_confirmation(
-        self, client: TestClient
-    ):
+    def test_force_override_creates_row_directly(self, client: TestClient):
         self._login(client)
         resp = client.post(
             "/admin/positions/THYAO/force-override",
-            data={"action": "SELL", "confirmation": "CONFIRM"},
+            data={"action": "SELL"},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -339,7 +337,7 @@ class TestAdminForceOverrideRoutes:
 
         resp = client.post(
             "/admin/positions/force-sell-all",
-            data={"reason": "liquidate all", "confirmation": "CONFIRM"},
+            data={"reason": "liquidate all"},
             follow_redirects=False,
         )
         assert resp.status_code == 303

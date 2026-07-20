@@ -13,7 +13,7 @@ from app.config import settings
 from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
 from app.main import app
-from app.models.db import TradeProfile
+from app.models.db import ConfigAuditLog, TradeProfile
 from app.services.trade_profile import (
     BUILTIN_PROFILES,
     EDITABLE_FIELDS,
@@ -25,7 +25,6 @@ from app.services.trade_profile import (
     get_active_profile,
     get_profile,
     list_profiles,
-    profile_requires_confirmation,
     update_profile,
 )
 
@@ -160,95 +159,30 @@ class TestCreateUpdateProfile:
             _run(_run_update())
 
 
-class TestConfirmationRules:
-    def test_increasing_max_order_value_requires_confirmation(self):
-        async def _get_normal():
-            async with async_session_factory() as session:
-                return await get_profile(session, "NORMAL")
-
-        normal = _run(_get_normal())
-        assert (
-            profile_requires_confirmation(
-                normal, {"max_order_value_tl": normal.max_order_value_tl + 500}
-            )
-            is True
-        )
-
-    def test_decreasing_max_order_value_does_not_require_confirmation(self):
-        async def _get_normal():
-            async with async_session_factory() as session:
-                return await get_profile(session, "NORMAL")
-
-        normal = _run(_get_normal())
-        assert (
-            profile_requires_confirmation(
-                normal, {"max_order_value_tl": normal.max_order_value_tl - 100}
-            )
-            is False
-        )
-
-    def test_lowering_min_confidence_requires_confirmation(self):
-        async def _get_normal():
-            async with async_session_factory() as session:
-                return await get_profile(session, "NORMAL")
-
-        normal = _run(_get_normal())
-        assert (
-            profile_requires_confirmation(
-                normal, {"min_confidence_for_buy": normal.min_confidence_for_buy - 5}
-            )
-            is True
-        )
-
-    def test_disabling_alignment_guard_requires_confirmation(self):
-        async def _get_normal():
-            async with async_session_factory() as session:
-                return await get_profile(session, "NORMAL")
-
-        normal = _run(_get_normal())
-        assert (
-            profile_requires_confirmation(
-                normal, {"require_alpha_trend_alignment": False}
-            )
-            is True
-        )
-
-    def test_enabling_real_live_requires_confirmation(self):
-        async def _get_aggressive():
-            async with async_session_factory() as session:
-                return await get_profile(session, "AGGRESSIVE")
-
-        aggressive = _run(_get_aggressive())  # allow_real_live=False by default
-        assert (
-            profile_requires_confirmation(aggressive, {"allow_real_live": True}) is True
-        )
-
-    def test_update_with_risky_change_requires_confirmation(self):
+class TestUpdateAudit:
+    def test_risky_update_succeeds_directly_and_keeps_audit(self):
         async def _run_update():
             async with async_session_factory() as session:
-                await update_profile(
+                profile = await update_profile(
                     session,
                     "NORMAL",
                     {"max_order_value_tl": 999999},
                     changed_by="tester",
+                    reason="approved limit change",
                 )
+                audit = (
+                    await session.execute(
+                        select(ConfigAuditLog).where(
+                            ConfigAuditLog.key == "trade_profile:NORMAL"
+                        )
+                    )
+                ).scalar_one()
+                return profile, audit
 
-        with pytest.raises(ValueError, match="requires confirmation"):
-            _run(_run_update())
-
-    def test_update_with_confirmation_succeeds(self):
-        async def _run_update():
-            async with async_session_factory() as session:
-                return await update_profile(
-                    session,
-                    "NORMAL",
-                    {"max_order_value_tl": 999999},
-                    changed_by="tester",
-                    confirmation="CONFIRM",
-                )
-
-        profile = _run(_run_update())
+        profile, audit = _run(_run_update())
         assert profile.max_order_value_tl == 999999
+        assert audit.changed_by == "tester"
+        assert audit.reason == "approved limit change"
 
 
 # ── Clone / disable / delete ────────────────────────────────────────────────
@@ -332,7 +266,7 @@ class TestCloneDisableDelete:
 
 
 class TestActivation:
-    def test_activate_low_risk_profile_no_confirmation_needed(self):
+    def test_activate_low_risk_profile(self):
         async def _run_activate():
             async with async_session_factory() as session:
                 return await activate_profile(
@@ -342,37 +276,23 @@ class TestActivation:
         profile = _run(_run_activate())
         assert profile.code == "CONSERVATIVE"
 
-    def test_activate_high_risk_without_confirmation_fails(self):
-        async def _run_activate():
-            async with async_session_factory() as session:
-                await activate_profile(session, "AGGRESSIVE", changed_by="tester")
-
-        with pytest.raises(ValueError, match="requires confirmation"):
-            _run(_run_activate())
-
-    def test_activate_extreme_risk_without_confirmation_fails(self):
-        async def _run_activate():
-            async with async_session_factory() as session:
-                await activate_profile(session, "HIGH_RISK", changed_by="tester")
-
-        with pytest.raises(ValueError, match="requires confirmation"):
-            _run(_run_activate())
-
-    def test_activate_high_risk_with_confirmation_succeeds(self):
+    def test_activate_high_risk_succeeds_directly(self):
         async def _run_activate():
             async with async_session_factory() as session:
                 return await activate_profile(
-                    session, "AGGRESSIVE", changed_by="tester", confirmation="CONFIRM"
+                    session, "AGGRESSIVE", changed_by="tester", reason="test"
                 )
 
-        profile = _run(_run_activate())
-        assert profile.code == "AGGRESSIVE"
+        assert _run(_run_activate()).code == "AGGRESSIVE"
 
-        async def _check_active():
+    def test_activate_extreme_risk_succeeds_directly(self):
+        async def _run_activate():
             async with async_session_factory() as session:
-                return await get_active_profile(session)
+                return await activate_profile(
+                    session, "HIGH_RISK", changed_by="tester", reason="test"
+                )
 
-        assert _run(_check_active()).code == "AGGRESSIVE"
+        assert _run(_run_activate()).code == "HIGH_RISK"
 
 
 # ── Admin routes (HTML) ──────────────────────────────────────────────────────
@@ -456,19 +376,11 @@ class TestAdminTradeProfilesRoutes:
         assert profile.risk_level == "LOW"
         assert profile.max_orders_per_day == 3
 
-    def test_activate_without_confirmation_shows_error(self, client: TestClient):
+    def test_activate_redirects_directly(self, client: TestClient):
         self._login(client)
         resp = client.post(
             "/admin/trade-profiles/AGGRESSIVE/activate",
             data={"reason": "test"},
-        )
-        assert "requires confirmation" in resp.text
-
-    def test_activate_with_confirmation_redirects(self, client: TestClient):
-        self._login(client)
-        resp = client.post(
-            "/admin/trade-profiles/AGGRESSIVE/activate",
-            data={"reason": "test", "confirmation": "CONFIRM"},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -492,23 +404,12 @@ class TestAdminTradeProfilesApi:
         active = next(p for p in resp.json() if p["code"] == "NORMAL")
         assert active["isActive"] is True
 
-    def test_activate_via_api_requires_confirmation(
+    def test_activate_via_api_directly(
         self, client: TestClient, auth_headers: dict[str, str]
     ):
         resp = client.post(
             "/api/admin/trade-profiles/HIGH_RISK/activate",
             json={"reason": "test"},
-            headers=auth_headers,
-        )
-        assert resp.status_code == 400
-        assert "requires confirmation" in resp.json()["detail"]
-
-    def test_activate_via_api_with_confirmation(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ):
-        resp = client.post(
-            "/api/admin/trade-profiles/HIGH_RISK/activate",
-            json={"reason": "test", "confirmation": "CONFIRM"},
             headers=auth_headers,
         )
         assert resp.status_code == 200
@@ -526,7 +427,7 @@ class TestBotConfigIntegration:
 
         activate = client.post(
             "/api/admin/trade-profiles/AGGRESSIVE/activate",
-            json={"reason": "test", "confirmation": "CONFIRM"},
+            json={"reason": "test"},
             headers=auth_headers,
         )
         assert activate.status_code == 200
@@ -548,7 +449,7 @@ class TestRiskEngineIntegration:
         async def _run_flow():
             async with async_session_factory() as session:
                 await activate_profile(
-                    session, "AGGRESSIVE", changed_by="tester", confirmation="CONFIRM"
+                    session, "AGGRESSIVE", changed_by="tester"
                 )
 
             from app.services.admin_config import build_runtime_risk_config
@@ -581,7 +482,7 @@ class TestProfileIndependentSafety:
     ):
         client.post(
             "/api/admin/trade-profiles/AGGRESSIVE/activate",
-            json={"reason": "test", "confirmation": "CONFIRM"},
+            json={"reason": "test"},
             headers=auth_headers,
         )
         update = client.put(
@@ -614,7 +515,7 @@ class TestProfileIndependentSafety:
     ):
         client.post(
             "/api/admin/trade-profiles/HIGH_RISK/activate",
-            json={"reason": "test", "confirmation": "CONFIRM"},
+            json={"reason": "test"},
             headers=auth_headers,
         )
         resp = client.put(

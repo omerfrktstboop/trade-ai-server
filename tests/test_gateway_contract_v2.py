@@ -65,7 +65,7 @@ def test_gateway_config_carries_v2_mode_and_arming_fields(_db):
 
 def test_gateway_config_reflects_auto_trade_when_set(_db):
     from app.db.session import async_session_factory
-    from app.services.admin_config import RISKY_CONFIRMATION, set_admin_config_value
+    from app.services.admin_config import set_admin_config_value
 
     async def _arm():
         async with async_session_factory() as session:
@@ -74,7 +74,6 @@ def test_gateway_config_reflects_auto_trade_when_set(_db):
                 "systemMode",
                 "AUTO_TRADE",
                 changed_by="test",
-                confirmation=RISKY_CONFIRMATION,
             )
 
     asyncio.run(_arm())
@@ -123,7 +122,7 @@ def test_unknown_system_mode_normalizes_to_observe_only():
 
 def test_account_verification_populates_hashed_identity_fields():
     source = _source()
-    verify = source.split("private bool VerifyDemoAccountFresh()", 1)[1]
+    verify = source.split("private void RefreshAccountVerification()", 1)[1]
     verify = verify.split("private sealed class AccountVerification", 1)[0]
     assert "GetTradeUser()" in verify
     assert "_lastVerifiedAccountRef = Sha256Hex(accountId);" in verify
@@ -182,3 +181,31 @@ def test_hard_caps_untouched_by_v2_gates():
     assert "GetTotalDailyOrderCount() >= MaxOrdersPerDay" in handler
     assert "GetDailyTradeCount(symbol) >= MaxOrdersPerSymbolPerDay" in handler
     assert "GetSellableQty(symbol) < qty" in handler
+
+def test_snapshot_surfaces_real_depth_age_not_hardcoded_null():
+    """order_preflight bağımsız bir kapı ve top-level depthAgeSeconds'i okur.
+
+    Bu alan uzun süre sabit ``null`` yazılıyordu; derinlik artık gerçek bir
+    same-session yaş (DepthEventTimestampAvailable) hesaplasa bile preflight'ın
+    derinlik-tazelik kontrolü her emirde sessizce düşüyordu. C# emir kapısı
+    (ValidateOrderMarketData) zaten depthAnalysis.DepthAgeSeconds'e güveniyor;
+    snapshot payload'ı da aynı değeri yüzeye çıkarmalı ki iki kapı tutarlı olsun.
+    """
+    source = _source()
+    # payload["depthAgeSeconds"] artık analiz değerinden türetiliyor, sabit değil.
+    assert 'payload["depthAgeSeconds"] = null;' not in source
+    assert "DepthEventTimestampAvailable" in source
+    assert "depthAnalysis.DepthAgeSeconds < double.MaxValue" in source
+
+
+def test_snapshot_bid_ask_fall_back_to_depth_best_when_quote_missing():
+    """quote.Bid/Ask racy sıfır dönebilir; bu durumda emir fiyatlaması yapısal
+    olarak doğrulanmış depth best bid/ask'e düşmeli ve payload bestAsk taşımalı
+    (Python preflight'ın ask tarafı için tek dayanağı)."""
+    source = _source()
+    assert "if (bidPrice <= 0m && bestBid > 0m) bidPrice = bestBid;" in source
+    assert (
+        "if (askPrice <= 0m && depthAnalysis.BestAsk > 0m) askPrice = depthAnalysis.BestAsk;"
+        in source
+    )
+    assert 'payload["bestAsk"] = ToDouble(depthAnalysis.BestAsk);' in source

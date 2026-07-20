@@ -1,7 +1,4 @@
-"""Admin config value validation: per-type serialization/parsing and the
-CONFIRM-required-change rules (which key changes are risky enough to
-require an explicit confirmation token).
-"""
+"""Admin config value validation and per-type serialization/parsing."""
 
 from __future__ import annotations
 
@@ -12,7 +9,6 @@ from zoneinfo import ZoneInfo
 from app.services.admin_config.definitions import (
     CONFIG_DEFINITIONS,
     SECRET_CONFIG_KEYS,
-    RISKY_CONFIG_KEYS,
     ConfigDefinition,
 )
 
@@ -133,53 +129,3 @@ def _parse_bool(raw_value: Any) -> bool:
     if value in {"0", "false", "no", "off", ""}:
         return False
     raise ValueError(f"Invalid boolean value: {raw_value}")
-
-
-def _requires_confirmation(key: str, old_value: str, new_value: str) -> bool:
-    if key not in RISKY_CONFIG_KEYS:
-        return False
-    if key == "systemMode":
-        # AUTO_TRADE'e geçiş gerçek emir yolunu kurar — onay ister.
-        return new_value == "AUTO_TRADE" and old_value != new_value
-    if key == "realAccountArmed":
-        return _parse_bool(new_value) is True and old_value != new_value
-    if key == "dailyMaxLossTl":
-        # Limiti yükseltmek veya kapatmak (0) korumayı gevşetir — onay ister.
-        old_d, new_d = Decimal(old_value), Decimal(new_value)
-        return old_d > 0 and (new_d == 0 or new_d > old_d)
-    if key == "killSwitchEnabled":
-        return _parse_bool(old_value) is True and _parse_bool(new_value) is False
-    if key == "scannerEnabled":
-        # Kapatmak stop-loss bekçisi dahil tüm otomasyonu durdurur — onay ister.
-        return _parse_bool(old_value) is True and _parse_bool(new_value) is False
-    if key == "sizingAllowMarginBuying":
-        return _parse_bool(new_value) is True and old_value != new_value
-    if key == "accountReservationHandling":
-        return old_value == "UNKNOWN" and new_value != "UNKNOWN"
-    increase_is_risky = {
-        "sizingRiskPerTradePct",
-        "sizingMaxCashUtilizationPct",
-        "sizingMaxAccountExposurePct",
-        "sizingMaxPositionValuePerSymbol",
-        "sizingMaxOrderValueTl",
-        "sizingMaxQtyPerOrder",
-        "sizingMaxStopDistancePct",
-        "sizingMaxAccountDataAgeSeconds",
-        "sizingDailyOrderLimit",
-        "sizingPerSymbolDailyOrderLimit",
-    }
-    decrease_is_risky = {
-        "sizingMinStopDistancePct",
-        "sizingMinimumStopSlippagePct",
-        "sizingMaximumStopSlippagePct",
-        "sizingProfileStopSlippagePct",
-        "sizingMinimumBuyConfidence",
-        "sizingMinimumSellConfidence",
-    }
-    old_decimal = Decimal(old_value)
-    new_decimal = Decimal(new_value)
-    if key in increase_is_risky:
-        return new_decimal > old_decimal
-    if key in decrease_is_risky:
-        return new_decimal < old_decimal
-    return False

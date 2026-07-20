@@ -2,8 +2,8 @@
 for the HTML admin panel, and the AdminConfigItem/AdminConfigSection
 display shapes.
 
-No DB access here — see store.py for reads/writes and validation.py for
-the CONFIRM-required-change / value-serialization rules.
+No DB access here - see store.py for reads/writes and validation.py for
+value-serialization rules.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from app.core.risk_config import risk_config
 
 
 SECRET_CONFIG_KEYS = {"API_TOKEN", "DEEPSEEK_API_KEY", "DATABASE_URL"}
-RISKY_CONFIRMATION = "CONFIRM"
 
 
 @dataclass(frozen=True)
@@ -91,7 +90,7 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "bool",
         "false",
         "REAL hesapta emir gönderimini kurar. Yalnızca arming endpoint'i "
-        "'CONFIRM REAL ACCOUNT' onayıyla yazar; hesap/oturum değişince "
+        "canlı hesap kimliğini doğrulayarak yazar; hesap/oturum değişince "
         "account watcher otomatik düşürür.",
     ),
     "armedAccountRef": ConfigDefinition(
@@ -141,7 +140,7 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "bool",
         "true",
         "Tarama döngüsünü çalıştırır. Kapatılırsa AI değerlendirmesi VE stop-loss "
-        "bekçisi dahil tüm otomasyon durur — kapatmak onay ister.",
+        "bekçisi dahil tüm otomasyon durur.",
     ),
     "portfolioScanIntervalMinutes": ConfigDefinition(
         "portfolioScanIntervalMinutes",
@@ -161,8 +160,7 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         risk_config.allowed_symbols,
         "Mevcut pozisyonlardan SELL_EXIT izinli semboller.",
     ),
-    # v2: botRealLiveModeAllowed/botRealLiveArmed/botRequireDemoAccount/
-    # botDemoAccountConfirmed kaldırıldı. REAL emir yetkisi artık
+    # v2: eski REAL/DEMO mod bayrakları kaldırıldı. REAL emir yetkisi artık
     # realAccountArmed + armedAccountRef + oturum eşleşmesiyle verilir;
     # DEMO/REAL gateway'in bildirdiği accountType'tır.
     "botAllowMarketOrders": ConfigDefinition(
@@ -447,15 +445,6 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "30",
         "Stop-loss bekçisinin bir fiyatı tetikleyici kabul edebileceği en fazla yaş (sn).",
     ),
-    "depthTimestampFixConfirmed": ConfigDefinition(
-        "depthTimestampFixConfirmed",
-        "bool",
-        "false",
-        "matriks/TradeAiGateway.cs'teki ReadDepthSnapshot derinlik-tazelik "
-        "kaynak düzeltmesi Matriks IQ içinde algoritma yeniden yüklendikten "
-        "SONRA operatör tarafından elle onaylanmalı. Onaylanmadan "
-        "demo_live_readiness bunu hâlâ bir engel olarak raporlar.",
-    ),
     "marketSessionCloseTime": ConfigDefinition(
         "marketSessionCloseTime",
         "time",
@@ -503,8 +492,8 @@ RISKY_CONFIG_KEYS = {
 }
 
 # realAccountArmed/armedAccountRef panelin genel edit formundan yazılamaz —
-# tek yazma yolu arming endpoint'leridir (CONFIRM REAL ACCOUNT + canlı hesap
-# doğrulaması). botAllowMarketOrders kod kilididir.
+# tek yazma yolu canlı hesap doğrulaması yapan arming endpoint'leridir.
+# botAllowMarketOrders kod kilididir.
 READ_ONLY_CONFIG_KEYS = frozenset(
     {
         "botAllowMarketOrders",
@@ -531,7 +520,7 @@ CONFIG_SECTION_DEFINITIONS = (
         title="İşlem modu ve güvenlik kapıları",
         description=(
             "Sistem modu, acil durdurma anahtarları ve emir gönderim güvenlik "
-            "kapıları. Güvenliği gevşeten değişiklikler CONFIRM onayı ister."
+            "kapıları."
         ),
         keys=(
             "systemMode",
@@ -562,7 +551,7 @@ CONFIG_SECTION_DEFINITIONS = (
         title="Matriks gateway ve REAL hesap arming",
         description=(
             "REAL hesap emir yolu arming durumu ve HTTP timeout. REAL emir "
-            "yalnızca 'CONFIRM REAL ACCOUNT' arming'iyle açılır; DEMO/REAL "
+            "yalnızca canlı hesap kimliği doğrulanan arming endpoint'iyle açılır; DEMO/REAL "
             "gateway'in accountType'ıdır. MARKET emri kod seviyesinde salt okunur."
         ),
         keys=(
@@ -677,7 +666,6 @@ CONFIG_SECTION_DEFINITIONS = (
             "outcomeMaximumObservationDelaySeconds",
             "stopGuardMaximumQuoteAgeSeconds",
             "marketSessionCloseTime",
-            "depthTimestampFixConfirmed",
         ),
     ),
 )
@@ -752,7 +740,6 @@ CONFIG_LABELS: dict[str, str] = {
     "outcomeMaximumObservationDelaySeconds": "Outcome Gözlem Azami Gecikmesi (sn)",
     "stopGuardMaximumQuoteAgeSeconds": "Stop Guard Azami Fiyat Yaşı (sn)",
     "marketSessionCloseTime": "Seans Kapanış Saati (EOD)",
-    "depthTimestampFixConfirmed": "Depth Zaman Damgası Düzeltmesi Onaylandı (Matriks IQ reload sonrası)",
 }
 
 
@@ -778,10 +765,6 @@ class AdminConfigItem:
         return self.value
 
     @property
-    def requires_confirmation(self) -> bool:
-        return self.key in RISKY_CONFIG_KEYS
-
-    @property
     def is_editable(self) -> bool:
         return self.key not in READ_ONLY_CONFIG_KEYS
 
@@ -796,10 +779,6 @@ class AdminConfigSection:
     title: str
     description: str
     items: tuple[AdminConfigItem, ...]
-
-    @property
-    def requires_confirmation(self) -> bool:
-        return any(item.requires_confirmation for item in self.items)
 
     @property
     def has_editable_items(self) -> bool:

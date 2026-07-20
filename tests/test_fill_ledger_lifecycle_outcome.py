@@ -462,7 +462,6 @@ class TestDecisionOutcome:
             confidenceScore=80.0,
             riskScore=20.0,
             allowOrder=action != SignalAction.WAIT,
-            requiresConfirmation=False,
             reason="test",
             entryRange=None,
             stopLoss=to_decimal(90.0) if action == SignalAction.BUY else None,

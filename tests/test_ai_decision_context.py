@@ -58,6 +58,32 @@ def test_ai_decision_context_rejects_forbidden_full_snapshot_and_nonfinite_value
         AiDecisionContext.model_validate(payload)
 
 
+def test_ai_decision_context_accepts_side_aware_wall_distances():
+    context = AiDecisionContext.model_validate(
+        _context(
+            depth={
+                "reliable": True,
+                "nearestBidWallDistancePct": -1.25,
+                "nearestAskWallDistancePct": 0.75,
+            }
+        )
+    )
+
+    assert context.depth is not None
+    assert context.depth.nearestBidWallDistancePct == -1.25
+    assert context.depth.nearestAskWallDistancePct == 0.75
+
+    with pytest.raises(ValidationError, match="nearestBidWallDistancePct"):
+        AiDecisionContext.model_validate(
+            _context(
+                depth={
+                    "reliable": True,
+                    "nearestBidWallDistancePct": 1.25,
+                }
+            )
+        )
+
+
 def test_ai_decision_context_rejects_raw_urls_and_retains_compact_news_only():
     context = AiDecisionContext.model_validate(
         _context(

@@ -60,10 +60,6 @@
         <label class="form-label" for="fsa_reason">Neden</label>
         <input class="form-input" id="fsa_reason" name="reason" placeholder="Test amaçlı tüm pozisyonları satıyorum" required>
       </div>
-      <div class="form-group" style="margin-bottom:0">
-        <label class="form-label" for="fsa_conf">Confirmation (type {{ confirmation }})</label>
-        <input class="form-input" id="fsa_conf" name="confirmation" placeholder="{{ confirmation }}" required>
-      </div>
       <button class="btn btn-danger" type="submit" style="align-self:end">🔴 Tüm Pozisyonları Test-Sat</button>
     </div>
   </form>
@@ -105,7 +101,6 @@
                 <option value="SELL">SELL</option>
                 <option value="BUY">BUY</option>
               </select>
-              <input class="form-input" name="confirmation" placeholder="{{ confirmation }}" style="width:110px" required>
               <button class="btn btn-outline-danger btn-sm" type="submit">Uygula</button>
             </form>
           </td>

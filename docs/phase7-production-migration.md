@@ -24,7 +24,7 @@ switch active. Never run production schema changes while dispatch is open.
    python -m alembic current
    ```
 
-5. Confirm `/api/health/ready` reports migration `20260712_01`, then reload
+5. Verify `/api/health/ready` reports migration `20260712_01`, then reload
    gateway config and reconcile active orders before reopening dispatch.
 
 Staging must execute `upgrade head`, `downgrade base`, and `upgrade head`

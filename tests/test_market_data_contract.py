@@ -97,3 +97,32 @@ def test_gateway_source_uses_official_bar_fields_and_type_aware_depth():
     assert 'payload["actualBarPeriod"]' in source
     assert "IsEquitySymbol(normalized)" in source
     assert "MarketDataDiagnosticsEnabled" in source
+
+
+def test_gateway_source_normalizes_tick_time_and_health_uses_push_events():
+    source = open("matriks/TradeAiGateway.cs", encoding="utf-8-sig").read()
+
+    on_data_update = source.split("public override void OnDataUpdate", 1)[1]
+    on_data_update = on_data_update.split("public override void OnTimer", 1)[0]
+    assert "NormalizeMatriksLastTickUtc(lastTickTime)" in on_data_update
+
+    normalizer = source.split("private static DateTime NormalizeMatriksLastTickUtc", 1)[
+        1
+    ]
+    normalizer = normalizer.split("private decimal GetSellableQty", 1)[0]
+    assert 'FindSystemTimeZoneById("Turkey Standard Time")' in source
+    assert "DateTime.SpecifyKind(timestamp, DateTimeKind.Unspecified)" in normalizer
+    assert "TimeZoneInfo.ConvertTimeToUtc" in normalizer
+
+    health = source.split("private async Task HandleHealthAsync", 1)[1]
+    health = health.split("private async Task HandleSnapshotAsync", 1)[0]
+    assert "_lastTradeUtcBySymbol.TryGetValue" in health
+    assert "_lastValidQuoteBySymbol.TryGetValue" not in health
+
+    market_data = source.split("private MarketDataPayload BuildMarketData", 1)[1]
+    market_data = market_data.split("private Dictionary<string, object>", 1)[0]
+    assert "quoteAgeSeconds.Value >= 0" in market_data
+    assert (
+        "Math.Max(0.0, (DateTime.UtcNow - quote.LastTradeUtc).TotalSeconds)"
+        not in market_data
+    )

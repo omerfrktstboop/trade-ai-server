@@ -17,7 +17,6 @@ _RULES = (
     ("ALPHA_TREND_OPPOSES", ("alpha trend",)),
     ("INDICATOR_CONSENSUS_OPPOSES", ("indicator consensus", "consensus")),
     ("PAPER_MODE", ("paper mode", "paper")),
-    ("MANUAL_CONFIRMATION_REQUIRED", ("confirmation", "onay")),
     ("DEMO_NOT_ENABLED", ("demo",)),
     ("REAL_NOT_ENABLED", ("real live", "real")),
     ("POSITIONS_NOT_LOADED", ("positions not loaded", "pozisyonlar")),

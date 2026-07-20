@@ -16,7 +16,6 @@ from app.models.db import (
 from app.services.trade_profile import (
     EDITABLE_FIELDS,
     FIELD_TYPES,
-    RISKY_CONFIRMATION as PROFILE_RISKY_CONFIRMATION,
     activate_profile,
     clone_profile,
     create_profile,
@@ -118,12 +117,10 @@ class TradeProfileCreateBody(TradeProfileFieldsBody):
 
 class TradeProfileUpdateBody(TradeProfileFieldsBody):
     reason: str | None = None
-    confirmation: str | None = None
 
 
 class TradeProfileActivateBody(BaseModel):
     reason: str | None = None
-    confirmation: str | None = None
 
 
 class TradeProfileCloneBody(BaseModel):
@@ -184,7 +181,6 @@ async def _trade_profiles_page(
             "profiles": profiles,
             "active_code": active.code,
             "active_profile": active,
-            "confirmation": PROFILE_RISKY_CONFIRMATION,
             "error": error,
             "message": message,
             **status_ctx,
@@ -235,7 +231,6 @@ async def admin_trade_profiles_update(request: Request, code: str) -> Any:
     identity = await require_admin(request)
     form = await request.form()
     reason = str(form.get("reason") or "Trade profile update")
-    confirmation = str(form.get("confirmation") or "")
     changes = _parse_profile_form_fields(form)
 
     try:
@@ -246,7 +241,6 @@ async def admin_trade_profiles_update(request: Request, code: str) -> Any:
                 changes,
                 changed_by=identity,
                 reason=reason,
-                confirmation=confirmation,
             )
     except ValueError as exc:
         return await _trade_profiles_page(request, identity, error=str(exc))
@@ -262,7 +256,6 @@ async def admin_trade_profiles_activate(request: Request, code: str) -> Any:
     identity = await require_admin(request)
     form = await request.form()
     reason = str(form.get("reason") or f"Activated {code}")
-    confirmation = str(form.get("confirmation") or "")
 
     try:
         async with async_session_factory() as session:
@@ -271,7 +264,6 @@ async def admin_trade_profiles_activate(request: Request, code: str) -> Any:
                 code,
                 changed_by=identity,
                 reason=reason,
-                confirmation=confirmation,
             )
     except ValueError as exc:
         return await _trade_profiles_page(request, identity, error=str(exc))
@@ -433,7 +425,7 @@ async def admin_api_update_trade_profile(
     request: Request, code: str, body: TradeProfileUpdateBody
 ) -> dict[str, Any]:
     identity = await require_admin(request)
-    changes = body.model_dump(exclude={"reason", "confirmation"}, exclude_none=True)
+    changes = body.model_dump(exclude={"reason"}, exclude_none=True)
     try:
         async with async_session_factory() as session:
             profile = await update_profile(
@@ -442,7 +434,6 @@ async def admin_api_update_trade_profile(
                 changes,
                 changed_by=identity,
                 reason=body.reason,
-                confirmation=body.confirmation,
             )
             active = await get_active_profile(session)
     except ValueError as exc:
@@ -464,7 +455,6 @@ async def admin_api_activate_trade_profile(
                 code,
                 changed_by=identity,
                 reason=payload.reason,
-                confirmation=payload.confirmation,
             )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

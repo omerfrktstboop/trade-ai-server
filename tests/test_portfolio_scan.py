@@ -172,7 +172,6 @@ class TestPortfolioScan:
                 confidenceScore=0.0,
                 riskScore=0.0,
                 allowOrder=False,
-                requiresConfirmation=False,
                 reason="test",
             )
             return EvaluationResult(

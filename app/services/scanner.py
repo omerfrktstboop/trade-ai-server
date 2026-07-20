@@ -200,7 +200,7 @@ class SymbolScanner:
         self._stop_event.clear()
         self._task = asyncio.create_task(self._run_loop(), name="symbol-scanner")
         logger.info(
-            "Scanner started tick=%ss (Phase 1: PAPER-only, no order path)",
+            "Scanner started tick=%ss; dispatch gated by systemMode and preflight",
             self._tick_seconds,
         )
 

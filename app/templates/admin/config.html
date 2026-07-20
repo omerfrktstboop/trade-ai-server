@@ -56,9 +56,6 @@
             <td>
               <strong>{{ item.label }}</strong>
               <div><code class="mono text-muted" style="font-size:11px">{{ item.key }}</code></div>
-              {% if item.requires_confirmation %}
-              <div><span class="badge badge-wait">risk onayı</span></div>
-              {% endif %}
             </td>
             <td class="config-value-cell">{{ config_control(item) }}</td>
             <td class="text-muted text-sm">{{ item.description }}</td>
@@ -74,13 +71,6 @@
         <label class="form-label">Değişiklik nedeni</label>
         <input class="form-input" name="reason" placeholder="Bu ayar neden değişiyor?" value="{{ reason or '' }}" required>
       </div>
-      {% if section.requires_confirmation %}
-      <div class="form-group" style="margin-bottom:0">
-        <label class="form-label">Risk onayı</label>
-        <input class="form-input" name="confirmation" placeholder="{{ confirmation }}">
-        <div class="form-hint">Riski artıran veya güvenlik kapısını açan değişikliklerde {{ confirmation }} yazın.</div>
-      </div>
-      {% endif %}
       <button class="btn btn-primary" type="submit" style="align-self:end">Kaydet</button>
     </div>
     {% endif %}

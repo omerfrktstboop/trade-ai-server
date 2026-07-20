@@ -17,7 +17,6 @@ from app.models.db import AccountEvent
 from app.routers.admin import arming as arming_module
 from app.services.account_watcher import AccountWatcher
 from app.services.admin_config import (
-    RISKY_CONFIRMATION,
     get_admin_config_value,
     set_admin_config_value,
     _parse_bool,
@@ -97,17 +96,6 @@ async def _armed_state() -> tuple[bool, str]:
 # ── Arming endpoint'leri ────────────────────────────────────────────────────
 
 
-def test_arm_requires_exact_confirm_text(client, admin_headers, monkeypatch):
-    monkeypatch.setattr(arming_module, "gateway_client", FakeAccountGateway())
-    resp = client.post(
-        "/api/admin/arm-real-account",
-        headers=admin_headers,
-        json={"confirmText": "confirm real account"},
-    )
-    assert resp.status_code == 400
-    assert "CONFIRM REAL ACCOUNT" in resp.json()["detail"]
-
-
 def test_arm_refused_on_demo_account(client, admin_headers, monkeypatch):
     monkeypatch.setattr(
         arming_module, "gateway_client", FakeAccountGateway(account_type="DEMO")
@@ -115,7 +103,6 @@ def test_arm_refused_on_demo_account(client, admin_headers, monkeypatch):
     resp = client.post(
         "/api/admin/arm-real-account",
         headers=admin_headers,
-        json={"confirmText": "CONFIRM REAL ACCOUNT"},
     )
     assert resp.status_code == 409
     assert "DEMO" in resp.json()["detail"]
@@ -130,7 +117,6 @@ def test_arm_stores_gateway_ref_verbatim_and_writes_event(
     resp = client.post(
         "/api/admin/arm-real-account",
         headers=admin_headers,
-        json={"confirmText": "CONFIRM REAL ACCOUNT"},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -151,7 +137,6 @@ def test_arm_requires_admin_auth(client, monkeypatch):
     monkeypatch.setattr(arming_module, "gateway_client", FakeAccountGateway())
     resp = client.post(
         "/api/admin/arm-real-account",
-        json={"confirmText": "CONFIRM REAL ACCOUNT"},
     )
     assert resp.status_code == 401
 
@@ -162,7 +147,6 @@ def test_arm_persists_session_ref_and_type(client, admin_headers, monkeypatch):
     client.post(
         "/api/admin/arm-real-account",
         headers=admin_headers,
-        json={"confirmText": "CONFIRM REAL ACCOUNT"},
     )
 
     async def _read():
@@ -182,7 +166,6 @@ def test_disarm_clears_state_and_writes_event(client, admin_headers, monkeypatch
     client.post(
         "/api/admin/arm-real-account",
         headers=admin_headers,
-        json={"confirmText": "CONFIRM REAL ACCOUNT"},
     )
     resp = client.post(
         "/api/admin/disarm-real-account", headers=admin_headers, json={}
@@ -205,7 +188,6 @@ async def _arm_directly(ref: str = REF_A, session_ref: str = SESSION_1) -> None:
             "realAccountArmed",
             "true",
             changed_by="test",
-            confirmation=RISKY_CONFIRMATION,
         )
         await set_admin_config_value(
             session, "armedAccountRef", ref, changed_by="test"

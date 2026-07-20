@@ -3,11 +3,9 @@
 {% block page_title %}Trade Profilleri{% endblock %}
 {% block content %}
 
-{% macro sensitive_badge() %}<span class="badge badge-sell" style="font-size:10px;padding:1px 7px;margin-left:6px;vertical-align:middle">hassas</span>{% endmacro %}
-
-{% macro num_field(field_name, label, value, hint='', risky=false) %}
+{% macro num_field(field_name, label, value, hint='') %}
 <div class="form-group" style="margin-bottom:0">
-  <label class="form-label">{{ label }}{% if risky %}{{ sensitive_badge() }}{% endif %}</label>
+  <label class="form-label">{{ label }}</label>
   <input class="form-input" type="number" step="any" name="{{ field_name }}" value="{{ value }}">
   {% if hint %}<div class="form-hint">{{ hint }}</div>{% endif %}
 </div>
@@ -29,13 +27,12 @@
     <option value="{{ level }}" {% if value == level %}selected{% endif %}>{{ level }} ({{ tr }})</option>
     {% endfor %}
   </select>
-  <div class="form-hint">HIGH veya EXTREME seçilen bir profili aktifleştirmek Confirmation alanı ister.</div>
 </div>
 {% endmacro %}
 
-{% macro bool_field(field_name, label, value, hint='', risky=false) %}
+{% macro bool_field(field_name, label, value, hint='') %}
 <div class="form-group" style="margin-bottom:0">
-  <label class="form-label">{{ label }}{% if risky %}{{ sensitive_badge() }}{% endif %}</label>
+  <label class="form-label">{{ label }}</label>
   <select class="form-select" name="{{ field_name }}">
     <option value="true" {% if value %}selected{% endif %}>Açık</option>
     <option value="false" {% if not value %}selected{% endif %}>Kapalı</option>
@@ -84,27 +81,27 @@
   {{ text_field('allowed_modes', 'Geçerli Modlar (virgülle ayrılmış)', p.allowed_modes, 'Örn: PAPER,DEMO_LIVE — bu profilin seçilebileceği modların listesi.') }}
 {% endcall %}
 {% call field_section("Limitler", "Emir ve pozisyon büyüklüğü üst sınırları.") %}
-  {{ num_field('max_order_value_tl', 'Emir Başına En Fazla Tutar (TL)', p.max_order_value_tl, 'Tek bir emrin en fazla TL değeri.', true) }}
-  {{ num_field('max_qty_per_order', 'Emir Başına En Fazla Adet', p.max_qty_per_order, 'Tek bir emirde alınabilecek en fazla lot/adet sayısı.', true) }}
-  {{ num_field('max_position_value_per_symbol', 'Sembol Başına En Fazla Pozisyon (TL)', p.max_position_value_per_symbol, 'Aynı sembolde toplam açık pozisyonun ulaşabileceği en yüksek TL değeri.', true) }}
-  {{ num_field('max_orders_per_day', 'Günlük En Fazla Emir Sayısı', p.max_orders_per_day, 'Bir gün içinde gönderilebilecek toplam emir sayısı.', true) }}
+  {{ num_field('max_order_value_tl', 'Emir Başına En Fazla Tutar (TL)', p.max_order_value_tl, 'Tek bir emrin en fazla TL değeri.') }}
+  {{ num_field('max_qty_per_order', 'Emir Başına En Fazla Adet', p.max_qty_per_order, 'Tek bir emirde alınabilecek en fazla lot/adet sayısı.') }}
+  {{ num_field('max_position_value_per_symbol', 'Sembol Başına En Fazla Pozisyon (TL)', p.max_position_value_per_symbol, 'Aynı sembolde toplam açık pozisyonun ulaşabileceği en yüksek TL değeri.') }}
+  {{ num_field('max_orders_per_day', 'Günlük En Fazla Emir Sayısı', p.max_orders_per_day, 'Bir gün içinde gönderilebilecek toplam emir sayısı.') }}
   {{ num_field('max_orders_per_symbol_per_day', 'Sembol Başına Günlük En Fazla Emir', p.max_orders_per_symbol_per_day, 'Aynı sembol için bir günde gönderilebilecek emir sayısı.') }}
 {% endcall %}
 {% call field_section("Pozisyon Büyüklüğü ve Hesap Riski", "Sermayenin işlem başına ve toplamda ne kadarının riske atılacağı.") %}
-  {{ num_field('risk_per_trade_pct', 'İşlem Başına Risk (%)', p.risk_per_trade_pct, 'Hesabın tek bir işlemde riske atılabilecek yüzdesi; stop mesafesine göre pozisyon büyüklüğünü belirler.', true) }}
-  {{ num_field('max_cash_utilization_pct', 'En Fazla Nakit Kullanımı (%)', p.max_cash_utilization_pct, 'Kullanılabilir nakdin işlemler için kullanılabilecek en yüksek yüzdesi.', true) }}
-  {{ num_field('max_account_exposure_pct', 'En Fazla Hesap Maruziyeti (%)', p.max_account_exposure_pct, 'Toplam hesap değerinin açık pozisyonlara ayrılabilecek en yüksek yüzdesi.', true) }}
+  {{ num_field('risk_per_trade_pct', 'İşlem Başına Risk (%)', p.risk_per_trade_pct, 'Hesabın tek bir işlemde riske atılabilecek yüzdesi; stop mesafesine göre pozisyon büyüklüğünü belirler.') }}
+  {{ num_field('max_cash_utilization_pct', 'En Fazla Nakit Kullanımı (%)', p.max_cash_utilization_pct, 'Kullanılabilir nakdin işlemler için kullanılabilecek en yüksek yüzdesi.') }}
+  {{ num_field('max_account_exposure_pct', 'En Fazla Hesap Maruziyeti (%)', p.max_account_exposure_pct, 'Toplam hesap değerinin açık pozisyonlara ayrılabilecek en yüksek yüzdesi.') }}
   {{ num_field('min_order_value_tl', 'En Düşük Emir Tutarı (TL)', p.min_order_value_tl, 'Bir emrin geçerli sayılması için sahip olması gereken en düşük TL değeri.') }}
-  {{ num_field('min_stop_distance_pct', 'En Düşük Stop Mesafesi (%)', p.min_stop_distance_pct, 'Giriş fiyatı ile stop-loss arasında bulunması gereken en düşük yüzde mesafe.', true) }}
-  {{ num_field('max_stop_distance_pct', 'En Yüksek Stop Mesafesi (%)', p.max_stop_distance_pct, 'Giriş fiyatı ile stop-loss arasında izin verilen en yüksek yüzde mesafe.', true) }}
-  {{ num_field('minimum_stop_slippage_pct', 'En Düşük Stop Kayması (%)', p.minimum_stop_slippage_pct, 'Stop emri tetiklenirken beklenen en düşük fiyat kayması (slippage) payı.', true) }}
-  {{ num_field('maximum_stop_slippage_pct', 'En Yüksek Stop Kayması (%)', p.maximum_stop_slippage_pct, 'Stop emri tetiklenirken tolere edilen en yüksek fiyat kayması (slippage) payı.', true) }}
-  {{ num_field('profile_stop_slippage_pct', 'Profil Stop Kayması (%)', p.profile_stop_slippage_pct, 'Bu profilde stop hesaplamalarında kullanılan varsayılan kayma (slippage) yüzdesi.', true) }}
-  {{ num_field('max_account_data_age_seconds', 'En Fazla Hesap Verisi Yaşı (sn)', p.max_account_data_age_seconds, 'Hesap bakiye/pozisyon verisinin işlem kararı için hâlâ güncel sayılacağı en fazla saniye.', true) }}
+  {{ num_field('min_stop_distance_pct', 'En Düşük Stop Mesafesi (%)', p.min_stop_distance_pct, 'Giriş fiyatı ile stop-loss arasında bulunması gereken en düşük yüzde mesafe.') }}
+  {{ num_field('max_stop_distance_pct', 'En Yüksek Stop Mesafesi (%)', p.max_stop_distance_pct, 'Giriş fiyatı ile stop-loss arasında izin verilen en yüksek yüzde mesafe.') }}
+  {{ num_field('minimum_stop_slippage_pct', 'En Düşük Stop Kayması (%)', p.minimum_stop_slippage_pct, 'Stop emri tetiklenirken beklenen en düşük fiyat kayması (slippage) payı.') }}
+  {{ num_field('maximum_stop_slippage_pct', 'En Yüksek Stop Kayması (%)', p.maximum_stop_slippage_pct, 'Stop emri tetiklenirken tolere edilen en yüksek fiyat kayması (slippage) payı.') }}
+  {{ num_field('profile_stop_slippage_pct', 'Profil Stop Kayması (%)', p.profile_stop_slippage_pct, 'Bu profilde stop hesaplamalarında kullanılan varsayılan kayma (slippage) yüzdesi.') }}
+  {{ num_field('max_account_data_age_seconds', 'En Fazla Hesap Verisi Yaşı (sn)', p.max_account_data_age_seconds, 'Hesap bakiye/pozisyon verisinin işlem kararı için hâlâ güncel sayılacağı en fazla saniye.') }}
 {% endcall %}
 {% call field_section("Sinyal Eşikleri", "AI sinyalinin bir emre dönüşmesi için sağlanması gereken güven ve piyasa koşulu eşikleri.") %}
-  {{ num_field('min_confidence_for_buy', 'AL için En Düşük Güven Skoru', p.min_confidence_for_buy, 'AI\'nın AL sinyali üretmesi için gereken en düşük güven yüzdesi (0-100).', true) }}
-  {{ num_field('min_confidence_for_sell', 'SAT için En Düşük Güven Skoru', p.min_confidence_for_sell, 'AI\'nın SAT sinyali üretmesi için gereken en düşük güven yüzdesi (0-100).', true) }}
+  {{ num_field('min_confidence_for_buy', 'AL için En Düşük Güven Skoru', p.min_confidence_for_buy, 'AI\'nın AL sinyali üretmesi için gereken en düşük güven yüzdesi (0-100).') }}
+  {{ num_field('min_confidence_for_sell', 'SAT için En Düşük Güven Skoru', p.min_confidence_for_sell, 'AI\'nın SAT sinyali üretmesi için gereken en düşük güven yüzdesi (0-100).') }}
   {{ num_field('max_natr_for_buy', 'AL için En Yüksek Oynaklık (nATR)', p.max_natr_for_buy, 'Normalize ATR cinsinden, AL işlemine izin verilen en yüksek oynaklık seviyesi.') }}
   {{ num_field('max_depth_queue_drop_pct_for_buy', 'AL için En Yüksek Derinlik Kuyruğu Düşüşü (%)', p.max_depth_queue_drop_pct_for_buy, 'Emir defterindeki alım kuyruğunun izin verilen en yüksek düşüş yüzdesi.') }}
   {{ num_field('max_spread_pct_for_buy', 'AL için En Yüksek Spread (%)', p.max_spread_pct_for_buy, 'Alış-satış fiyat farkının (spread) AL işlemi için izin verilen en yüksek yüzdesi.') }}
@@ -113,14 +110,14 @@
   {{ num_field('near_wall_distance_pct', 'Satış Duvarına Yakınlık Mesafesi (%)', p.near_wall_distance_pct, 'Fiyatın büyük bir satış duvarına ne kadar yakınsa "yakın" sayılacağını belirleyen yüzde mesafe.') }}
   {{ bool_field('block_buy_on_strong_sell_pressure', 'Güçlü Satış Baskısında AL\'ı Engelle', p.block_buy_on_strong_sell_pressure, 'Açık: satış baskısı skoru eşiği aşarsa AL sinyalleri otomatik engellenir.') }}
   {{ bool_field('block_buy_on_near_ask_wall', 'Satış Duvarına Yakınken AL\'ı Engelle', p.block_buy_on_near_ask_wall, 'Açık: fiyat büyük bir satış duvarına çok yaklaşmışsa AL sinyalleri engellenir.') }}
-  {{ bool_field('require_alpha_trend_alignment', 'AlphaTrend Uyumu Zorunlu Olsun', p.require_alpha_trend_alignment, 'Açık: işlem yönü AlphaTrend göstergesiyle uyumlu değilse sinyal reddedilir.', true) }}
-  {{ bool_field('require_indicator_consensus_alignment', 'Gösterge Konsensüsü Zorunlu Olsun', p.require_indicator_consensus_alignment, 'Açık: birden fazla teknik gösterge aynı yönde uyuşmadıkça sinyal reddedilir.', true) }}
+  {{ bool_field('require_alpha_trend_alignment', 'AlphaTrend Uyumu Zorunlu Olsun', p.require_alpha_trend_alignment, 'Açık: işlem yönü AlphaTrend göstergesiyle uyumlu değilse sinyal reddedilir.') }}
+  {{ bool_field('require_indicator_consensus_alignment', 'Gösterge Konsensüsü Zorunlu Olsun', p.require_indicator_consensus_alignment, 'Açık: birden fazla teknik gösterge aynı yönde uyuşmadıkça sinyal reddedilir.') }}
 {% endcall %}
-{% call field_section("İzinler", "Bu profilin izin verdiği işlem türleri — bazıları riskli olduğu için ayrıca onay gerektirir.") %}
+{% call field_section("İzinler", "Bu profilin izin verdiği işlem türleri.") %}
   {{ bool_field('allow_sell_long_term', 'Uzun Vadeli Pozisyonların Satışına İzin Ver', p.allow_sell_long_term, 'Kapalı iken, "uzun vadeli" işaretli semboller bu profille satılamaz.') }}
   {{ bool_field('allow_short_selling', 'Açığa Satışa İzin Ver', p.allow_short_selling, 'Açık: sahip olunmayan sembollerde açığa satış (short) işlemlerine izin verir.') }}
-  {{ bool_field('allow_real_live', 'REAL_LIVE Moduna İzin Ver', p.allow_real_live, 'Açık: bu profil gerçek parayla emir gönderen REAL_LIVE modunda kullanılabilir.', true) }}
-  {{ bool_field('allow_margin_buying', 'Kredili/Marjin Alıma İzin Ver', p.allow_margin_buying, 'Açık: kredili (marjinli) alım işlemlerine izin verir.', true) }}
+  {{ bool_field('allow_real_live', 'REAL_LIVE Moduna İzin Ver', p.allow_real_live, 'Açık: bu profil gerçek parayla emir gönderen REAL_LIVE modunda kullanılabilir.') }}
+  {{ bool_field('allow_margin_buying', 'Kredili/Marjin Alıma İzin Ver', p.allow_margin_buying, 'Açık: kredili (marjinli) alım işlemlerine izin verir.') }}
   {{ bool_field('allow_demo_live', 'DEMO_LIVE Moduna İzin Ver', p.allow_demo_live, 'Açık: bu profil, gerçek fiyatlarla ama sanal parayla çalışan DEMO_LIVE modunda kullanılabilir.') }}
 {% endcall %}
 {% call field_section("Bot Davranışı", "Tarama sıklığı ve emir zamanlama ayarları.") %}
@@ -138,8 +135,6 @@
   <div class="text-sm" style="line-height:1.7">
     <strong>Trade Profili</strong> nedir? Botun ne kadar riske gireceğini belirleyen hazır ayar takımıdır — emir/pozisyon limitleri,
     sinyal güven eşikleri ve izinlerin tümü bir profilde toplanır. Aynı anda yalnızca <strong>bir</strong> profil aktiftir ve bot tüm kararlarını o profile göre alır.
-    Bir alanın yanında <span class="badge badge-sell" style="font-size:10px;padding:1px 7px">hassas</span> etiketi varsa, o alanı riski
-    <em>artıracak</em> yönde değiştirmek "Confirmation" kutusuna <span class="mono">{{ confirmation }}</span> yazmanızı gerektirir.
   </div>
 </div>
 
@@ -189,12 +184,6 @@
           <label class="form-label">Neden</label>
           <input class="form-input" name="reason" placeholder="Aktifleştirme nedeni" style="width:160px" required>
         </div>
-        {% if p.risk_level in ['HIGH', 'EXTREME'] %}
-        <div class="form-group" style="margin-bottom:0">
-          <label class="form-label">Onay (yazın: {{ confirmation }})</label>
-          <input class="form-input" name="confirmation" placeholder="{{ confirmation }}" style="width:120px" required>
-        </div>
-        {% endif %}
         <button class="btn btn-primary btn-sm" type="submit">Aktifleştir</button>
       </form>
       {% endif %}
@@ -237,11 +226,6 @@
           <div class="form-group" style="margin-bottom:0">
             <label class="form-label">Değişiklik Nedeni</label>
             <input class="form-input" name="reason" placeholder="Değişiklik nedeni" required>
-          </div>
-          <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">Onay</label>
-            <input class="form-input" name="confirmation" placeholder="{{ confirmation }}">
-            <div class="form-hint">Limit artırma, güven eşiği düşürme, uyum kontrollerini kapatma veya REAL_LIVE/marjin iznini açma için zorunlu.</div>
           </div>
           <button class="btn btn-primary" type="submit">Kaydet</button>
         </div>

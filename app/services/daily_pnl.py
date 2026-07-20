@@ -316,7 +316,7 @@ async def apply_daily_loss_limit(
     """
     if response.action != SignalAction.BUY:
         return response
-    if not (response.allow_order or response.requires_confirmation):
+    if not response.allow_order:
         return response
     try:
         async with async_session_factory() as session:
@@ -334,7 +334,6 @@ async def apply_daily_loss_limit(
     )
     response.action = SignalAction.WAIT
     response.allow_order = False
-    response.requires_confirmation = False
     response.qty = 0
     response.reason = f"Daily loss limit: {reason} | {response.reason}"
     return response

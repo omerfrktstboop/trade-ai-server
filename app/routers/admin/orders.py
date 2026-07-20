@@ -1,4 +1,4 @@
-"""Admin replay, order/AI/audit logs, and manual-approval routes."""
+"""Admin replay and order/AI/audit log routes."""
 
 from __future__ import annotations
 
@@ -18,9 +18,6 @@ from app.models.db import (
     RiskDecision,
     TradeProfile,
 )
-from app.services.admin_config import (
-    RISKY_CONFIRMATION,
-)
 from app.services.replay import replay_batch
 from app.services.trade_profile import (
     list_profiles,
@@ -34,7 +31,6 @@ from app.routers.admin._shared import (
     _status_strip_context,
     _latest,
 )
-
 
 @admin_router.get("/replay", response_class=HTMLResponse)
 async def admin_replay(request: Request) -> HTMLResponse:
@@ -142,7 +138,6 @@ async def _logs_page(
             "risk_decisions": risk_decisions,
             "order_logs": order_logs,
             "audit_logs": audit_logs,
-            "confirmation": RISKY_CONFIRMATION,
             "error": error,
             **status_ctx,
         },
@@ -168,14 +163,6 @@ async def admin_logs_delete_all(request: Request, table: str) -> Any:
     model = _log_table_or_404(table)
     form = await request.form()
     reason = str(form.get("reason") or "Delete all logs")
-    confirmation = str(form.get("confirmation") or "")
-
-    if confirmation != RISKY_CONFIRMATION:
-        return await _logs_page(
-            request,
-            identity,
-            error=f"delete-all requires confirmation={RISKY_CONFIRMATION}",
-        )
 
     async with async_session_factory() as session:
         result = await session.execute(delete(model))
@@ -197,15 +184,8 @@ async def admin_logs_delete_selected(request: Request, table: str) -> Any:
     model = _log_table_or_404(table)
     form = await request.form()
     reason = str(form.get("reason") or "Delete selected logs")
-    confirmation = str(form.get("confirmation") or "")
     ids = [int(raw) for raw in form.getlist("ids") if str(raw).strip().isdigit()]
 
-    if confirmation != RISKY_CONFIRMATION:
-        return await _logs_page(
-            request,
-            identity,
-            error=f"delete-selected requires confirmation={RISKY_CONFIRMATION}",
-        )
     if not ids:
         return await _logs_page(request, identity, error="Silinecek kayıt seçilmedi")
 
@@ -285,6 +265,5 @@ async def admin_log_detail(request: Request, request_id: str) -> HTMLResponse:
     )
 
 
-# v2: manuel onay (MANUAL) akışı kaldırıldı — /admin/approvals route'ları
-# ve approve/reject uçları silindi. Emir yetkisi yalnızca systemMode=AUTO_TRADE
-# + account watcher + risk kapılarıyla verilir.
+# Emir yetkisi yalnızca systemMode=AUTO_TRADE + account watcher + risk
+# kapılarıyla verilir.

@@ -36,12 +36,6 @@ namespace Matriks.Lean.Algotrader
 		[Parameter(false)]
 		public bool EnableRealOrders;
 
-		[Parameter(true)]
-		public bool RequireDemoAccount;
-
-		[Parameter(false)]
-		public bool DemoAccountConfirmed;
-
 		[Parameter(1000)]
 		public decimal MaxOrderValueTl;
 
@@ -128,7 +122,6 @@ namespace Matriks.Lean.Algotrader
 				+ " mode=" + NormalizeMode(Mode)
 				+ " enableDemoOrders=" + EnableDemoOrders
 				+ " enableRealOrders=" + EnableRealOrders
-				+ " demoConfirmed=" + DemoAccountConfirmed
 				+ " scanIntervalMinutes=" + ScanIntervalMinutes);
 		}
 
@@ -513,12 +506,6 @@ namespace Matriks.Lean.Algotrader
 				return;
 			}
 
-			if (response.RequiresConfirmation)
-			{
-				await RejectOrderAsync(response, "requiresConfirmation=true");
-				return;
-			}
-
 			if (NormalizeOrderType(response.OrderType) != "LIMIT")
 			{
 				await RejectOrderAsync(response, "orderType is not LIMIT: " + response.OrderType);
@@ -587,7 +574,7 @@ namespace Matriks.Lean.Algotrader
 
 			if (mode == "MANUAL")
 			{
-				await RejectOrderAsync(response, "Mode=MANUAL requires human confirmation");
+				await RejectOrderAsync(response, "Mode=MANUAL is unsupported");
 				return;
 			}
 
@@ -600,7 +587,7 @@ namespace Matriks.Lean.Algotrader
 				}
 				if (!IsDemoAccount())
 				{
-					await RejectOrderAsync(response, "DEMO_LIVE blocked. DemoAccountConfirmed=false");
+					await RejectOrderAsync(response, "DEMO_LIVE blocked: active account is not DEMO");
 					return;
 				}
 			}
@@ -611,9 +598,9 @@ namespace Matriks.Lean.Algotrader
 					await RejectOrderAsync(response, "REAL_LIVE blocked. EnableRealOrders=false");
 					return;
 				}
-				if (RequireDemoAccount && !IsDemoAccount())
+				if (!IsDemoAccount())
 				{
-					await RejectOrderAsync(response, "RequireDemoAccount=true and demo account is not confirmed");
+					await RejectOrderAsync(response, "REAL_LIVE sample path is restricted to a DEMO account");
 					return;
 				}
 			}
@@ -717,12 +704,15 @@ namespace Matriks.Lean.Algotrader
 
 		private bool IsDemoAccount()
 		{
-			if (!RequireDemoAccount)
+			try
 			{
-				return true;
+				var tradeUser = GetTradeUser();
+				return tradeUser != null && tradeUser.TestAutoOrder;
 			}
-
-			return DemoAccountConfirmed;
+			catch
+			{
+				return false;
+			}
 		}
 
 		private void ApplyFlatCompatibilityFields(AgenticSignalRequest request)
@@ -1149,9 +1139,6 @@ namespace Matriks.Lean.Algotrader
 		[JsonProperty("allowOrder")]
 		public bool AllowOrder { get; set; }
 
-		[JsonProperty("requiresConfirmation")]
-		public bool RequiresConfirmation { get; set; }
-
 		[JsonProperty("reason")]
 		public string Reason { get; set; }
 
@@ -1215,7 +1202,6 @@ namespace Matriks.Lean.Algotrader
 				Symbol = symbol,
 				Action = "WAIT",
 				AllowOrder = false,
-				RequiresConfirmation = false,
 				Reason = reason,
 				Qty = 0,
 				OrderType = "NONE",
@@ -1284,9 +1270,9 @@ namespace Matriks.Lean.Algotrader
 
 /*
 Kullanim notu:
-1. Ilk test: Mode = "PAPER", EnableDemoOrders = true, DemoAccountConfirmed = false.
-2. Sonra MANUAL moda gecip server kararlarini ve requiresConfirmation akislarini izle.
-3. Demo emir testi icin: Mode = "DEMO_LIVE", EnableDemoOrders = true, DemoAccountConfirmed = true.
+1. Ilk test: Mode = "PAPER", EnableDemoOrders = true.
+2. Sonra server kararlarini ve allowOrder akislarini izle.
+3. Demo emir testi icin: Mode = "DEMO_LIVE", EnableDemoOrders = true ve aktif hesap DEMO olmali.
 4. REAL_LIVE default kapali kalmali: EnableRealOrders = false.
 5. MARKET emir asla kullanilmaz; sadece LIMIT response kabul edilir.
 */

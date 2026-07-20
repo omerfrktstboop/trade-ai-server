@@ -125,18 +125,17 @@ class TestAdminConfig:
         assert audit.new_value == "30"
         assert audit.reason == "raise test limit"
 
-    def test_auto_trade_requires_confirmation(
+    def test_auto_trade_update_succeeds_directly(
         self, client: TestClient, auth_headers: dict[str, str]
     ):
-        """v2: systemMode=AUTO_TRADE'e geçiş CONFIRM ister."""
         resp = client.put(
             "/api/admin/config/systemMode",
             headers=auth_headers,
             json={"value": "AUTO_TRADE", "reason": "test auto trade"},
         )
 
-        assert resp.status_code == 400
-        assert "requires confirmation" in resp.json()["detail"]
+        assert resp.status_code == 200
+        assert resp.json()["value"] == "AUTO_TRADE"
 
     def test_config_page_renders(
         self, client: TestClient, auth_headers: dict[str, str]
@@ -658,11 +657,11 @@ class TestLogDeletion:
         resp = client.post(
             "/admin/logs/not-a-real-table/delete-all",
             headers=auth_headers,
-            data={"reason": "test", "confirmation": "CONFIRM"},
+            data={"reason": "test"},
         )
         assert resp.status_code == 404
 
-    def test_delete_all_without_confirmation_leaves_rows(
+    def test_delete_all_wipes_rows_directly(
         self, client: TestClient, auth_headers: dict[str, str]
     ):
         asyncio.run(self._seed(self._ai_decisions(3)))
@@ -671,24 +670,6 @@ class TestLogDeletion:
             "/admin/logs/ai-decisions/delete-all",
             headers=auth_headers,
             data={"reason": "test"},
-        )
-        assert "requires confirmation" in resp.text
-
-        async def _count() -> int:
-            async with async_session_factory() as session:
-                return len((await session.execute(select(AiDecision))).scalars().all())
-
-        assert asyncio.run(_count()) == 3
-
-    def test_delete_all_with_confirmation_wipes_table(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ):
-        asyncio.run(self._seed(self._ai_decisions(3)))
-
-        resp = client.post(
-            "/admin/logs/ai-decisions/delete-all",
-            headers=auth_headers,
-            data={"reason": "cleanup", "confirmation": "CONFIRM"},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -699,7 +680,7 @@ class TestLogDeletion:
 
         assert asyncio.run(_count()) == 0
 
-    def test_delete_selected_without_confirmation_leaves_rows(
+    def test_delete_selected_removes_rows_directly(
         self, client: TestClient, auth_headers: dict[str, str]
     ):
         ids = asyncio.run(self._seed(self._risk_decisions(2)))
@@ -708,8 +689,9 @@ class TestLogDeletion:
             "/admin/logs/risk-decisions/delete-selected",
             headers=auth_headers,
             data={"reason": "test", "ids": [str(ids[0])]},
+            follow_redirects=False,
         )
-        assert "requires confirmation" in resp.text
+        assert resp.status_code == 303
 
         async def _count() -> int:
             async with async_session_factory() as session:
@@ -717,7 +699,7 @@ class TestLogDeletion:
                     (await session.execute(select(RiskDecision))).scalars().all()
                 )
 
-        assert asyncio.run(_count()) == 2
+        assert asyncio.run(_count()) == 1
 
     def test_delete_selected_with_no_ids_shows_error(
         self, client: TestClient, auth_headers: dict[str, str]
@@ -727,7 +709,7 @@ class TestLogDeletion:
         resp = client.post(
             "/admin/logs/order-logs/delete-selected",
             headers=auth_headers,
-            data={"reason": "test", "confirmation": "CONFIRM"},
+            data={"reason": "test"},
         )
         assert "Silinecek kayıt seçilmedi" in resp.text
 
@@ -747,7 +729,6 @@ class TestLogDeletion:
             headers=auth_headers,
             data={
                 "reason": "remove first two",
-                "confirmation": "CONFIRM",
                 "ids": [str(ids[0]), str(ids[1])],
             },
             follow_redirects=False,
@@ -772,7 +753,7 @@ class TestLogDeletion:
         resp = client.post(
             "/admin/logs/audit-logs/delete-all",
             headers=auth_headers,
-            data={"reason": "cleanup", "confirmation": "CONFIRM"},
+            data={"reason": "cleanup"},
             follow_redirects=False,
         )
         assert resp.status_code == 303

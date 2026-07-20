@@ -370,7 +370,6 @@ def _buy_response() -> SignalResponse:
         confidenceScore=90.0,
         riskScore=10.0,
         allowOrder=True,
-        requiresConfirmation=False,
         reason="test buy",
         entryRange=EntryRange(min=99.0, max=100.0),
         stopLoss=Decimal("95"),

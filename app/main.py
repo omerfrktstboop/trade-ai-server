@@ -17,6 +17,7 @@ for _stream in (sys.stdout, sys.stderr):
 from app.config import settings
 from app.db.init_db import init_db
 from app.routers.admin import admin_api_router, admin_router
+from app.routers.gateway_log import router as gateway_log_router
 from app.routers.health import router as health_router
 from app.routers.gateway_config import router as gateway_config_router
 from app.routers.order_result import router as order_result_router
@@ -81,7 +82,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from app.services.scanner import scanner
 
         scanner.start()
-        print("🔍 Scanner started (Phase 1: PAPER-only).")
+        print("🔍 Scanner started; dispatch remains gated by systemMode and preflight.")
 
     if settings.position_sync_enabled:
         from app.services.position_sync import position_synchronizer
@@ -139,6 +140,7 @@ app.include_router(gateway_config_router, prefix="/api")
 # Protected (Bearer token required)
 app.include_router(signal_router, prefix="/api")
 app.include_router(order_result_router, prefix="/api")
+app.include_router(gateway_log_router, prefix="/api")
 app.include_router(signal_history_router, prefix="/api")
 app.include_router(admin_api_router, prefix="/api/admin")
 app.include_router(admin_router, prefix="/admin")

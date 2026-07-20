@@ -15,7 +15,6 @@ from app.models.db import (
     PositionManagementDecision,
 )
 from app.services.admin_config import (
-    RISKY_CONFIRMATION,
     get_admin_config_value,
     set_admin_config_value,
 )
@@ -37,7 +36,6 @@ from app.routers.admin._shared import (
     _latest,
     _notify_gateway_config_reload,
 )
-
 
 @admin_router.get("/positions/management", response_class=HTMLResponse)
 async def admin_position_management(request: Request) -> HTMLResponse:
@@ -112,7 +110,6 @@ async def admin_positions(request: Request) -> HTMLResponse:
             "bot_positions": bot_positions,
             "locked_positions": locked_positions,
             "allowed_symbols": allowed_symbols,
-            "confirmation": RISKY_CONFIRMATION,
             "error": None,
             "message": None,
             **gateway_ctx,
@@ -144,7 +141,6 @@ async def _positions_page_error(
             "bot_positions": bot_positions,
             "locked_positions": locked_positions,
             "allowed_symbols": _split_csv_symbols(allowed_raw),
-            "confirmation": RISKY_CONFIRMATION,
             "error": error,
             "message": None,
             **gateway_ctx,
@@ -160,14 +156,7 @@ async def admin_force_override(request: Request, symbol: str) -> Any:
     form = await request.form()
     action = str(form.get("action") or "").strip().upper()
     reason = str(form.get("reason") or "Manual test override")
-    confirmation = str(form.get("confirmation") or "")
 
-    if confirmation != RISKY_CONFIRMATION:
-        return await _positions_page_error(
-            request,
-            identity,
-            f"force-override requires confirmation={RISKY_CONFIRMATION}",
-        )
     if action not in ("BUY", "SELL"):
         return await _positions_page_error(
             request, identity, f"Unsupported override action: {action or '(empty)'}"
@@ -196,14 +185,6 @@ async def admin_force_sell_all(request: Request) -> Any:
     identity = await require_admin(request)
     form = await request.form()
     reason = str(form.get("reason") or "Force-sell-all test")
-    confirmation = str(form.get("confirmation") or "")
-
-    if confirmation != RISKY_CONFIRMATION:
-        return await _positions_page_error(
-            request,
-            identity,
-            f"force-sell-all requires confirmation={RISKY_CONFIRMATION}",
-        )
 
     async with async_session_factory() as session:
         positions = await _latest(session, BotPosition, 500, order_field="updated_at")

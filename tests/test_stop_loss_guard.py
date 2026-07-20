@@ -104,7 +104,6 @@ class TestCheckStopLossPositions:
         assert response.qty == 10
         assert response.order_type.value == "LIMIT"
         assert response.allow_order is True
-        assert response.requires_confirmation is False
         assert float(response.price) == 68.0
 
     async def test_partial_fill_position_sells_actual_held_qty(self):

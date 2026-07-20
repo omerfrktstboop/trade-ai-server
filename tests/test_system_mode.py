@@ -15,7 +15,6 @@ from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
 from app.models.db import RiskDecision, SystemConfig, TradeWatchlistSymbol
 from app.services.admin_config import (
-    RISKY_CONFIRMATION,
     get_system_mode,
     is_auto_trade,
     set_admin_config_value,
@@ -88,7 +87,6 @@ async def _set_system_mode(value: str) -> None:
             "systemMode",
             value,
             changed_by="test",
-            confirmation=RISKY_CONFIRMATION if value == "AUTO_TRADE" else None,
         )
 
 
@@ -123,12 +121,12 @@ async def test_auto_trade_allows_dispatch(monkeypatch):
     assert len(fake.orders) == 1
 
 
-async def test_switching_to_auto_trade_requires_confirmation():
+async def test_switching_to_auto_trade_succeeds_directly():
     async with async_session_factory() as session:
-        with pytest.raises(ValueError, match="confirmation"):
-            await set_admin_config_value(
-                session, "systemMode", "AUTO_TRADE", changed_by="test"
-            )
+        await set_admin_config_value(
+            session, "systemMode", "AUTO_TRADE", changed_by="test"
+        )
+        assert await get_system_mode(session) == "AUTO_TRADE"
 
 
 async def test_invalid_system_mode_value_rejected():

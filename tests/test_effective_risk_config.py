@@ -10,8 +10,7 @@ from app.services.effective_risk_config import (
     EnvironmentRiskLimits,
     SystemRiskConfig,
 )
-from app.services.admin_config import _requires_confirmation, _serialize_value
-from app.services.trade_profile import profile_requires_confirmation
+from app.services.admin_config import _serialize_value
 
 
 def profile(**overrides):
@@ -104,18 +103,6 @@ def test_environment_fingerprint_is_deterministic_and_secret_free():
     assert len(first) == 64
 
 
-def test_risk_increasing_system_config_changes_require_confirmation():
-    assert _requires_confirmation("sizingRiskPerTradePct", "0.5", "0.6")
-    assert _requires_confirmation("sizingMinStopDistancePct", "0.2", "0.1")
-    assert _requires_confirmation("sizingProfileStopSlippagePct", "0.3", "0.2")
-    assert _requires_confirmation("sizingMaxAccountDataAgeSeconds", "60", "90")
-    assert not _requires_confirmation("sizingMaxOrderValueTl", "1000", "900")
-    assert _requires_confirmation("sizingAllowMarginBuying", "false", "true")
-    assert _requires_confirmation(
-        "accountReservationHandling", "UNKNOWN", "BACKEND_DEDUCTED"
-    )
-
-
 def test_reservation_policy_config_rejects_unknown_values():
     assert (
         _serialize_value(
@@ -127,11 +114,3 @@ def test_reservation_policy_config_rejects_unknown_values():
     )
     with pytest.raises(ValueError):
         _serialize_value("accountReservationHandling", "guess", "reservation_handling")
-
-
-def test_risk_increasing_trade_profile_changes_require_confirmation():
-    current = profile()
-    assert profile_requires_confirmation(current, {"risk_per_trade_pct": "5"})
-    assert profile_requires_confirmation(current, {"min_stop_distance_pct": "0"})
-    assert profile_requires_confirmation(current, {"profile_stop_slippage_pct": "0"})
-    assert profile_requires_confirmation(current, {"allow_margin_buying": True})

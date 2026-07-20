@@ -322,7 +322,6 @@ class SignalResponse(BaseModel):
     confidence_score: float = Field(..., alias="confidenceScore")
     risk_score: float = Field(..., alias="riskScore")
     allow_order: bool = Field(..., alias="allowOrder")
-    requires_confirmation: bool = Field(False, alias="requiresConfirmation")
     reason: str
     entry_range: Optional[EntryRange] = Field(None, alias="entryRange")
     stop_loss: Optional[Decimal] = Field(None, alias="stopLoss")
@@ -354,7 +353,6 @@ class AgentSignalResponse(BaseModel):
     confidence_score: float = Field(0.0, alias="confidenceScore")
     risk_score: float = Field(0.0, alias="riskScore")
     allow_order: bool = Field(False, alias="allowOrder")
-    requires_confirmation: bool = Field(False, alias="requiresConfirmation")
     reason: str = ""
     entry_range: Optional[EntryRange] = Field(None, alias="entryRange")
     stop_loss: Optional[float] = Field(None, alias="stopLoss")
@@ -407,7 +405,6 @@ class AgenticSignalResponse(BaseModel):
     symbol: str
     action: AgenticAction
     allow_order: bool = Field(..., alias="allowOrder")
-    requires_confirmation: bool = Field(..., alias="requiresConfirmation")
     reason: str
     target_symbol: Optional[str] = Field(None, alias="targetSymbol")
     required_data_type: Optional[AgenticDataType] = Field(

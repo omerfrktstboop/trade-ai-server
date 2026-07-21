@@ -120,13 +120,21 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "DeepSeek'in değerlendirme sırasında read-only veri araçlarını "
         "çağırmasına izin verir (panel > env; .env AI_TOOLS_ENABLED fallback).",
     ),
+    "dailyMaxLossPct": ConfigDefinition(
+        "dailyMaxLossPct",
+        "decimal",
+        "3",
+        "Günlük maksimum zarar yüzdesi. Doğrulanmış hesap özkaynağı ile pozitif "
+        "bot sermaye bütçesinin daha küçüğüne uygulanır; özkaynak yoksa pozitif "
+        "bot bütçesi kullanılır. 0 = yüzde sınırı devre dışı.",
+    ),
     "dailyMaxLossTl": ConfigDefinition(
         "dailyMaxLossTl",
         "decimal",
         "0",
-        "Günlük maksimum zarar (TL). Aşılınca YENİ BUY'lar bloklanır; SELL ve "
-        "stop-loss bekçisi asla etkilenmez. 0 = devre dışı. Realized zarar tek "
-        "başına aşarsa veri boşluğunda bile bloklar (fail-closed).",
+        "İsteğe bağlı mutlak günlük maksimum zarar (TL). Yüzde sınırıyla birlikte "
+        "pozitifse daha sıkı olan uygulanır. 0 = mutlak sınır devre dışı; SELL ve "
+        "stop-loss bekçisi etkilenmez.",
     ),
     "significancePriceMovePct": ConfigDefinition(
         "significancePriceMovePct",
@@ -522,6 +530,7 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
 RISKY_CONFIG_KEYS = {
     "systemMode",
     "realAccountArmed",
+    "dailyMaxLossPct",
     "dailyMaxLossTl",
     "killSwitchEnabled",
     "scannerEnabled",
@@ -601,6 +610,7 @@ CONFIG_SECTION_DEFINITIONS = (
             "killSwitchEnabled",
             "scannerEnabled",
             "aiToolCallingEnabled",
+            "dailyMaxLossPct",
             "dailyMaxLossTl",
             "significancePriceMovePct",
         ),
@@ -775,6 +785,7 @@ CONFIG_LABELS: dict[str, str] = {
     "killSwitchEnabled": "Acil Durdurma (Kill Switch)",
     "scannerEnabled": "Tarayıcı Aktif",
     "aiToolCallingEnabled": "AI Tool-Calling Aktif",
+    "dailyMaxLossPct": "Günlük Maks. Zarar (%)",
     "dailyMaxLossTl": "Günlük Maks. Zarar (TL)",
     "significancePriceMovePct": "Önem Fiyat Eşiği (%)",
     "portfolioScanIntervalMinutes": "Portföy Tarama Aralığı (dk)",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from typing import Any
@@ -24,6 +25,7 @@ from app.services.admin_config import (
 from app.services.ai_provider import get_ai_provider_status
 from app.services.block_reason_classifier import classify_block_reason
 from app.services.cash_reservation import calculate_backend_reserved_cash
+from app.services.daily_pnl import get_daily_loss_guard_status
 from app.services.daily_trade_count import get_today_trade_counts
 from app.services.matriks_gateway import (
     GatewayError,
@@ -306,6 +308,21 @@ async def _dashboard_context() -> dict[str, Any]:
     }
 
 
+def _unavailable_daily_loss_summary(reason: str) -> dict[str, Any]:
+    return {
+        "status": "UNAVAILABLE",
+        "enabled": True,
+        "configuredPct": None,
+        "configuredTl": None,
+        "capitalSource": "NONE",
+        "capitalBaseTl": None,
+        "percentageCapTl": None,
+        "effectiveCapTl": None,
+        "pnl": None,
+        "reason": reason,
+    }
+
+
 async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
     """Collect gateway, scanner and runtime state; every source is optional."""
     result: dict[str, Any] = {
@@ -333,8 +350,10 @@ async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
             "consecutiveFailures": None,
             "error": str(exc),
         }
+    gateway_health: dict[str, Any] | None = None
     try:
         health = await gateway_client.health()
+        gateway_health = health
         result["gateway"] = {
             "reachable": True,
             "health": health,
@@ -355,6 +374,9 @@ async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
         result["gateway"]["error"] = str(exc)
 
     if db_error is not None:
+        result["runtime"]["dailyLossGuard"] = _unavailable_daily_loss_summary(
+            "daily loss guard unavailable because database status is unavailable"
+        )
         return result
     try:
         async with async_session_factory() as session:
@@ -405,4 +427,39 @@ async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("Bot status DB query failed: %s", exc)
         result["runtime"].update({"dbAvailable": False, "dbError": str(exc)})
+
+    if result["runtime"].get("dbAvailable"):
+        try:
+            async with async_session_factory() as session:
+                daily_loss = await asyncio.wait_for(
+                    get_daily_loss_guard_status(
+                        session,
+                        gateway_client,
+                        gateway_health=(
+                            gateway_health if gateway_health is not None else {}
+                        ),
+                    ),
+                    timeout=5.0,
+                )
+            result["runtime"]["dailyLossGuard"] = (
+                daily_loss.authenticated_summary()
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Daily loss guard dashboard status timed out")
+            result["runtime"]["dailyLossGuard"] = (
+                _unavailable_daily_loss_summary(
+                    "daily loss guard status timed out"
+                )
+            )
+        except Exception as exc:
+            logger.warning("Daily loss guard dashboard status failed: %s", exc)
+            result["runtime"]["dailyLossGuard"] = (
+                _unavailable_daily_loss_summary(
+                    "daily loss guard status unavailable"
+                )
+            )
+    else:
+        result["runtime"]["dailyLossGuard"] = _unavailable_daily_loss_summary(
+            "daily loss guard unavailable because database status is unavailable"
+        )
     return result

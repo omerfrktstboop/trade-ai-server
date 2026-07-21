@@ -64,6 +64,7 @@ from app.services.account_context import (
     get_account_reservation_handling,
 )
 from app.services.cash_reservation import reserve_sized_buy
+from app.services.daily_pnl import get_daily_loss_guard_status
 from app.services.effective_risk_config import resolve_effective_risk_config
 from app.services.matriks_gateway import (
     GatewayError,
@@ -1101,6 +1102,49 @@ class SymbolScanner:
                     response.request_id,
                 )
                 return
+            try:
+                async with async_session_factory() as session:
+                    daily_loss_status = await get_daily_loss_guard_status(
+                        session,
+                        self._gateway,
+                        price_lookup=account_inputs.market_prices,
+                        account_ref=dispatch_account_ref,
+                        account_session_ref=dispatch_account_session_ref,
+                        raw_account=account_inputs.raw_account,
+                        gateway_health=fresh_health,
+                    )
+            except Exception as exc:
+                logger.exception(
+                    "DAILY_LOSS_GUARD_RECHECK_FAILED requestId=%s",
+                    response.request_id,
+                )
+                await notify_risk_block(
+                    "Daily loss guard UNAVAILABLE: BUY blocked",
+                    {
+                        "symbol": response.symbol,
+                        "requestId": response.request_id,
+                        "reason": str(exc),
+                    },
+                )
+                return
+            if daily_loss_status.blocks_buy:
+                logger.warning(
+                    "DAILY_LOSS_GUARD_ORDER_RECHECK_BLOCKED status=%s "
+                    "symbol=%s requestId=%s reason=%s",
+                    daily_loss_status.status.value,
+                    response.symbol,
+                    response.request_id,
+                    daily_loss_status.reason,
+                )
+                await notify_risk_block(
+                    f"Daily loss guard {daily_loss_status.status.value}: BUY blocked",
+                    {
+                        "symbol": response.symbol,
+                        "requestId": response.request_id,
+                        "reason": daily_loss_status.reason,
+                    },
+                )
+                return
             if response.stop_loss is None or response.target_price is None:
                 logger.warning(
                     "BUY blocked: entry/stop/target incomplete requestId=%s",
@@ -1195,9 +1239,16 @@ class SymbolScanner:
         # DB hatası verirse: emir GÖNDERİLMEZ, ledger REJECTED'a çekilir
         # (rezervasyon serbest bırakılır) ve tur atlanır. Aksi halde fill'ler
         # hangi hesaba yazılacağı belirsiz kalırdı (DEMO/REAL karışması riski).
-        async def _block_order(block_reason: str) -> None:
+        # Aynı helper rezervasyon sonrası nihai günlük zarar reddini de doğru
+        # gerekçeyle sonlandırır ve BUY nakit rezervini serbest bırakır.
+        async def _reject_reserved_order(
+            block_reason: str, *, source: str
+        ) -> None:
+            rejection_message = f"pre-send {source}: {block_reason}"
             logger.error(
-                "Order blocked (account_ref fail-closed) requestId=%s reason=%s",
+                "Order rejected before gateway send source=%s requestId=%s "
+                "reason=%s",
+                source,
                 response.request_id,
                 block_reason,
             )
@@ -1215,21 +1266,31 @@ class SymbolScanner:
                             session,
                             olog,
                             status="REJECTED",
-                            message=f"account_ref stamping failed: {block_reason}",
+                            message=rejection_message,
+                        )
+                    else:
+                        logger.error(
+                            "Cannot mark pre-send rejection: OrderLog missing "
+                            "requestId=%s source=%s",
+                            response.request_id,
+                            source,
                         )
             except Exception:
                 logger.exception(
-                    "Failed to mark ledger REJECTED after account_ref block "
-                    "requestId=%s",
+                    "Failed to mark reserved order REJECTED requestId=%s source=%s",
                     response.request_id,
+                    source,
                 )
             await notify_risk_block(
-                f"Order blocked (account_ref): {block_reason}",
+                f"Order blocked before send ({source}): {block_reason}",
                 {"symbol": response.symbol, "requestId": response.request_id},
             )
 
         if not dispatch_account_ref or not dispatch_account_session_ref:
-            await _block_order("dispatch account/session reference is empty")
+            await _reject_reserved_order(
+                "dispatch account/session reference is empty",
+                source="account_ref verification",
+            )
             return
         try:
             async with async_session_factory() as session:
@@ -1241,17 +1302,63 @@ class SymbolScanner:
                     )
                 ).scalar_one_or_none()
             if olog is None:
-                await _block_order("OrderLog not found before send")
+                await _reject_reserved_order(
+                    "OrderLog not found before send",
+                    source="account_ref verification",
+                )
                 return
             if olog.account_ref != dispatch_account_ref:
-                await _block_order(
+                await _reject_reserved_order(
                     f"OrderLog.account_ref mismatch "
-                    f"(stored={olog.account_ref!r} expected={dispatch_account_ref!r})"
+                    f"(stored={olog.account_ref!r} expected={dispatch_account_ref!r})",
+                    source="account_ref verification",
                 )
                 return
         except Exception as exc:
-            await _block_order(f"account_ref verification error: {exc}")
+            await _reject_reserved_order(
+                f"account_ref verification error: {exc}",
+                source="account_ref verification",
+            )
             return
+
+        if response.action == SignalAction.BUY:
+            try:
+                final_health = await self._gateway.health()
+                async with async_session_factory() as session:
+                    final_daily_loss_status = await get_daily_loss_guard_status(
+                        session,
+                        self._gateway,
+                        price_lookup=None,
+                        account_ref=dispatch_account_ref,
+                        account_session_ref=dispatch_account_session_ref,
+                        raw_account=None,
+                        gateway_health=final_health,
+                    )
+            except Exception as exc:
+                logger.exception(
+                    "DAILY_LOSS_GUARD_FINAL_CHECK_FAILED requestId=%s",
+                    response.request_id,
+                )
+                await _reject_reserved_order(
+                    f"UNAVAILABLE: {exc}",
+                    source="daily loss guard",
+                )
+                return
+            if final_daily_loss_status.blocks_buy:
+                logger.warning(
+                    "DAILY_LOSS_GUARD_FINAL_CHECK_BLOCKED status=%s symbol=%s "
+                    "requestId=%s reason=%s",
+                    final_daily_loss_status.status.value,
+                    response.symbol,
+                    response.request_id,
+                    final_daily_loss_status.reason,
+                )
+                await _reject_reserved_order(
+                    f"{final_daily_loss_status.status.value}: "
+                    f"{final_daily_loss_status.reason}",
+                    source="daily loss guard",
+                )
+                return
 
         try:
             outcome = await self._gateway.send_order(

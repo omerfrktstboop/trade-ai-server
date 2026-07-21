@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import shutil
 from datetime import datetime, timezone
@@ -12,7 +13,8 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.db.session import async_session_factory
-from app.services.admin_config import is_kill_switch_enabled
+from app.services.admin_config import get_system_mode, is_kill_switch_enabled
+from app.services.daily_pnl import DailyLossGuardState, get_daily_loss_guard_status
 from app.services.matriks_gateway import gateway_client
 from app.services.scanner import scanner
 
@@ -36,10 +38,12 @@ async def health_live() -> JSONResponse:
 async def health_ready() -> JSONResponse:
     checks: dict[str, dict] = {}
     ready = True
+    runtime_system_mode: str | None = None
     try:
         async with async_session_factory() as session:
             await session.execute(text("SELECT 1"))
             kill_switch = await is_kill_switch_enabled(session)
+            runtime_system_mode = await get_system_mode(session)
             migration = "development-create-all"
             if settings.is_production:
                 migration = (
@@ -60,8 +64,10 @@ async def health_ready() -> JSONResponse:
         ready = False
         checks["database"] = {"ok": False, "error": str(exc)}
 
+    gateway_health: dict | None = None
     try:
         gateway = await gateway_client.health()
+        gateway_health = gateway
         quote_age_by_symbol = gateway.get("quoteAgeSeconds") or {}
         configured_symbols = [str(symbol) for symbol in gateway.get("symbols") or []]
         quote_symbols = list(
@@ -182,6 +188,50 @@ async def health_ready() -> JSONResponse:
     except Exception as exc:
         ready = False
         checks["gateway"] = {"ok": False, "error": str(exc)}
+
+    try:
+        async with async_session_factory() as session:
+            daily_loss = await asyncio.wait_for(
+                get_daily_loss_guard_status(
+                    session,
+                    gateway_client,
+                    gateway_health=(
+                        gateway_health if gateway_health is not None else {}
+                    ),
+                ),
+                timeout=5.0,
+            )
+        daily_loss_ok = daily_loss.status != DailyLossGuardState.UNAVAILABLE
+        required = runtime_system_mode == "AUTO_TRADE" and daily_loss.enabled
+        if required and not daily_loss_ok:
+            ready = False
+        checks["dailyLossGuard"] = {
+            "ok": daily_loss_ok,
+            "enabled": daily_loss.enabled,
+            "status": daily_loss.status.value,
+            "enforced": daily_loss.status == DailyLossGuardState.BREACHED,
+            "blocksNewBuys": daily_loss.blocks_buy,
+            "capitalSource": daily_loss.capital_source.value,
+            "pnlAvailable": daily_loss.pnl is not None,
+            "pnlComplete": (
+                daily_loss.pnl is not None and not daily_loss.pnl.data_gaps
+            ),
+            "requiredForReadiness": required,
+        }
+    except Exception:
+        if runtime_system_mode == "AUTO_TRADE":
+            ready = False
+        checks["dailyLossGuard"] = {
+            "ok": False,
+            "enabled": True,
+            "status": DailyLossGuardState.UNAVAILABLE.value,
+            "enforced": False,
+            "blocksNewBuys": True,
+            "capitalSource": "NONE",
+            "pnlAvailable": False,
+            "pnlComplete": False,
+            "requiredForReadiness": runtime_system_mode == "AUTO_TRADE",
+        }
 
     free_bytes = shutil.disk_usage(".").free
     disk_ok = free_bytes >= 1_000_000_000

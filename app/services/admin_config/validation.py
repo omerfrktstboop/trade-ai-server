@@ -51,6 +51,8 @@ def _serialize_value(key: str, raw_value: Any, value_type: str) -> str:
             raise ValueError(f"{key} must be a decimal number") from exc
         if not value.is_finite() or value < 0:
             raise ValueError(f"{key} must be a finite value >= 0")
+        if key == "dailyMaxLossPct" and value > 10:
+            raise ValueError(f"{key} must be between 0 and 10")
         if key == "marketDataDiagnosticSampleRatePct" and value > 100:
             raise ValueError(f"{key} must be <= 100")
         return str(value)

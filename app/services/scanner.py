@@ -43,7 +43,7 @@ from app.models.db import (
     RiskDecision,
     TradeWatchlistSymbol,
 )
-from app.models.signal import OrderType, SignalAction
+from app.models.signal import OrderType, SignalAction, SignalResponse
 from app.services.admin_config import (
     build_runtime_risk_config,
     get_admin_config_value,
@@ -56,6 +56,7 @@ from app.services.admin_config import (
 from app.core.runtime_flags import dispatch_block_reason, is_dispatch_blocked
 from app.services.account_watcher import account_watcher
 from app.services.ai_provider import get_default_provider
+from app.services.bot_ownership import load_bot_ownership
 from app.services.discovery_agent import run_discovery_scan
 from app.services.evaluator import EvaluationResult, evaluate_symbol
 from app.services.account_context import (
@@ -119,29 +120,67 @@ _ORDER_DISPATCH_TAG = "AUTO_TRADE"
 # Aynı uyarıyı her tick'te loglamamak için susturma süresi.
 _WARN_SUPPRESS = timedelta(minutes=5)
 _ORDER_COOLDOWN = timedelta(minutes=15)
+_DETERMINISTIC_EXIT_PURPOSES = frozenset(
+    {"POSITION_EXIT_GUARD", "STOP_LOSS_GUARD"}
+)
+_DETERMINISTIC_EXIT_TRIGGER_TYPES = (
+    "STOP_BREACHED",
+    "TAKE_PROFIT_TRIGGERED",
+)
 
 
-async def _decision_audit_exists(request_id: str) -> bool:
+async def _decision_audit_exists(
+    response: SignalResponse | None = None,
+    *,
+    request_id: str | None = None,
+    symbol: str | None = None,
+    action: SignalAction | str | None = None,
+) -> bool:
     """Dispatch öncesi audit doğrulaması (v2 ilke #6).
 
-    Normal değerlendirme yolu ``risk_decisions`` satırı yazar; stop-loss
-    bekçisi ise LLM'siz çalıştığı için ``position_stop_events``'e
-    STOP_BREACHED olayı yazar. İkisinden biri commit edilmiş olmalı.
+    Normal değerlendirme yolu tam eşleşen ve emre izin veren bir
+    ``risk_decisions`` satırı yazar. Deterministik çıkışlar yalnızca aynı
+    SELL isteğine ait STOP_BREACHED/TAKE_PROFIT_TRIGGERED olayıyla yetkilidir.
     """
+    if response is not None:
+        request_id = response.request_id
+        symbol = response.symbol
+        action = response.action
+    normalized_request_id = str(request_id or "").strip()
+    normalized_symbol = str(symbol or "").strip().upper()
+    normalized_action = (
+        action.value if isinstance(action, SignalAction) else str(action or "")
+    ).strip().upper()
+    if not normalized_request_id or not normalized_symbol or not normalized_action:
+        return False
+
     async with async_session_factory() as session:
         risk_row = (
             await session.execute(
                 select(RiskDecision.id)
-                .where(RiskDecision.request_id == request_id)
+                .where(
+                    RiskDecision.request_id == normalized_request_id,
+                    RiskDecision.symbol == normalized_symbol,
+                    RiskDecision.action == normalized_action,
+                    RiskDecision.allow_order.is_(True),
+                )
                 .limit(1)
             )
         ).scalar_one_or_none()
         if risk_row is not None:
             return True
+        if normalized_action != SignalAction.SELL.value:
+            return False
         stop_row = (
             await session.execute(
                 select(PositionStopEvent.id)
-                .where(PositionStopEvent.source_request_id == request_id)
+                .where(
+                    PositionStopEvent.source_request_id == normalized_request_id,
+                    PositionStopEvent.symbol == normalized_symbol,
+                    PositionStopEvent.event_type.in_(
+                        _DETERMINISTIC_EXIT_TRIGGER_TYPES
+                    ),
+                )
                 .limit(1)
             )
         ).scalar_one_or_none()
@@ -361,6 +400,15 @@ class SymbolScanner:
         except Exception:
             logger.exception("AI tool-calling flag sync failed")
 
+        if (
+            runtime_cfg.can_trade_now()
+            and gateway_health.get("positionsLoaded") is True
+            and tick_account_dispatch_allowed
+        ):
+            # Risk-reducing deterministic exits run before slower market-data
+            # discovery/research, but still enter the normal dispatch gates.
+            await self._run_stop_loss_guard()
+
         # Discovery yalnızca gateway market-data yüzeyine dayanır; account
         # positionsLoaded hazır olana kadar bekletilirse research evreni boş
         # kalır. Discovery kendi movers/snapshot tazelik kontrollerini yapar
@@ -409,10 +457,6 @@ class SymbolScanner:
         # Stale-order cancellation is an order-path operation and must honor
         # the same cutoff and positionsLoaded gates as normal trading.
         await self._run_order_timeout_check()
-        # Deterministic stop-loss check - independent of AI, runs every tick
-        # (not gated by scan_interval_minutes) so a stuck/HOLD AI cannot let
-        # a losing position ride between evaluations.
-        await self._run_stop_loss_guard()
         rotation_active = False
         try:
             rotation_active = await advance_rotation_plan(
@@ -548,20 +592,34 @@ class SymbolScanner:
         await cancel_timed_out_orders(self._gateway, now=now)
 
     async def _run_stop_loss_guard(self) -> None:
-        """Deterministic stop-loss check, independent of AI evaluation.
+        """Deterministic position-exit check, independent of AI evaluation.
 
-        check_stop_loss_positions only detects breaches; every triggered
+        check_stop_loss_positions only detects triggers; every resulting
         exit still goes through _maybe_send_order, so kill switch, cutoff,
-        preflight, and cooldown gates apply exactly as for any other order.
+        ownership, preflight, and gateway hard caps remain in force.
         """
         try:
             triggered = await check_stop_loss_positions(self._gateway)
         except Exception:
-            logger.exception("STOP_LOSS_GUARD_CHECK_FAILED")
+            logger.exception("POSITION_EXIT_GUARD_CHECK_FAILED")
             return
         for result in triggered:
-            await self._maybe_send_order(result)
-            stop_loss_guard.mark_triggered(result.response.symbol)
+            try:
+                await self._maybe_send_order(result)
+            except Exception:
+                logger.exception(
+                    "POSITION_EXIT_GUARD_DISPATCH_FAILED symbol=%s requestId=%s",
+                    result.response.symbol,
+                    result.response.request_id,
+                )
+                continue
+            try:
+                stop_loss_guard.mark_triggered(result.response.symbol)
+            except Exception:
+                logger.exception(
+                    "POSITION_EXIT_GUARD_COOLDOWN_MARK_FAILED symbol=%s",
+                    result.response.symbol,
+                )
 
     async def _run_observation_collector(self) -> None:
         """Bounded market-data-only observation collection (Fix 3). Never
@@ -841,6 +899,11 @@ class SymbolScanner:
         kendi sabit limitleriyle bir kez daha uygular.
         """
         response = result.response
+        is_deterministic_exit = (
+            response.action == SignalAction.SELL
+            and result.evaluation_purpose in _DETERMINISTIC_EXIT_PURPOSES
+        )
+        preflight_decision_created_utc = result.decision_created_utc
         # Fix #2: startup disarm başarısızsa süreç boyunca sert blok
         # (DB'den bağımsız fail-closed) — hiçbir emir gönderilmez.
         if is_dispatch_blocked():
@@ -978,6 +1041,8 @@ class SymbolScanner:
                     raise ValueError("SELL quantity is zero after hard-cap clamping")
                 response.qty = safe_sell_qty
                 parsed_qty = Decimal(safe_sell_qty)
+            if is_deterministic_exit:
+                preflight_decision_created_utc = datetime.now(timezone.utc)
             preflight_reason = validate_order_preflight(
                 payload=fresh_snapshot.get("payload") or {},
                 positions=fresh_positions,
@@ -985,7 +1050,7 @@ class SymbolScanner:
                 side=response.action.value,
                 qty=response.qty,
                 limit_price=response.price,
-                decision_created_utc=result.decision_created_utc,
+                decision_created_utc=preflight_decision_created_utc,
                 max_spread_pct=preflight_config.max_spread_pct_for_buy,
                 max_depth_queue_drop_pct=(
                     preflight_config.max_depth_queue_drop_pct_for_buy
@@ -1053,11 +1118,11 @@ class SymbolScanner:
                     response.action.value,
                 )
         # v2 audit-yoksa-emir-yok kapısı (ilke #6): nihai karar audit kaydı
-        # (normal yol: risk_decisions; stop-loss yolu: STOP_BREACHED olayı)
+        # (normal yol: risk_decisions; deterministik çıkış: izinli trigger olayı)
         # DB'de COMMIT edilmiş olmadan gateway'e POST atılmaz. DB okunamazsa
         # da emir gönderilmez (fail-closed).
         try:
-            if not await _decision_audit_exists(response.request_id):
+            if not await _decision_audit_exists(response):
                 logger.warning(
                     "Order blocked: no committed decision audit record "
                     "requestId=%s",
@@ -1072,7 +1137,7 @@ class SymbolScanner:
             return
 
         if (
-            result.evaluation_purpose != "STOP_LOSS_GUARD"
+            result.evaluation_purpose not in _DETERMINISTIC_EXIT_PURPOSES
             and last_sent is not None
             and now - last_sent < _ORDER_COOLDOWN
         ):
@@ -1212,25 +1277,165 @@ class SymbolScanner:
                 )
                 return
         else:
-            async with async_session_factory() as session:
-                ledger_row, may_send, ledger_rejection = await reserve_order(
-                    session,
-                    request_id=response.request_id,
-                    symbol=response.symbol,
-                    side=response.action.value,
-                    qty=response.qty,
-                    limit_price=response.price,
-                    mode=_ORDER_DISPATCH_TAG,
-                    account_ref=dispatch_account_ref,
-                )
-                if not may_send:
-                    logger.warning(
-                        "Order replay blocked requestId=%s reason=%s",
+            if is_deterministic_exit:
+                try:
+                    async with async_session_factory() as session:
+                        normalized_symbol = response.symbol.strip().upper()
+                        requested_qty = parse_finite_decimal(response.qty)
+                        if (
+                            not dispatch_account_ref
+                            or not dispatch_account_session_ref
+                            or isinstance(response.qty, bool)
+                            or not isinstance(response.qty, int)
+                            or requested_qty is None
+                            or requested_qty <= 0
+                            or requested_qty != requested_qty.to_integral_value()
+                        ):
+                            logger.warning(
+                                "Deterministic exit reservation blocked: invalid "
+                                "account or quantity requestId=%s",
+                                response.request_id,
+                            )
+                            return
+
+                        trigger_lifecycle_ids = set(
+                            (
+                                await session.execute(
+                                    select(
+                                        PositionStopEvent.position_lifecycle_id
+                                    ).where(
+                                        PositionStopEvent.source_request_id
+                                        == response.request_id,
+                                        PositionStopEvent.symbol
+                                        == normalized_symbol,
+                                        PositionStopEvent.event_type.in_(
+                                            _DETERMINISTIC_EXIT_TRIGGER_TYPES
+                                        ),
+                                    )
+                                )
+                            )
+                            .scalars()
+                            .all()
+                        )
+                        if len(trigger_lifecycle_ids) != 1:
+                            logger.warning(
+                                "Deterministic exit reservation blocked: trigger "
+                                "audit is missing or ambiguous requestId=%s",
+                                response.request_id,
+                            )
+                            return
+
+                        lifecycle = (
+                            await session.execute(
+                                select(PositionLifecycle)
+                                .where(
+                                    PositionLifecycle.id
+                                    == next(iter(trigger_lifecycle_ids))
+                                )
+                                .with_for_update()
+                            )
+                        ).scalar_one_or_none()
+                        lifecycle_qty = (
+                            parse_finite_decimal(lifecycle.current_qty)
+                            if lifecycle is not None
+                            else None
+                        )
+                        if (
+                            lifecycle is None
+                            or lifecycle.status != "OPEN"
+                            or lifecycle.symbol.strip().upper() != normalized_symbol
+                            or lifecycle.is_backfilled
+                            or lifecycle.data_quality not in {"VERIFIED", "RECONCILED"}
+                            or lifecycle_qty is None
+                            or lifecycle_qty <= 0
+                            or lifecycle_qty != lifecycle_qty.to_integral_value()
+                            or requested_qty > lifecycle_qty
+                        ):
+                            logger.warning(
+                                "Deterministic exit reservation blocked: lifecycle "
+                                "validation failed requestId=%s",
+                                response.request_id,
+                            )
+                            return
+
+                        entry_order = (
+                            await session.execute(
+                                select(OrderLog.id)
+                                .where(
+                                    OrderLog.request_id
+                                    == lifecycle.entry_request_id,
+                                    OrderLog.symbol == normalized_symbol,
+                                    OrderLog.action == "BUY",
+                                    OrderLog.account_ref
+                                    == dispatch_account_ref,
+                                    OrderLog.request_fingerprint.is_not(None),
+                                )
+                                .limit(1)
+                            )
+                        ).scalar_one_or_none()
+                        ownership = await load_bot_ownership(
+                            session, dispatch_account_ref
+                        )
+                        if (
+                            entry_order is None
+                            or ownership.quantities.get(
+                                normalized_symbol, Decimal("0")
+                            )
+                            != lifecycle_qty
+                        ):
+                            logger.warning(
+                                "Deterministic exit reservation blocked: account "
+                                "ownership validation failed requestId=%s",
+                                response.request_id,
+                            )
+                            return
+
+                        ledger_row, may_send, ledger_rejection = await reserve_order(
+                            session,
+                            request_id=response.request_id,
+                            symbol=response.symbol,
+                            side=response.action.value,
+                            qty=response.qty,
+                            limit_price=response.price,
+                            mode=_ORDER_DISPATCH_TAG,
+                            account_ref=dispatch_account_ref,
+                            commit=False,
+                        )
+                        if not may_send:
+                            logger.warning(
+                                "Order replay blocked requestId=%s reason=%s",
+                                response.request_id,
+                                ledger_rejection or ledger_row.status,
+                            )
+                            return
+                        await mark_send_started(session, ledger_row)
+                except Exception:
+                    logger.exception(
+                        "Deterministic exit serialized reservation failed; "
+                        "blocking dispatch requestId=%s",
                         response.request_id,
-                        ledger_rejection or ledger_row.status,
                     )
                     return
-                await mark_send_started(session, ledger_row)
+            else:
+                async with async_session_factory() as session:
+                    ledger_row, may_send, ledger_rejection = await reserve_order(
+                        session,
+                        request_id=response.request_id,
+                        symbol=response.symbol,
+                        side=response.action.value,
+                        qty=response.qty,
+                        limit_price=response.price,
+                        mode=_ORDER_DISPATCH_TAG,
+                        account_ref=dispatch_account_ref,
+                    )
+                    if not may_send:
+                        logger.warning(
+                            "Order replay blocked requestId=%s reason=%s",
+                            response.request_id,
+                            ledger_rejection or ledger_row.status,
+                        )
+                        return
+                    await mark_send_started(session, ledger_row)
 
         # Fix #1 (fail-closed): hesap referansı emir GÖNDERİLMEDEN önce
         # OrderLog'a KESİN olarak yazılmış olmalı. Rezervasyon bunu atomik

@@ -31,6 +31,7 @@ from app.services.admin_config.validation import (
 )
 from app.services.admin_config.store import (
     FeeConfig,
+    PositionExitConfig,
     build_runtime_risk_config,
     disarm_real_account,
     get_admin_config_value,
@@ -39,6 +40,7 @@ from app.services.admin_config.store import (
     get_market_session_close_time,
     get_outcome_maximum_observation_delay_seconds,
     get_portfolio_scan_interval_minutes,
+    get_position_exit_config,
     get_stop_guard_maximum_quote_age_seconds,
     get_system_mode,
     has_admin_config_row,
@@ -68,6 +70,7 @@ __all__ = [
     "_parse_bool",
     "_serialize_value",
     "FeeConfig",
+    "PositionExitConfig",
     "build_runtime_risk_config",
     "disarm_real_account",
     "get_system_mode",
@@ -78,6 +81,7 @@ __all__ = [
     "get_market_session_close_time",
     "get_outcome_maximum_observation_delay_seconds",
     "get_portfolio_scan_interval_minutes",
+    "get_position_exit_config",
     "get_stop_guard_maximum_quote_age_seconds",
     "has_admin_config_row",
     "is_kill_switch_enabled",

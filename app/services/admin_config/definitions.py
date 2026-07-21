@@ -511,6 +511,42 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "120",
         "Bir horizon hedef zamanından sonra kabul edilen en fazla gözlem gecikmesi (sn).",
     ),
+    "positionExitTakeProfitEnabled": ConfigDefinition(
+        "positionExitTakeProfitEnabled",
+        "bool",
+        "false",
+        "Aktif yaşam döngüsü hedef fiyatına ulaşıldığında deterministik tam çıkışı açar.",
+    ),
+    "positionExitBreakEvenEnabled": ConfigDefinition(
+        "positionExitBreakEvenEnabled",
+        "bool",
+        "false",
+        "Fiyat tetik eşiğine ulaştığında aktif stopu giriş fiyatına sıkılaştırır.",
+    ),
+    "positionExitBreakEvenTriggerPct": ConfigDefinition(
+        "positionExitBreakEvenTriggerPct",
+        "decimal",
+        "1.0",
+        "Başabaş stopunun etkinleşmesi için giriş fiyatı üzerindeki artış yüzdesi.",
+    ),
+    "positionExitTrailingStopEnabled": ConfigDefinition(
+        "positionExitTrailingStopEnabled",
+        "bool",
+        "false",
+        "Aktif stopu doğrulanmış güncel fiyatın altında monoton olarak sıkılaştırır.",
+    ),
+    "positionExitTrailingActivationPct": ConfigDefinition(
+        "positionExitTrailingActivationPct",
+        "decimal",
+        "2.0",
+        "Takip eden stopun etkinleşmesi için giriş fiyatı üzerindeki artış yüzdesi.",
+    ),
+    "positionExitTrailingDistancePct": ConfigDefinition(
+        "positionExitTrailingDistancePct",
+        "decimal",
+        "1.0",
+        "Takip eden stop ile doğrulanmış güncel fiyat arasındaki yüzde mesafe.",
+    ),
     "stopGuardMaximumQuoteAgeSeconds": ConfigDefinition(
         "stopGuardMaximumQuoteAgeSeconds",
         "int",
@@ -572,6 +608,12 @@ RISKY_CONFIG_KEYS = {
     "tradeWatchlistTtlHours",
     "discoveryMinimumVolumeTl",
     "discoveryMaximumSpreadPct",
+    "positionExitTakeProfitEnabled",
+    "positionExitBreakEvenEnabled",
+    "positionExitBreakEvenTriggerPct",
+    "positionExitTrailingStopEnabled",
+    "positionExitTrailingActivationPct",
+    "positionExitTrailingDistancePct",
 }
 
 # realAccountArmed/armedAccountRef panelin genel edit formundan yazılamaz —
@@ -702,6 +744,21 @@ CONFIG_SECTION_DEFINITIONS = (
             "rotationMinimumHoldingMinutes",
             "rotationPlanExpiryMinutes",
             "rotationMaxPerDay",
+        ),
+    ),
+    ConfigSectionDefinition(
+        title="Deterministik pozisyon çıkışları",
+        description=(
+            "AI'dan bağımsız hedef fiyat, başabaş ve monoton takip eden stop "
+            "kuralları. Tüm özellikler varsayılan olarak kapalıdır."
+        ),
+        keys=(
+            "positionExitTakeProfitEnabled",
+            "positionExitBreakEvenEnabled",
+            "positionExitBreakEvenTriggerPct",
+            "positionExitTrailingStopEnabled",
+            "positionExitTrailingActivationPct",
+            "positionExitTrailingDistancePct",
         ),
     ),
     ConfigSectionDefinition(
@@ -851,6 +908,12 @@ CONFIG_LABELS: dict[str, str] = {
     "otherFeeBps": "Diğer Ücret Oranı (bps)",
     "minimumCommissionTl": "En Düşük Komisyon Tutarı (TL)",
     "outcomeMaximumObservationDelaySeconds": "Outcome Gözlem Azami Gecikmesi (sn)",
+    "positionExitTakeProfitEnabled": "Deterministik Kâr Al Aktif",
+    "positionExitBreakEvenEnabled": "Başabaş Stopu Aktif",
+    "positionExitBreakEvenTriggerPct": "Başabaş Tetik Eşiği (%)",
+    "positionExitTrailingStopEnabled": "Takip Eden Stop Aktif",
+    "positionExitTrailingActivationPct": "Takip Eden Stop Aktivasyonu (%)",
+    "positionExitTrailingDistancePct": "Takip Eden Stop Mesafesi (%)",
     "stopGuardMaximumQuoteAgeSeconds": "Stop Guard Azami Fiyat Yaşı (sn)",
     "marketSessionCloseTime": "Seans Kapanış Saati (EOD)",
 }

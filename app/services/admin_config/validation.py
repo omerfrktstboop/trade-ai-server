@@ -55,6 +55,16 @@ def _serialize_value(key: str, raw_value: Any, value_type: str) -> str:
             raise ValueError(f"{key} must be between 0 and 10")
         if key == "marketDataDiagnosticSampleRatePct" and value > 100:
             raise ValueError(f"{key} must be <= 100")
+        if key in {
+            "positionExitBreakEvenTriggerPct",
+            "positionExitTrailingActivationPct",
+        } and not Decimal("0.01") <= value <= Decimal("100"):
+            raise ValueError(f"{key} must be >= 0.01 and <= 100")
+        if (
+            key == "positionExitTrailingDistancePct"
+            and not Decimal("0.01") <= value <= Decimal("25")
+        ):
+            raise ValueError(f"{key} must be >= 0.01 and <= 25")
         return str(value)
     if value_type == "system_mode":
         value = str(raw_value).strip().upper()

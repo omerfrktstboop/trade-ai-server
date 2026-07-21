@@ -279,6 +279,50 @@ async def get_fee_config(session: AsyncSession) -> FeeConfig:
     )
 
 
+@dataclass(frozen=True)
+class PositionExitConfig:
+    take_profit_enabled: bool
+    break_even_enabled: bool
+    break_even_trigger_pct: Decimal
+    trailing_stop_enabled: bool
+    trailing_activation_pct: Decimal
+    trailing_distance_pct: Decimal
+
+
+async def get_position_exit_config(session: AsyncSession) -> PositionExitConfig:
+    keys = (
+        "positionExitTakeProfitEnabled",
+        "positionExitBreakEvenEnabled",
+        "positionExitBreakEvenTriggerPct",
+        "positionExitTrailingStopEnabled",
+        "positionExitTrailingActivationPct",
+        "positionExitTrailingDistancePct",
+    )
+    rows = await _load_config_rows(session)
+    values = {
+        key: rows[key].value if key in rows else CONFIG_DEFINITIONS[key].default
+        for key in keys
+    }
+    serialized = {
+        key: _serialize_value(key, values[key], CONFIG_DEFINITIONS[key].value_type)
+        for key in keys
+    }
+    return PositionExitConfig(
+        take_profit_enabled=_parse_bool(serialized["positionExitTakeProfitEnabled"]),
+        break_even_enabled=_parse_bool(serialized["positionExitBreakEvenEnabled"]),
+        break_even_trigger_pct=Decimal(
+            serialized["positionExitBreakEvenTriggerPct"]
+        ),
+        trailing_stop_enabled=_parse_bool(
+            serialized["positionExitTrailingStopEnabled"]
+        ),
+        trailing_activation_pct=Decimal(
+            serialized["positionExitTrailingActivationPct"]
+        ),
+        trailing_distance_pct=Decimal(serialized["positionExitTrailingDistancePct"]),
+    )
+
+
 async def get_outcome_maximum_observation_delay_seconds(session: AsyncSession) -> int:
     return int(
         await get_admin_config_value(session, "outcomeMaximumObservationDelaySeconds")

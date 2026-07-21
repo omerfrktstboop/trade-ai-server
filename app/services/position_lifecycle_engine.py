@@ -10,7 +10,7 @@ the OrderFill, using the row-locked OrderLog already held by the caller.
 from __future__ import annotations
 
 import logging
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -35,6 +35,14 @@ from app.services.strategy_provenance import (
 logger = logging.getLogger(__name__)
 
 _MAX_OPEN_INSERT_ATTEMPTS = 3
+_POSITION_EXIT_TRIGGER_TYPES = frozenset(
+    {"STOP_BREACHED", "TAKE_PROFIT_TRIGGERED"}
+)
+_DETERMINISTIC_STOP_EVENT_TYPES = frozenset(
+    {"BREAK_EVEN_ACTIVATED", "TRAILING_STOP_TIGHTENED"}
+)
+_STOP_PRICE_QUANTUM = Decimal("0.0000000001")
+_STOP_PRICE_MAX_EXCLUSIVE = Decimal("1e18")
 
 
 class LifecycleIntegrityError(Exception):
@@ -144,6 +152,73 @@ async def _record_stop_event(
     )
 
 
+async def tighten_active_stop(
+    session: AsyncSession,
+    lifecycle: PositionLifecycle,
+    candidate: Decimal,
+    *,
+    event_type: str,
+    reason: str,
+) -> bool:
+    """Persist a strictly tighter deterministic stop without dispatch authority."""
+    if event_type not in _DETERMINISTIC_STOP_EVENT_TYPES:
+        raise ValueError(f"Unsupported deterministic stop event type: {event_type}")
+    candidate_stop = to_decimal(candidate)
+    old_stop = to_decimal(lifecycle.active_stop_loss)
+    if candidate_stop is None or candidate_stop <= 0 or old_stop is None:
+        return False
+    try:
+        candidate_stop = candidate_stop.quantize(
+            _STOP_PRICE_QUANTUM, rounding=ROUND_DOWN
+        )
+    except InvalidOperation:
+        return False
+    if (
+        candidate_stop <= 0
+        or candidate_stop >= _STOP_PRICE_MAX_EXCLUSIVE
+        or candidate_stop <= old_stop
+    ):
+        return False
+
+    lifecycle.active_stop_loss = candidate_stop
+    await _record_stop_event(
+        session,
+        lifecycle,
+        old_stop=old_stop,
+        new_stop=candidate_stop,
+        event_type=event_type,
+        source_request_id=None,
+        source_order_id=None,
+        reason=reason,
+    )
+    await session.flush()
+    return True
+
+
+async def record_position_exit_trigger(
+    session: AsyncSession,
+    lifecycle: PositionLifecycle,
+    *,
+    event_type: str,
+    source_request_id: str | None,
+    reason: str,
+) -> None:
+    """Record only an order-authorizing deterministic position-exit trigger."""
+    if event_type not in _POSITION_EXIT_TRIGGER_TYPES:
+        raise ValueError(f"Unsupported position exit trigger type: {event_type}")
+    await _record_stop_event(
+        session,
+        lifecycle,
+        old_stop=lifecycle.active_stop_loss,
+        new_stop=lifecycle.active_stop_loss,
+        event_type=event_type,
+        source_request_id=source_request_id,
+        source_order_id=None,
+        reason=reason,
+    )
+    await session.flush()
+
+
 async def record_stop_breach(
     session: AsyncSession,
     lifecycle: PositionLifecycle,
@@ -151,19 +226,14 @@ async def record_stop_breach(
     source_request_id: str | None,
     reason: str,
 ) -> None:
-    """Called by the stop-loss guard the moment it decides a breach exit is
-    warranted, before the exit order is dispatched (Task 4.4)."""
-    await _record_stop_event(
+    """Compatibility wrapper for the original stop-loss guard API."""
+    await record_position_exit_trigger(
         session,
         lifecycle,
-        old_stop=lifecycle.active_stop_loss,
-        new_stop=lifecycle.active_stop_loss,
         event_type="STOP_BREACHED",
         source_request_id=source_request_id,
-        source_order_id=None,
         reason=reason,
     )
-    await session.flush()
 
 
 def _maybe_downgrade_data_quality(lifecycle: PositionLifecycle, fill: OrderFill) -> None:

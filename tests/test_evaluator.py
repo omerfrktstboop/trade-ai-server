@@ -70,11 +70,10 @@ def test_compact_news_uses_summary_then_content_and_drops_raw_fields():
     payload = build_ai_decision_context(request, news_context=news)
     items = payload["events"]["news"]["items"]
 
-    assert len(items) == 3
-    assert len(items[0]["headline"]) == 500
+    assert len(items) == 2
+    assert len(items[0]["headline"]) == 180
     assert items[0]["summary"] == "curated summary"
-    assert len(items[1]["summary"]) == 1000
-    assert "summary" not in items[2]
+    assert len(items[1]["summary"]) == 320
     assert all(
         key not in item
         for item in items

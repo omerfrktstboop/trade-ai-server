@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 
 from app.db.init_db import drop_all, init_db
@@ -26,7 +27,7 @@ from app.services.trade_profile import get_static_default_profile
 def _limits():
     return EffectiveRiskConfigResolver().resolve(
         environment_limits=EnvironmentRiskLimits(),
-        system_config=SystemRiskConfig(),
+        system_config=SystemRiskConfig(total_bot_capital_budget_tl="100000"),
         trade_profile=get_static_default_profile(),
     )
 
@@ -37,6 +38,7 @@ def _raw_account(cash="400"):
         "sourceProvider": "MATRIKS_IQ",
         "accountDataAgeSeconds": "1",
         "accountDataReliable": True,
+        "accountRef": "f" * 64,
         "account": {"TotalEquity": "100000", "OrderableCash": cash},
     }
 
@@ -49,6 +51,7 @@ def _trade(symbol):
         target_price=Decimal("110"),
         confidence=Decimal("90"),
         current_price=Decimal("100"),
+        target_allocation_pct=Decimal("100"),
     )
 
 
@@ -120,6 +123,75 @@ async def test_transaction_rollback_leaves_no_reservation():
         ).scalars().all() == []
 
 
+async def test_reserved_cash_is_scoped_by_account_and_symbol():
+    await _reset()
+    async with async_session_factory() as session:
+        rows = [
+            OrderLog(
+                request_id="account-f-thyao",
+                request_fingerprint="a" * 64,
+                account_ref="f" * 64,
+                symbol="THYAO",
+                action="BUY",
+                qty=1,
+                order_qty=1,
+                limit_price=100,
+                status="SENT_PENDING",
+                state="SENT_PENDING",
+            ),
+            OrderLog(
+                request_id="account-e-akbnk",
+                request_fingerprint="b" * 64,
+                account_ref="e" * 64,
+                symbol="AKBNK",
+                action="BUY",
+                qty=2,
+                order_qty=2,
+                limit_price=100,
+                status="SENT_PENDING",
+                state="SENT_PENDING",
+            ),
+        ]
+        session.add_all(rows)
+        await session.flush()
+        for row in rows:
+            await sync_cash_reservation(session, row)
+
+        assert await calculate_backend_reserved_cash(
+            session, account_ref="f" * 64
+        ) == Decimal("100")
+        assert await calculate_backend_reserved_cash(
+            session, account_ref="e" * 64
+        ) == Decimal("200")
+        assert await calculate_backend_reserved_cash(
+            session, account_ref="f" * 64, symbol="AKBNK"
+        ) == Decimal("0")
+
+
+async def test_unknown_account_pending_buy_blocks_scoped_sizing():
+    await _reset()
+    async with async_session_factory() as session:
+        session.add(
+            OrderLog(
+                request_id="legacy-unknown-account",
+                symbol="THYAO",
+                action="BUY",
+                qty=1,
+                order_qty=1,
+                limit_price=100,
+                status="SEND_UNKNOWN",
+                state="SEND_UNKNOWN",
+                account_ref=None,
+            )
+        )
+        await session.commit()
+
+        with pytest.raises(ValueError, match="unknown account ownership"):
+            await calculate_backend_reserved_cash(
+                session, account_ref="f" * 64
+            )
+
+
 async def test_two_concurrent_buys_cannot_use_the_same_cash():
     await _reset()
 
@@ -142,6 +214,7 @@ async def test_two_concurrent_buys_cannot_use_the_same_cash():
                     reservation_handling="BACKEND_DEDUCTED",
                     max_account_data_age_seconds=Decimal("60"),
                 ),
+                account_ref="f" * 64,
             )
 
     first, second = await asyncio.gather(
@@ -184,6 +257,7 @@ async def test_same_request_id_cannot_create_two_cash_reservations():
                 adapter=MatriksAccountContextAdapter(
                     reservation_handling="BACKEND_DEDUCTED"
                 ),
+                account_ref="f" * 64,
             )
 
     results = await asyncio.gather(reserve_once(), reserve_once())

@@ -434,8 +434,18 @@ class TestBotConfigIntegration:
 
         after = client.get("/api/gateway/config", headers=auth_headers).json()
         assert after["configHash"] != before["configHash"]
-        assert Decimal(str(after["maxOrderValueTl"])) == Decimal(
-            str(BUILTIN_PROFILES["AGGRESSIVE"]["max_order_value_tl"])
+
+        async def _effective_max_order_value():
+            from app.services.effective_risk_config import (
+                resolve_effective_risk_config,
+            )
+
+            async with async_session_factory() as session:
+                limits = await resolve_effective_risk_config(session)
+                return limits.max_order_value_tl
+
+        assert Decimal(str(after["maxOrderValueTl"])) == _run(
+            _effective_max_order_value()
         )
         assert (
             after["scanIntervalMinutes"]

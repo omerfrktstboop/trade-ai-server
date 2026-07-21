@@ -7,11 +7,12 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db import OrderCashReservation, OrderLog
 from app.services.account_context import MatriksAccountContextAdapter
+from app.services.bot_ownership import load_bot_ownership
 from app.services.effective_risk_config import EffectiveRiskConfig
 from app.services.order_ledger import FINAL_STATES, PENDING_STATES, reserve_order
 from app.services.position_sizing import (
@@ -153,14 +154,63 @@ async def sync_cash_reservation(
     return existing
 
 
-async def calculate_backend_reserved_cash(session: AsyncSession) -> Decimal:
+async def calculate_backend_reserved_cash(
+    session: AsyncSession,
+    *,
+    account_ref: str | None = None,
+    symbol: str | None = None,
+) -> Decimal:
     """Return exact open BUY cash, backfilling legacy ledger rows once."""
+    normalized_ref = str(account_ref or "").strip()
+    if account_ref is not None and len(normalized_ref) != 64:
+        raise ValueError("verified account_ref is required for scoped reservations")
+    normalized_symbol = str(symbol or "").strip().upper()
+    if account_ref is not None:
+        unknown_pending = (
+            await session.execute(
+                select(OrderLog.id)
+                .where(
+                    OrderLog.action == "BUY",
+                    OrderLog.status.in_(PENDING_STATES),
+                    or_(
+                        OrderLog.account_ref.is_(None),
+                        func.length(OrderLog.account_ref) != 64,
+                    ),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        unknown_reservation = (
+            await session.execute(
+                select(OrderCashReservation.id)
+                .outerjoin(
+                    OrderLog,
+                    OrderLog.request_id == OrderCashReservation.request_id,
+                )
+                .where(
+                    OrderCashReservation.status.in_(ACTIVE_RESERVATION_STATES),
+                    or_(
+                        OrderLog.id.is_(None),
+                        OrderLog.account_ref.is_(None),
+                        func.length(OrderLog.account_ref) != 64,
+                    ),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if unknown_pending is not None or unknown_reservation is not None:
+            raise ValueError(
+                "active BUY reservation has unknown account ownership"
+            )
+    order_filters = [OrderLog.action == "BUY", OrderLog.status.in_(PENDING_STATES)]
+    if account_ref is not None:
+        order_filters.append(OrderLog.account_ref == normalized_ref)
+    if normalized_symbol:
+        order_filters.append(OrderLog.symbol == normalized_symbol)
     open_rows = (
         (
             await session.execute(
-                select(OrderLog).where(
-                    OrderLog.action == "BUY", OrderLog.status.in_(PENDING_STATES)
-                )
+                select(OrderLog).where(*order_filters)
             )
         )
         .scalars()
@@ -168,27 +218,42 @@ async def calculate_backend_reserved_cash(session: AsyncSession) -> Decimal:
     )
     for row in open_rows:
         await sync_cash_reservation(session, row)
-    total = (
-        await session.execute(
-            select(func.sum(OrderCashReservation.reserved_amount_tl)).where(
-                OrderCashReservation.status.in_(ACTIVE_RESERVATION_STATES)
-            )
+    total_statement = select(
+        func.sum(OrderCashReservation.reserved_amount_tl)
+    ).where(OrderCashReservation.status.in_(ACTIVE_RESERVATION_STATES))
+    if account_ref is not None or normalized_symbol:
+        total_statement = total_statement.join(
+            OrderLog, OrderLog.request_id == OrderCashReservation.request_id
         )
-    ).scalar_one()
+        if account_ref is not None:
+            total_statement = total_statement.where(
+                OrderLog.account_ref == normalized_ref
+            )
+        if normalized_symbol:
+            total_statement = total_statement.where(
+                OrderLog.symbol == normalized_symbol
+            )
+    total = (await session.execute(total_statement)).scalar_one()
     return Decimal("0") if total is None else _money(total)
 
 
 async def _transient_reserved_cash(
-    session: AsyncSession, *, account_age_seconds: Decimal | None
+    session: AsyncSession,
+    *,
+    account_age_seconds: Decimal | None,
+    account_ref: str,
 ) -> Decimal:
     if account_age_seconds is None:
         return Decimal("0")
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=float(account_age_seconds))
     total = (
         await session.execute(
-            select(func.sum(OrderCashReservation.reserved_amount_tl)).where(
+            select(func.sum(OrderCashReservation.reserved_amount_tl))
+            .join(OrderLog, OrderLog.request_id == OrderCashReservation.request_id)
+            .where(
                 OrderCashReservation.status.in_(ACTIVE_RESERVATION_STATES),
                 OrderCashReservation.created_at > cutoff,
+                OrderLog.account_ref == account_ref,
             )
         )
     ).scalar_one()
@@ -231,7 +296,18 @@ async def reserve_sized_buy(
         raise ValueError("original_decision_qty must be a positive integer")
     await acquire_account_reservation_lock(session)
     try:
-        backend_reserved = await calculate_backend_reserved_cash(session)
+        if not account_ref:
+            raise ValueError("verified account_ref is required for BUY reservation")
+        raw_account_ref = str(raw_account.get("accountRef") or "").strip()
+        if raw_account_ref != account_ref:
+            raise ValueError("fresh account_ref does not match dispatch account")
+        backend_reserved = await calculate_backend_reserved_cash(
+            session, account_ref=account_ref
+        )
+        symbol_reserved = await calculate_backend_reserved_cash(
+            session, account_ref=account_ref, symbol=symbol
+        )
+        ownership = await load_bot_ownership(session, account_ref)
         account = adapter.normalize(
             raw_account=raw_account,
             raw_positions=raw_positions,
@@ -239,6 +315,8 @@ async def reserve_sized_buy(
             backend_reserved_cash_tl=backend_reserved,
             symbol=symbol,
             market_prices=market_prices,
+            bot_owned_qty_by_symbol=ownership.quantities,
+            current_symbol_reserved_cash_tl=symbol_reserved,
         )
         await adapter.add_audit(session, request_id=request_id, symbol=symbol)
 
@@ -248,7 +326,9 @@ async def reserve_sized_buy(
         # already reflected by the broker.
         if adapter.reservation_handling == "BROKER_ALREADY_DEDUCTED":
             transient = await _transient_reserved_cash(
-                session, account_age_seconds=account.account_data_age_seconds
+                session,
+                account_age_seconds=account.account_data_age_seconds,
+                account_ref=account_ref,
             )
             if account.effective_available_cash_tl is not None and transient:
                 account = account.model_copy(

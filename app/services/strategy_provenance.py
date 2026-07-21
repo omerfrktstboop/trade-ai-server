@@ -17,7 +17,7 @@ from app.services.effective_risk_config import EffectiveRiskConfig
 # Bump these when the underlying strategy/prompt/context-schema actually
 # changes. They intentionally do not affect any decision-making behavior.
 STRATEGY_VERSION = "discovery-research-v1"
-PROMPT_VERSION = "ai-decision-context-v1-prompt-1"
+PROMPT_VERSION = "ai-decision-context-v1-prompt-2"
 DECISION_CONTEXT_SCHEMA_VERSION = "ai-decision-context-v1"
 
 

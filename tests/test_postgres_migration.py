@@ -151,7 +151,7 @@ async def _verify_upgrade_and_concurrent_upsert() -> None:
 
     limits = EffectiveRiskConfigResolver().resolve(
         environment_limits=EnvironmentRiskLimits(),
-        system_config=SystemRiskConfig(),
+        system_config=SystemRiskConfig(total_bot_capital_budget_tl="100000"),
         trade_profile=get_static_default_profile(),
     )
 
@@ -168,6 +168,7 @@ async def _verify_upgrade_and_concurrent_upsert() -> None:
                     "sourceProvider": "MATRIKS_IQ",
                     "accountDataAgeSeconds": "1",
                     "accountDataReliable": True,
+                    "accountRef": "f" * 64,
                     "account": {
                         "TotalEquity": "100000",
                         "OrderableCash": "450",
@@ -183,11 +184,13 @@ async def _verify_upgrade_and_concurrent_upsert() -> None:
                     target_price=Decimal("110"),
                     confidence=Decimal("90"),
                     current_price=Decimal("100"),
+                    target_allocation_pct=Decimal("100"),
                 ),
                 limits=limits,
                 adapter=MatriksAccountContextAdapter(
                     reservation_handling="BACKEND_DEDUCTED"
                 ),
+                account_ref="f" * 64,
             )
 
     cash_results = await asyncio.gather(

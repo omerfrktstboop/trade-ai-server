@@ -49,6 +49,14 @@ def _db(monkeypatch):
                 )
             )
             session.add(
+                SystemConfig(
+                    key="sizingTotalBotCapitalBudgetTl",
+                    value="100000",
+                    value_type="decimal",
+                    description="test",
+                )
+            )
+            session.add(
                 TradeWatchlistSymbol(
                     symbol="THYAO",
                     is_active=True,

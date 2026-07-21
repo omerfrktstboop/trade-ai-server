@@ -1149,3 +1149,83 @@ class TestTechnicalFeatureGuards:
         assert resp.action == SignalAction.WAIT
         assert resp.allow_order is False
         assert "bid queue dropped" in resp.reason
+
+    def test_transient_top5_liquidity_drop_does_not_block_buy(self):
+        engine = RiskEngine(_cfg(max_depth_queue_drop_pct_for_buy=35.0))
+        req = _make_request(
+            symbol="THYAO",
+            depthReliable=True,
+            depthQueueDropPct=90.0,
+            depthBidTop5DropPct=60.0,
+            depthBidTop5DropMetricReady=True,
+            depthBidTop5DropRecentPcts=[10.0, 60.0],
+        )
+
+        resp = engine.evaluate(req, _make_buy_decision())
+
+        assert resp.action == SignalAction.BUY
+        assert resp.allow_order is True
+
+    def test_persistent_top5_liquidity_drop_blocks_buy(self):
+        engine = RiskEngine(_cfg(max_depth_queue_drop_pct_for_buy=35.0))
+        req = _make_request(
+            symbol="THYAO",
+            depthReliable=True,
+            depthBidTop5DropPct=62.0,
+            depthBidTop5DropMetricReady=True,
+            depthBidTop5DropRecentPcts=[58.0, 62.0],
+        )
+
+        resp = engine.evaluate(req, _make_buy_decision())
+
+        assert resp.action == SignalAction.WAIT
+        assert resp.allow_order is False
+        assert "persistent Top5 bid liquidity drop 62.0%" in resp.reason
+
+    def test_top5_liquidity_baseline_warmup_blocks_buy(self):
+        engine = RiskEngine(_cfg(max_depth_queue_drop_pct_for_buy=35.0))
+        req = _make_request(
+            symbol="THYAO",
+            depthReliable=True,
+            depthBidTop5DropPct=0.0,
+            depthBidTop5DropMetricReady=False,
+            depthBidTop5DropRecentPcts=[],
+        )
+
+        resp = engine.evaluate(req, _make_buy_decision())
+
+        assert resp.action == SignalAction.WAIT
+        assert resp.allow_order is False
+        assert "baseline is warming" in resp.reason
+
+    def test_partial_top5_liquidity_payload_fails_closed(self):
+        engine = RiskEngine(_cfg(max_depth_queue_drop_pct_for_buy=35.0))
+        req = _make_request(
+            symbol="THYAO",
+            depthReliable=True,
+            depthQueueDropPct=90.0,
+            depthBidTop5DropMetricReady=True,
+            depthBidTop5DropRecentPcts=[60.0, 60.0],
+        )
+
+        resp = engine.evaluate(req, _make_buy_decision())
+
+        assert resp.action == SignalAction.WAIT
+        assert resp.allow_order is False
+        assert "metric is invalid" in resp.reason
+
+    def test_missing_top5_readiness_with_rolling_values_fails_closed(self):
+        engine = RiskEngine(_cfg(max_depth_queue_drop_pct_for_buy=35.0))
+        req = _make_request(
+            symbol="THYAO",
+            depthReliable=True,
+            depthQueueDropPct=10.0,
+            depthBidTop5DropPct=60.0,
+            depthBidTop5DropRecentPcts=[60.0, 60.0],
+        )
+
+        resp = engine.evaluate(req, _make_buy_decision())
+
+        assert resp.action == SignalAction.WAIT
+        assert resp.allow_order is False
+        assert "readiness is unavailable" in resp.reason

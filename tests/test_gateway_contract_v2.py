@@ -1,8 +1,8 @@
-"""v2 kontrat (Faz 3) testleri.
+"""Gateway v3 kontrat testleri.
 
 İki taraf tek atomik commit'te değişir:
-- Python /api/gateway/config payload'ı contractVersion=2 gönderir.
-- C# gateway contractVersion != 2'yi (alan eksikliği dahil) emir reddine
+- Python /api/gateway/config payload'ı contractVersion=3 gönderir.
+- C# gateway contractVersion != 3'ü (alan eksikliği dahil) emir reddine
   çevirir ve CheckDispatchGates'i EK kapı olarak uygular (eski CheckModeGates
   yerinde kalır — geçiş dönemi çift fail-closed).
 
@@ -40,16 +40,34 @@ def _db():
     yield
 
 
-def test_gateway_config_payload_carries_contract_version_2(_db):
+def test_gateway_config_payload_carries_contract_version_3(_db):
     client = TestClient(app)
     headers = {"Authorization": f"Bearer {settings.api_token}"}
     config = client.get("/api/gateway/config", headers=headers).json()
     assert config["ok"] is True
-    assert config["contractVersion"] == 2
+    assert config["contractVersion"] == 3
     # v2 cutover: eski mode/enableDemoOrders alanları kaldırıldı.
     assert "mode" not in config
     assert "enableDemoOrders" not in config
     assert config["killSwitchActive"] is False
+    assert 0 <= config["maxDepthQueueDropPctForBuy"] <= 100
+
+
+def test_gateway_hard_caps_use_strict_effective_sizing_limits(_db):
+    from app.db.session import async_session_factory
+    from app.services.effective_risk_config import resolve_effective_risk_config
+
+    async def _effective_limits():
+        async with async_session_factory() as session:
+            return await resolve_effective_risk_config(session)
+
+    limits = asyncio.run(_effective_limits())
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {settings.api_token}"}
+    config = client.get("/api/gateway/config", headers=headers).json()
+
+    assert config["maxOrderValueTl"] == float(limits.max_order_value_tl)
+    assert config["maxQtyPerOrder"] == limits.max_qty_per_order
 
 
 def test_gateway_config_carries_v2_mode_and_arming_fields(_db):
@@ -83,12 +101,55 @@ def test_gateway_config_reflects_auto_trade_when_set(_db):
     assert config["systemMode"] == "AUTO_TRADE"
 
 
+def test_gateway_bot_ownership_is_scoped_to_requested_account(_db):
+    from app.db.session import async_session_factory
+    from app.models.db import OrderLog
+
+    async def _seed():
+        async with async_session_factory() as session:
+            session.add_all(
+                [
+                    OrderLog(
+                        request_id="account-f-buy",
+                        request_fingerprint="a" * 64,
+                        account_ref="f" * 64,
+                        symbol="AKBNK",
+                        action="BUY",
+                        filled_qty=7,
+                        avg_price=100,
+                        status="FILLED",
+                    ),
+                    OrderLog(
+                        request_id="account-e-buy",
+                        request_fingerprint="b" * 64,
+                        account_ref="e" * 64,
+                        symbol="THYAO",
+                        action="BUY",
+                        filled_qty=11,
+                        avg_price=100,
+                        status="FILLED",
+                    ),
+                ]
+            )
+            await session.commit()
+
+    asyncio.run(_seed())
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {settings.api_token}"}
+    config = client.get(
+        "/api/gateway/config", params={"accountRef": "f" * 64}, headers=headers
+    ).json()
+
+    assert config["botOwnershipAccountRef"] == "f" * 64
+    assert config["botOwnedQty"] == {"AKBNK": 7.0}
+
+
 # ── C# tarafı: kaynak invariant'ları ────────────────────────────────────────
 
 
 def test_gateway_rejects_contract_version_mismatch_fail_closed():
     source = _source()
-    assert "private const int ExpectedContractVersion = 2;" in source
+    assert "private const int ExpectedContractVersion = 3;" in source
     handler = source.split("private async Task HandleOrderAsync", 1)[1]
     handler = handler.split("private decimal GetSellableQty", 1)[0]
     assert "_serverContractVersion != ExpectedContractVersion" in handler
@@ -122,14 +183,27 @@ def test_unknown_system_mode_normalizes_to_observe_only():
 
 def test_account_verification_populates_hashed_identity_fields():
     source = _source()
-    verify = source.split("private void RefreshAccountVerification()", 1)[1]
+    verify = source.split("private void RefreshAccountVerification(bool force = false)", 1)[1]
     verify = verify.split("private sealed class AccountVerification", 1)[0]
     assert "GetTradeUser()" in verify
-    assert "_lastVerifiedAccountRef = Sha256Hex(accountId);" in verify
-    assert "_lastVerifiedSessionRef = Sha256Hex(accountId" in verify
-    assert '_lastVerifiedAccountType = testAutoOrder ? "DEMO" : "REAL";' in verify
+    assert "string accountRef = BuildAccountRef(accountId, accountType);" in verify
+    assert "_lastVerifiedAccountRef = accountRef;" in verify
+    assert "_lastVerifiedSessionRef = Sha256Hex(accountRef" in verify
+    assert 'string accountType = testAutoOrder ? "DEMO" : "REAL";' in verify
+    assert "_lastVerifiedAccountType = accountType;" in verify
     # Hata yolunda tip UNKNOWN'a döner (fail-closed).
     assert '_lastVerifiedAccountType = "UNKNOWN";' in verify
+
+
+def test_order_forces_uncached_account_check_and_binds_config_ownership():
+    source = _source()
+    handler = source.split("private async Task HandleOrderAsync", 1)[1]
+    handler = handler.split("private decimal GetSellableQty", 1)[0]
+    assert "RefreshAccountVerification(true);" in handler
+    assert "order.AccountRef, _lastVerifiedAccountRef" in handler
+    gates = source.split("private string CheckDispatchGates()", 1)[1]
+    gates = gates.split("private static string NormalizeSystemMode", 1)[0]
+    assert "acct.AccountRef, _botOwnershipAccountRef" in gates
 
 
 def test_health_reports_contract_and_account_identity():
@@ -150,7 +224,7 @@ def test_account_endpoint_reports_hashed_identity_and_type():
     source = _source()
     handler = source.split("private async Task HandleAccountAsync", 1)[1]
     handler = handler.split("private async Task HandleRealPositionsAsync", 1)[0]
-    assert "Sha256Hex(rawAccountId)" in handler
+    assert "BuildAccountRef(rawAccountId, accountType)" in handler
     assert "accountSessionRef" in handler
     assert "MaskAccountId(rawAccountId)" in handler
     assert '"DEMO" : "REAL"' in handler

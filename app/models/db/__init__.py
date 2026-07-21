@@ -35,3 +35,4 @@ from app.models.db.measurement_repair_job import MeasurementRepairJob  # noqa: F
 from app.models.db.market_observation import MarketObservation  # noqa: F401
 from app.models.db.tool_call_audit import ToolCallAudit  # noqa: F401
 from app.models.db.account_event import AccountEvent  # noqa: F401
+from app.models.db.rotation_plan import RotationPlan  # noqa: F401

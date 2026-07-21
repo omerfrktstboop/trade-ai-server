@@ -21,6 +21,7 @@ from app.models.db import (
     OrderLog,
     ResearchCandidate,
     RiskDecision,
+    TradeWatchlistSymbol,
 )
 from app.services.admin_config import CONFIG_DEFINITIONS, READ_ONLY_CONFIG_KEYS
 
@@ -883,6 +884,153 @@ class TestResearchPage:
         assert "AKBNK" in resp.text
         assert "78.0" in resp.text
         assert "GAINER" in resp.text
+
+
+class TestResearchActions:
+    """Kontrollü/manuel terfi: Promote/Reject/Remove admin route'ları."""
+
+    async def _seed_candidate(self, symbol: str = "THYAO") -> None:
+        async with async_session_factory() as session:
+            session.add(
+                ResearchCandidate(
+                    symbol=symbol,
+                    status="RESEARCHED",
+                    source=["GAINER"],
+                    trend_pre_score=72,
+                    ai_action="WAIT",
+                    ai_research_score=55,
+                    technical_summary={"rsi": 55},
+                )
+            )
+            await session.commit()
+
+    def test_promote_requires_auth(self, client: TestClient):
+        resp = client.post("/admin/research/THYAO/promote", data={"reason": "x"})
+        assert resp.status_code == 401
+
+    def test_reject_requires_auth(self, client: TestClient):
+        resp = client.post("/admin/research/THYAO/reject", data={"reason": "x"})
+        assert resp.status_code == 401
+
+    def test_watchlist_remove_requires_auth(self, client: TestClient):
+        resp = client.post("/admin/watchlist/THYAO/remove", data={"reason": "x"})
+        assert resp.status_code == 401
+
+    def test_promote_adds_to_watchlist_regardless_of_ai_qualification(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        """Admin kontrolü tamamen kendinde: AI'nin 2-pass onayını beklemeden
+        de research'teki herhangi bir sembolü terfi ettirebilir."""
+        asyncio.run(self._seed_candidate("THYAO"))
+
+        resp = client.post(
+            "/admin/research/THYAO/promote",
+            headers=auth_headers,
+            data={"reason": "manual test promote"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        async def _check():
+            async with async_session_factory() as session:
+                candidate = (
+                    await session.execute(
+                        select(ResearchCandidate).where(
+                            ResearchCandidate.symbol == "THYAO"
+                        )
+                    )
+                ).scalar_one()
+                watch = (
+                    await session.execute(
+                        select(TradeWatchlistSymbol).where(
+                            TradeWatchlistSymbol.symbol == "THYAO"
+                        )
+                    )
+                ).scalar_one()
+                return candidate, watch
+
+        candidate, watch = asyncio.run(_check())
+        assert candidate.status == "PROMOTED"
+        assert watch.is_active is True
+        assert watch.manual_override is True
+
+        config = client.get("/api/admin/config", headers=auth_headers)
+        allowed = next(
+            item for item in config.json() if item["key"] == "allowedSymbols"
+        )
+        assert "THYAO" in allowed["value"]
+
+    def test_reject_marks_rejected_without_blacklisting(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        asyncio.run(self._seed_candidate("THYAO"))
+
+        resp = client.post(
+            "/admin/research/THYAO/reject",
+            headers=auth_headers,
+            data={"reason": "not for now"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        async def _check():
+            async with async_session_factory() as session:
+                return (
+                    await session.execute(
+                        select(ResearchCandidate).where(
+                            ResearchCandidate.symbol == "THYAO"
+                        )
+                    )
+                ).scalar_one()
+
+        candidate = asyncio.run(_check())
+        assert candidate.status == "REJECTED"
+        assert candidate.rejection_reason == "not for now"
+
+        config = client.get("/api/admin/config", headers=auth_headers)
+        decline = next(
+            item for item in config.json() if item["key"] == "declineSymbols"
+        )
+        assert "THYAO" not in {s.strip() for s in decline["value"].split(",") if s.strip()}
+
+    def test_watchlist_remove_deactivates_row(
+        self, client: TestClient, auth_headers: dict[str, str]
+    ):
+        async def _seed_watch():
+            async with async_session_factory() as session:
+                session.add(
+                    TradeWatchlistSymbol(
+                        symbol="THYAO",
+                        is_active=True,
+                        manual_override=True,
+                        source="MANUAL_OVERRIDE",
+                    )
+                )
+                await session.commit()
+
+        asyncio.run(_seed_watch())
+
+        resp = client.post(
+            "/admin/watchlist/THYAO/remove",
+            headers=auth_headers,
+            data={"reason": "test remove"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        async def _check():
+            async with async_session_factory() as session:
+                return (
+                    await session.execute(
+                        select(TradeWatchlistSymbol).where(
+                            TradeWatchlistSymbol.symbol == "THYAO"
+                        )
+                    )
+                ).scalar_one()
+
+        watch = asyncio.run(_check())
+        assert watch.is_active is False
+        assert watch.removal_reason == "test remove"
 
 
 class TestLocalTimeFilter:

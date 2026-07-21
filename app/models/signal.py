@@ -193,6 +193,22 @@ class SignalRequest(BaseModel):
     depth_bid1_size: Optional[float] = Field(None, alias="depthBid1Size")
     depth_bid1_max_size: Optional[float] = Field(None, alias="depthBid1MaxSize")
     depth_queue_drop_pct: Optional[float] = Field(None, alias="depthQueueDropPct")
+    depth_bid_top5_size: Optional[float] = Field(None, alias="depthBidTop5Size")
+    depth_bid_top5_reference_size: Optional[float] = Field(
+        None, alias="depthBidTop5ReferenceSize"
+    )
+    depth_bid_top5_drop_pct: Optional[float] = Field(
+        None, alias="depthBidTop5DropPct"
+    )
+    depth_bid_top5_drop_metric_ready: Optional[bool] = Field(
+        None, alias="depthBidTop5DropMetricReady"
+    )
+    depth_bid_top5_drop_sample_count: Optional[int] = Field(
+        None, alias="depthBidTop5DropSampleCount"
+    )
+    depth_bid_top5_drop_recent_pcts: Optional[list[float]] = Field(
+        None, alias="depthBidTop5DropRecentPcts"
+    )
     depth_reliable: Optional[bool] = Field(None, alias="depthReliable")
     depth_levels_used: Optional[int] = Field(None, alias="depthLevelsUsed")
     spread_pct: Optional[float] = Field(None, alias="spreadPct")
@@ -326,6 +342,9 @@ class SignalResponse(BaseModel):
     entry_range: Optional[EntryRange] = Field(None, alias="entryRange")
     stop_loss: Optional[Decimal] = Field(None, alias="stopLoss")
     target_price: Optional[Decimal] = Field(None, alias="targetPrice")
+    target_allocation_pct: Optional[Decimal] = Field(
+        None, alias="targetAllocationPct"
+    )
 
     model_config = {"populate_by_name": True}
 

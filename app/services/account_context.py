@@ -250,6 +250,18 @@ def _position_qty(position: dict[str, Any]) -> int:
     raise ValueError("position quantity is missing")
 
 
+def _bot_position_qty(position: dict[str, Any]) -> int:
+    for key in ("botQty", "botPositionQty"):
+        if key not in position:
+            continue
+        value = decimal_from_external(position[key])
+        integral = value.to_integral_value()
+        if value != integral or value < 0:
+            raise ValueError(f"position {key} must be a non-negative integer")
+        return int(integral)
+    raise ValueError("position bot quantity is missing")
+
+
 class MatriksAccountContextAdapter:
     """Convert one fresh account/position bundle into TASK 1A's typed input."""
 
@@ -274,11 +286,16 @@ class MatriksAccountContextAdapter:
         backend_reserved_cash_tl: Decimal,
         symbol: str = "",
         market_prices: dict[str, Decimal] | None = None,
+        bot_owned_qty_by_symbol: dict[str, Decimal] | None = None,
+        current_symbol_reserved_cash_tl: Decimal = Decimal("0"),
     ) -> AccountSizingContext:
         del raw_open_orders  # reservations are authoritative backend ledger values
         backend_reserved = decimal_from_external(backend_reserved_cash_tl)
+        symbol_reserved = decimal_from_external(current_symbol_reserved_cash_tl)
         if backend_reserved < 0:
             raise ValueError("backend_reserved_cash_tl cannot be negative")
+        if symbol_reserved < 0:
+            raise ValueError("current_symbol_reserved_cash_tl cannot be negative")
 
         account_payload = raw_account.get("account")
         if not isinstance(account_payload, dict):
@@ -339,23 +356,66 @@ class MatriksAccountContextAdapter:
             key.strip().upper(): decimal_from_external(value)
             for key, value in (market_prices or {}).items()
         }
+        authoritative_bot_qty = (
+            {
+                key.strip().upper(): decimal_from_external(value)
+                for key, value in bot_owned_qty_by_symbol.items()
+            }
+            if bot_owned_qty_by_symbol is not None
+            else None
+        )
+        seen_symbols: set[str] = set()
         current_qty = 0
         current_value: Decimal | None = Decimal("0")
         total_exposure: Decimal | None = Decimal("0")
+        current_bot_value: Decimal | None = Decimal("0")
+        total_bot_exposure: Decimal | None = Decimal("0")
         for position in raw_positions:
             position_symbol = _position_symbol(position)
             if not position_symbol:
                 reasons.append("position symbol is missing")
                 total_exposure = None
+                total_bot_exposure = None
                 continue
+            seen_symbols.add(position_symbol)
             try:
                 qty = _position_qty(position)
             except ValueError as exc:
                 reasons.append(f"{position_symbol}: {exc}")
                 total_exposure = None
+                total_bot_exposure = None
                 if position_symbol == normalized_symbol:
                     current_value = None
+                    current_bot_value = None
                 continue
+            if authoritative_bot_qty is not None:
+                bot_qty_value = authoritative_bot_qty.get(position_symbol, Decimal("0"))
+                if bot_qty_value != bot_qty_value.to_integral_value() or bot_qty_value < 0:
+                    reasons.append(
+                        f"{position_symbol}: authoritative bot quantity is invalid"
+                    )
+                    total_bot_exposure = None
+                    if position_symbol == normalized_symbol:
+                        current_bot_value = None
+                    bot_qty = 0
+                else:
+                    bot_qty = int(bot_qty_value)
+            else:
+                try:
+                    bot_qty = _bot_position_qty(position)
+                except ValueError as exc:
+                    reasons.append(f"{position_symbol}: {exc}")
+                    total_bot_exposure = None
+                    if position_symbol == normalized_symbol:
+                        current_bot_value = None
+                    bot_qty = 0
+            if bot_qty > max(0, qty):
+                reasons.append(
+                    f"{position_symbol}: bot quantity exceeds account quantity"
+                )
+                total_bot_exposure = None
+                if position_symbol == normalized_symbol:
+                    current_bot_value = None
             if position_symbol == normalized_symbol:
                 current_qty = max(0, qty)
             if qty == 0:
@@ -364,14 +424,35 @@ class MatriksAccountContextAdapter:
             if price is None or price <= 0:
                 reasons.append(f"fresh market price missing for {position_symbol}")
                 total_exposure = None
+                total_bot_exposure = None
                 if position_symbol == normalized_symbol:
                     current_value = None
+                    current_bot_value = None
                 continue
             value = Decimal(abs(qty)) * price
             if total_exposure is not None:
                 total_exposure += value
             if position_symbol == normalized_symbol:
                 current_value = Decimal(max(0, qty)) * price
+                if current_bot_value is not None:
+                    current_bot_value = Decimal(bot_qty) * price
+            if total_bot_exposure is not None:
+                total_bot_exposure += Decimal(bot_qty) * price
+
+        if authoritative_bot_qty is not None:
+            missing_bot_symbols = {
+                symbol
+                for symbol, qty in authoritative_bot_qty.items()
+                if qty > 0 and symbol not in seen_symbols
+            }
+            if missing_bot_symbols:
+                reasons.append(
+                    "bot-owned symbols absent from account snapshot: "
+                    + ",".join(sorted(missing_bot_symbols))
+                )
+                total_bot_exposure = None
+                if normalized_symbol in missing_bot_symbols:
+                    current_bot_value = None
 
         explicitly_reliable = raw_account.get("accountDataReliable", True)
         if explicitly_reliable is not True:
@@ -400,8 +481,11 @@ class MatriksAccountContextAdapter:
             current_symbol_qty=current_qty,
             current_symbol_value_tl=current_value,
             total_account_exposure_tl=total_exposure,
+            current_bot_symbol_value_tl=current_bot_value,
+            total_bot_exposure_tl=total_bot_exposure,
             account_data_age_seconds=age,
             account_data_reliable=reliable,
+            current_symbol_reserved_cash_tl=symbol_reserved,
         )
 
     async def add_audit(
@@ -447,6 +531,10 @@ async def fetch_fresh_account_inputs(
     *,
     symbol: str,
     target_snapshot: dict[str, Any] | None = None,
+    expected_account_ref: str | None = None,
+    expected_account_session_ref: str | None = None,
+    max_position_age_seconds: Decimal = Decimal("60"),
+    max_quote_age_seconds: Decimal = Decimal("30"),
 ) -> FreshAccountInputs:
     """Fetch one non-cached account bundle and current prices for exposure.
 
@@ -466,6 +554,41 @@ async def fetch_fresh_account_inputs(
     orders = orders_wrapper.get("orders")
     if not isinstance(positions, list) or not isinstance(orders, list):
         raise ValueError("gateway account bundle has an invalid collection")
+    if (
+        positions_wrapper.get("positionsLoaded") is not True
+        or positions_wrapper.get("snapshotCompleteFlag") is not True
+        or str(positions_wrapper.get("confidence") or "").upper()
+        not in {"HIGH", "MEDIUM"}
+    ):
+        raise ValueError("gateway positions snapshot is incomplete or unreliable")
+    position_age = decimal_from_external(
+        positions_wrapper.get("snapshotAgeSeconds")
+    )
+    if position_age < 0 or position_age > max_position_age_seconds:
+        raise ValueError("gateway positions snapshot is stale")
+
+    account_ref = str(raw_account.get("accountRef") or "").strip()
+    positions_account_ref = str(positions_wrapper.get("accountRef") or "").strip()
+    account_session_ref = str(raw_account.get("accountSessionRef") or "").strip()
+    positions_session_ref = str(
+        positions_wrapper.get("accountSessionRef") or ""
+    ).strip()
+    if (
+        len(account_ref) != 64
+        or len(positions_account_ref) != 64
+        or account_ref != positions_account_ref
+        or len(account_session_ref) != 64
+        or len(positions_session_ref) != 64
+        or account_session_ref != positions_session_ref
+    ):
+        raise ValueError("account and positions identity mismatch")
+    if expected_account_ref and account_ref != expected_account_ref:
+        raise ValueError("fresh account identity changed before sizing")
+    if (
+        expected_account_session_ref
+        and account_session_ref != expected_account_session_ref
+    ):
+        raise ValueError("fresh account session changed before sizing")
 
     required_symbols = {symbol.strip().upper()}
     for position in positions:
@@ -498,6 +621,9 @@ async def fetch_fresh_account_inputs(
         price = decimal_from_external(raw_price)
         if price <= 0:
             raise ValueError(f"fresh market price invalid for {item}")
+        quote_age = decimal_from_external(payload.get("quoteAgeSeconds"))
+        if payload.get("quoteReliable") is not True or quote_age > max_quote_age_seconds:
+            raise ValueError(f"fresh market price is stale or unreliable for {item}")
         market_prices[item] = price
     return FreshAccountInputs(
         raw_account=raw_account,

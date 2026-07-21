@@ -35,6 +35,12 @@ def make_snapshot_payload(symbol: str, **overrides: Any) -> dict[str, Any]:
         "depthBid1Size": 1500.0,
         "depthBid1MaxSize": 2000.0,
         "depthQueueDropPct": 25.0,
+        "depthBidTop5Size": 8_500.0,
+        "depthBidTop5ReferenceSize": 9_000.0,
+        "depthBidTop5DropPct": 5.56,
+        "depthBidTop5DropMetricReady": True,
+        "depthBidTop5DropSampleCount": 8,
+        "depthBidTop5DropRecentPcts": [6.0, 5.56],
         "marketRegime": "NEUTRAL",
     }
     payload: dict[str, Any] = {
@@ -121,10 +127,10 @@ class FakeGateway:
         self.token = token
         self.symbols = symbols or list(DEFAULT_SYMBOLS)
         self.positions_loaded = True
-        # v2 kontrat + hesap kimliği alanları (Faz 3 gateway'i raporlar).
+        # v3 kontrat + hesap kimliği alanları.
         # Testler hesap değişimi/kontrat uyuşmazlığı senaryoları için bunları
         # değiştirebilir.
-        self.contract_version: Any = 2
+        self.contract_version: Any = 3
         self.account_ref: str | None = "f" * 64
         self.account_session_ref: str | None = "5" * 64
         self.account_type: str = "DEMO"
@@ -225,7 +231,7 @@ class FakeGateway:
                     "autoOrderEnabled": True,
                     "testAutoOrderEnabled": True,
                     "quoteAgeSeconds": {s: 5.0 for s in self.symbols},
-                    # v2 kontrat + hesap kimliği (gerçek gateway şemasıyla aynı)
+                    # v3 kontrat + hesap kimliği (gerçek gateway şemasıyla aynı)
                     "gatewayContractVersion": self.contract_version,
                     "serverContractVersion": self.contract_version,
                     "systemMode": "OBSERVE_ONLY",
@@ -281,6 +287,8 @@ class FakeGateway:
                     "snapshotNonEmpty": bool(self.positions),
                     "snapshotGeneration": 1,
                     "snapshotAgeSeconds": 1.0,
+                    "accountRef": self.account_ref,
+                    "accountSessionRef": self.account_session_ref,
                     "positions": self.positions,
                 },
             )

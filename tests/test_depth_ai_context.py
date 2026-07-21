@@ -28,6 +28,14 @@ def _payload():
             "depthReliable": True,
             "largestAskWall": {"distancePct": 0.1},
         },
+        "technicalFeatures": {
+            "depthBidTop5Size": 25_000,
+            "depthBidTop5ReferenceSize": 30_000,
+            "depthBidTop5DropPct": 16.67,
+            "depthBidTop5DropMetricReady": True,
+            "depthBidTop5DropSampleCount": 8,
+            "depthBidTop5DropRecentPcts": [18.0, 16.67],
+        },
     }
 
 
@@ -38,6 +46,11 @@ def test_snapshot_depth_maps_to_signal_and_ai_context():
     assert req.depth_levels_used == 25
     assert req.depth_bid_ask_ratio_top10 == 0.45
     assert req.depth_largest_ask_wall_distance_pct == 0.1
+    assert req.depth_bid_top5_size == 25_000
+    assert req.depth_bid_top5_reference_size == 30_000
+    assert req.depth_bid_top5_drop_pct == 16.67
+    assert req.depth_bid_top5_drop_metric_ready is True
+    assert req.depth_bid_top5_drop_recent_pcts == [18.0, 16.67]
     context = build_payload(req)["depthContext"]
     assert context["orderBookSignal"] == "STRONG_SELL_PRESSURE"
     assert context["bidAskRatioTop25"] == 0.5
@@ -81,3 +94,11 @@ def test_gateway_depth_contract_is_shared_and_capped():
     assert "(r.TotalBidSize - r.TotalAskSize) / total" in source
     assert "WeightedDepthPrice" in source
     assert "median * 3m" in source and "sizes.Average() * 2.5m" in source
+    assert "DepthLiquidityWindowSeconds = 300" in source
+    assert "DepthLiquiditySampleIntervalSeconds = 15" in source
+    assert "DepthLiquidityMinimumBaselineSamples = 3" in source
+    assert "FrozenReferenceTop5Size" in source
+    assert "ConsecutiveRecoverySampleCount >= 3" in source
+    assert "metric.DropPct <= maximumDropPct" in source
+    assert 'features["depthBidTop5DropMetricReady"]' in source
+    assert 'features["depthBidTop5DropRecentPcts"]' in source

@@ -152,7 +152,7 @@ def build_ai_decision_context(
     news_entry = (news_context or {}).get(symbol, {})
     raw_news = news_entry.get("latestNews", []) if isinstance(news_entry, dict) else []
     news_items = []
-    for item in raw_news[:3] if isinstance(raw_news, list) else []:
+    for item in raw_news[:2] if isinstance(raw_news, list) else []:
         if not isinstance(item, dict):
             continue
         headline = str(item.get("title") or "").strip()
@@ -161,8 +161,8 @@ def build_ai_decision_context(
         summary = item.get("summary") or item.get("content")
         news_items.append(
             {
-                "headline": headline[:500],
-                "summary": str(summary)[:1000] if summary else None,
+                "headline": headline[:180],
+                "summary": str(summary)[:320] if summary else None,
                 "sentiment": item.get("sentiment") or "UNKNOWN",
             }
         )
@@ -173,21 +173,9 @@ def build_ai_decision_context(
     if news_items:
         events["news"] = {"items": news_items}
     if isinstance(broker_entry, dict) and broker_entry:
-        top_buyers = broker_entry.get("topBuyers") or []
-        top_sellers = broker_entry.get("topSellers") or []
         events["brokerFlow"] = {
             "smartMoneyFlow": broker_entry.get("smartMoneyFlow"),
             "netSmartLot": broker_entry.get("netSmartLot"),
-            "topBuyer": (
-                top_buyers[0].get("name")
-                if top_buyers and isinstance(top_buyers[0], dict)
-                else None
-            ),
-            "topSeller": (
-                top_sellers[0].get("name")
-                if top_sellers and isinstance(top_sellers[0], dict)
-                else None
-            ),
         }
     if isinstance(kap_entry, dict) and kap_entry:
         risk_events = kap_entry.get("riskEvents24h") or []
@@ -273,9 +261,6 @@ def build_ai_decision_context(
                 "alphaTrendSignal": req.alpha_trend_signal,
                 "indicatorConsensus": req.indicator_consensus,
                 "indicatorConsensusRatio": req.indicator_consensus_ratio,
-                "indicatorBuyCount": req.indicator_buy_count,
-                "indicatorSellCount": req.indicator_sell_count,
-                "indicatorNeutralCount": req.indicator_neutral_count,
             },
             "depth": depth,
             "position": position,
@@ -337,6 +322,12 @@ def _build_technical_feature_payload(req: SignalRequest) -> dict[str, Any]:
         "depthBid1Size": req.depth_bid1_size,
         "depthBid1MaxSize": req.depth_bid1_max_size,
         "depthQueueDropPct": req.depth_queue_drop_pct,
+        "depthBidTop5Size": req.depth_bid_top5_size,
+        "depthBidTop5ReferenceSize": req.depth_bid_top5_reference_size,
+        "depthBidTop5DropPct": req.depth_bid_top5_drop_pct,
+        "depthBidTop5DropMetricReady": req.depth_bid_top5_drop_metric_ready,
+        "depthBidTop5DropSampleCount": req.depth_bid_top5_drop_sample_count,
+        "depthBidTop5DropRecentPcts": req.depth_bid_top5_drop_recent_pcts,
         "depthReliable": req.depth_reliable,
         "symbolTrendRegime": req.symbol_trend_regime or req.market_regime,
     }
@@ -344,6 +335,12 @@ def _build_technical_feature_payload(req: SignalRequest) -> dict[str, Any]:
         fields["depthBid1Size"] = None
         fields["depthBid1MaxSize"] = None
         fields["depthQueueDropPct"] = None
+        fields["depthBidTop5Size"] = None
+        fields["depthBidTop5ReferenceSize"] = None
+        fields["depthBidTop5DropPct"] = None
+        fields["depthBidTop5DropMetricReady"] = None
+        fields["depthBidTop5DropSampleCount"] = None
+        fields["depthBidTop5DropRecentPcts"] = None
     result = {key: value for key, value in fields.items() if value is not None}
     if result:
         result["schemaVersion"] = "technical-features-v2"
@@ -446,6 +443,20 @@ def snapshot_to_signal_request(
         depthBid1Size=_payload_get(payload, "depthBid1Size"),
         depthBid1MaxSize=_payload_get(payload, "depthBid1MaxSize"),
         depthQueueDropPct=_payload_get(payload, "depthQueueDropPct"),
+        depthBidTop5Size=_payload_get(payload, "depthBidTop5Size"),
+        depthBidTop5ReferenceSize=_payload_get(
+            payload, "depthBidTop5ReferenceSize"
+        ),
+        depthBidTop5DropPct=_payload_get(payload, "depthBidTop5DropPct"),
+        depthBidTop5DropMetricReady=_payload_get(
+            payload, "depthBidTop5DropMetricReady"
+        ),
+        depthBidTop5DropSampleCount=_payload_get(
+            payload, "depthBidTop5DropSampleCount"
+        ),
+        depthBidTop5DropRecentPcts=_payload_get(
+            payload, "depthBidTop5DropRecentPcts"
+        ),
         depthReliable=depth.get(
             "depthReliable", _payload_get(payload, "depthReliable")
         ),

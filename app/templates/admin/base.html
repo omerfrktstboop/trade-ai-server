@@ -235,6 +235,15 @@
     tr:hover td { background: var(--bg-card-hover); }
     .empty-row td { color: var(--text-muted); font-style: italic; text-align: center; padding: 32px; }
 
+    /* Geniş tablolarda (çok sütunlu) işlem butonlarına ulaşmak için yatay
+       kaydırma zorunlu olmasın diye: bu sütun sağda sabit kalır. */
+    .sticky-col {
+      position: sticky; right: 0; z-index: 1;
+      background: var(--bg-card); box-shadow: -4px 0 8px -4px rgba(0,0,0,0.25);
+    }
+    th.sticky-col { background: var(--bg-secondary); z-index: 2; }
+    tr:hover td.sticky-col { background: var(--bg-card-hover); }
+
     /* ── Badges ─────────────────────────────────────────────── */
     .badge {
       display: inline-flex; align-items: center; gap: 4px;

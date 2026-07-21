@@ -6,14 +6,16 @@
 <div class="card mb-24" style="border-color:var(--accent)">
   <div class="section-title mb-16" style="color:var(--accent)">Keşif → Araştırma → İşlem Listesi</div>
   <p class="text-muted text-sm">
-    Bu sayfadaki adaylar veri ve AI araştırması içindir. Bir sembol ancak iki ardışık
-    başarılı değerlendirmeden sonra Trade Watchlist'e girer. Research Candidate olmak
-    tek başına otomatik emir yetkisi vermez.
+    Bu sayfadaki adaylar veri ve AI araştırması içindir. Terfi <strong>manuel/kontrollü</strong>:
+    AI iki ardışık başarılı değerlendirme yapınca sembol "terfiye hazır" işaretlenir, ama
+    Trade Watchlist'e (ve dolayısıyla emir yetkisine) girmesi için admin'in aşağıdan
+    "Terfi Ettir" demesi gerekir. Research Candidate olmak tek başına otomatik emir
+    yetkisi vermez.
   </p>
 </div>
 
 <div class="mb-24" style="display:flex;gap:8px;flex-wrap:wrap">
-  {% for key, label in [('all','Tüm adaylar'),('pending','Araştırma bekleyenler'),('near','Yeterli skora yaklaşanlar'),('promoted','İşlem listesine alınanlar'),('rejected','Reddedilenler'),('expired','Süresi dolanlar')] %}
+  {% for key, label in [('all','Tüm adaylar'),('pending','Araştırma bekleyenler'),('ready','Terfiye hazır'),('near','Yeterli skora yaklaşanlar'),('promoted','İşlem listesine alınanlar'),('rejected','Reddedilenler'),('expired','Süresi dolanlar')] %}
   <a href="/admin/research?filter={{ key }}" class="badge {% if selected_filter == key %}badge-buy{% else %}badge-neutral{% endif %}" style="text-decoration:none">{{ label }}</a>
   {% endfor %}
 </div>
@@ -26,7 +28,7 @@
         <th>Confidence</th><th>Risk</th><th>AI Kararı</th><th>30dk</th><th>60dk</th>
         <th>Günlük</th><th>Göreceli Hacim</th><th>Hacim TL</th><th>EMA</th><th>RSI</th>
         <th>Haber Riski</th><th>Durum</th><th>İlk Bulunma</th><th>Son İnceleme</th>
-        <th>Listeye Alınma / Red Nedeni</th>
+        <th>Listeye Alınma / Red Nedeni</th><th class="sticky-col">İşlem</th>
       </tr>
     </thead>
     <tbody>
@@ -48,7 +50,7 @@
         <td>{% if tech.get('emaTrendAligned') %}<span class="badge badge-buy">UYUMLU</span>{% else %}<span class="badge badge-neutral">BELİRSİZ</span>{% endif %}</td>
         <td>{{ "%.1f"|format(tech.get('rsi')) if tech.get('rsi') is not none else '—' }}</td>
         <td>{{ tech.get('newsRisk') or '—' }}</td>
-        <td><span class="badge badge-neutral">{{ row.status }}</span><br><span class="text-muted text-sm">pass {{ row.consecutive_pass_count }}</span></td>
+        <td><span class="badge {% if row.status == 'READY_FOR_PROMOTION' %}badge-buy{% elif row.status == 'PROMOTED' %}badge-buy{% elif row.status == 'REJECTED' %}badge-sell{% else %}badge-neutral{% endif %}">{{ row.status }}</span><br><span class="text-muted text-sm">pass {{ row.consecutive_pass_count }}</span></td>
         <td class="mono text-muted">{{ row.first_detected_at | local_time }}</td>
         <td class="mono text-muted">{{ row.last_evaluated_at | local_time if row.last_evaluated_at else '—' }}</td>
         <td class="text-muted" style="min-width:260px">
@@ -66,9 +68,23 @@
           </details>
           {% endif %}
         </td>
+        <td class="sticky-col" style="min-width:150px">
+          {% if row.status not in ('PROMOTED',) and row.symbol not in trade_symbols %}
+          <form method="post" action="/admin/research/{{ row.symbol }}/promote?filter={{ selected_filter }}" style="margin-bottom:6px">
+            <input type="hidden" name="reason" value="Manual promotion from Research page">
+            <button class="btn btn-outline btn-sm" type="submit">Terfi Ettir</button>
+          </form>
+          {% endif %}
+          {% if row.status not in ('REJECTED', 'PROMOTED') and row.symbol not in trade_symbols %}
+          <form method="post" action="/admin/research/{{ row.symbol }}/reject?filter={{ selected_filter }}">
+            <input type="hidden" name="reason" value="Manually rejected (not for now)">
+            <button class="btn btn-outline-danger btn-sm" type="submit">Reddet</button>
+          </form>
+          {% endif %}
+        </td>
       </tr>
       {% else %}
-      <tr class="empty-row"><td colspan="19">Bu filtrede araştırma adayı bulunmuyor.</td></tr>
+      <tr class="empty-row"><td colspan="20">Bu filtrede araştırma adayı bulunmuyor.</td></tr>
       {% endfor %}
     </tbody>
   </table>

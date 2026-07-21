@@ -22,6 +22,7 @@ from app.models.db import (
     DecisionOutcome,
     MarketObservation,
     OrderFill,
+    OrderLog,
     PositionLifecycle,
     PositionStopEvent,
     RiskDecision,
@@ -95,6 +96,28 @@ async def _fill(
     order_id: str = "ord-1",
 ):
     async with async_session_factory() as session:
+        existing = (
+            await session.execute(
+                select(OrderLog).where(OrderLog.request_id == request_id)
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            session.add(
+                OrderLog(
+                    request_id=request_id,
+                    request_fingerprint="a" * 64,
+                    account_ref="f" * 64,
+                    symbol=symbol,
+                    action=action,
+                    qty=order_qty,
+                    order_qty=order_qty,
+                    price=limit_price,
+                    limit_price=limit_price,
+                    status="RESERVED",
+                    state="RESERVED",
+                )
+            )
+            await session.flush()
         row, changed = await apply_callback(
             session,
             request_id=request_id,
@@ -768,6 +791,18 @@ class TestPositionLinkedStop:
         # only the stop/qty values now come from the lifecycle.
         await self._seed_bot_position("THYAO", 6)
         fake = FakeGateway()
+        fake.positions = [
+            {
+                "symbol": "THYAO",
+                "accountNetQty": 6,
+                "accountAvailableQty": 6,
+                "botOwnedQty": 6,
+                "botQty": 6,
+                "sellableQty": 6,
+                "totalQty": 6,
+                "lockedLongTermQty": 0,
+            }
+        ]
         fake.snapshot_overrides["THYAO"] = {"lastPrice": 85.0}
         triggered = await check_stop_loss_positions(make_gateway_client(fake))
         assert len(triggered) == 1

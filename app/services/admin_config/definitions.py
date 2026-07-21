@@ -148,6 +148,55 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         str(settings.portfolio_scan_interval_minutes),
         "Eldeki pozisyonların AI ile yeniden değerlendirilme aralığı (dakika, en az 5).",
     ),
+    "portfolioRotationEnabled": ConfigDefinition(
+        "portfolioRotationEnabled",
+        "bool",
+        "false",
+        "Daha güçlü fırsat için yalnızca kanıtlanmış bot pozisyonlarında "
+        "dolum ve nakit teyitli otomatik SELL -> BUY rotasyonunu açar.",
+    ),
+    "rotationMinimumOpportunityScoreAdvantage": ConfigDefinition(
+        "rotationMinimumOpportunityScoreAdvantage",
+        "decimal",
+        "15",
+        "Hedef fırsat puanının satılacak pozisyondan en az kaç puan üstün olması gerektiği.",
+    ),
+    "rotationMinimumExpectedReturnAdvantagePct": ConfigDefinition(
+        "rotationMinimumExpectedReturnAdvantagePct",
+        "decimal",
+        "2",
+        "Hedef beklenen getirisinin kaynak pozisyondan en az kaç yüzde puan üstün olması gerektiği.",
+    ),
+    "rotationReviewIntervalMinutes": ConfigDefinition(
+        "rotationReviewIntervalMinutes",
+        "int",
+        "10",
+        "Rotasyon için gereken iki BUY değerlendirmesi arasındaki en kısa süre (dakika).",
+    ),
+    "rotationAssessmentMaxAgeMinutes": ConfigDefinition(
+        "rotationAssessmentMaxAgeMinutes",
+        "int",
+        "30",
+        "Rotasyon karşılaştırmasında kullanılabilecek AI değerlendirmesinin azami yaşı (dakika).",
+    ),
+    "rotationMinimumHoldingMinutes": ConfigDefinition(
+        "rotationMinimumHoldingMinutes",
+        "int",
+        "60",
+        "Yeni alınan bot pozisyonunun rotasyonla satılmadan önce tutulacağı en kısa süre.",
+    ),
+    "rotationPlanExpiryMinutes": ConfigDefinition(
+        "rotationPlanExpiryMinutes",
+        "int",
+        "120",
+        "Tamamlanmayan rotasyon planının güvenli biçimde sona ereceği süre.",
+    ),
+    "rotationMaxPerDay": ConfigDefinition(
+        "rotationMaxPerDay",
+        "int",
+        "2",
+        "Bir hesapta bir günde başlatılabilecek en fazla otomatik rotasyon.",
+    ),
     "buyAllowedSymbols": ConfigDefinition(
         "buyAllowedSymbols",
         "string",
@@ -180,6 +229,13 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "decimal",
         "0.50",
         "İşlem başına riske edilecek özkaynak yüzdesi.",
+    ),
+    "sizingTotalBotCapitalBudgetTl": ConfigDefinition(
+        "sizingTotalBotCapitalBudgetTl",
+        "decimal",
+        "0",
+        "Botun tüm açık pozisyonları ve bekleyen BUY emirleri için aşamayacağı "
+        "toplam sermaye bütçesi (TL). 0 yeni BUY işlemlerini kapatır.",
     ),
     "sizingMaxCashUtilizationPct": ConfigDefinition(
         "sizingMaxCashUtilizationPct",
@@ -385,6 +441,14 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         str(settings.promotion_min_interval_minutes),
         "İki başarılı araştırma arasında geçmesi gereken en kısa süre (dakika).",
     ),
+    "autoPromotionEnabled": ConfigDefinition(
+        "autoPromotionEnabled",
+        "bool",
+        "false",
+        "Otomatik 2-pass AI terfi sistemini aktif eder. Kapalıyken (varsayılan) "
+        "adaylar 2 nitelikli cevaptan sonra sadece 'terfiye hazır' işaretlenir; "
+        "Trade Watchlist'e giriş admin onayı gerektirir.",
+    ),
     "researchCandidateTtlHours": ConfigDefinition(
         "researchCandidateTtlHours",
         "int",
@@ -462,6 +526,7 @@ RISKY_CONFIG_KEYS = {
     "killSwitchEnabled",
     "scannerEnabled",
     "sizingRiskPerTradePct",
+    "sizingTotalBotCapitalBudgetTl",
     "sizingMaxCashUtilizationPct",
     "sizingMaxAccountExposurePct",
     "sizingMaxPositionValuePerSymbol",
@@ -478,6 +543,14 @@ RISKY_CONFIG_KEYS = {
     "sizingDailyOrderLimit",
     "sizingPerSymbolDailyOrderLimit",
     "sizingAllowMarginBuying",
+    "portfolioRotationEnabled",
+    "rotationMinimumOpportunityScoreAdvantage",
+    "rotationMinimumExpectedReturnAdvantagePct",
+    "rotationReviewIntervalMinutes",
+    "rotationAssessmentMaxAgeMinutes",
+    "rotationMinimumHoldingMinutes",
+    "rotationPlanExpiryMinutes",
+    "rotationMaxPerDay",
     "accountReservationHandling",
     "maxTradeWatchlistSize",
     "minimumTrendPreScore",
@@ -486,6 +559,7 @@ RISKY_CONFIG_KEYS = {
     "researchMaximumRiskScore",
     "promotionConsecutivePasses",
     "promotionMinIntervalMinutes",
+    "autoPromotionEnabled",
     "tradeWatchlistTtlHours",
     "discoveryMinimumVolumeTl",
     "discoveryMaximumSpreadPct",
@@ -604,6 +678,23 @@ CONFIG_SECTION_DEFINITIONS = (
         ),
     ),
     ConfigSectionDefinition(
+        title="AI portföy rotasyonu",
+        description=(
+            "Yalnız botun doğrulanmış lotlarında çalışır. SELL dolmadan ve "
+            "gateway pozisyonu ile kullanılabilir nakit yenilenmeden BUY göndermez."
+        ),
+        keys=(
+            "portfolioRotationEnabled",
+            "rotationMinimumOpportunityScoreAdvantage",
+            "rotationMinimumExpectedReturnAdvantagePct",
+            "rotationReviewIntervalMinutes",
+            "rotationAssessmentMaxAgeMinutes",
+            "rotationMinimumHoldingMinutes",
+            "rotationPlanExpiryMinutes",
+            "rotationMaxPerDay",
+        ),
+    ),
+    ConfigSectionDefinition(
         title="Deterministik emir boyutlama sınırları",
         description=(
             "Ortam değişkenleri ve aktif Trade Profile ile birlikte çözümlenen "
@@ -612,6 +703,7 @@ CONFIG_SECTION_DEFINITIONS = (
         ),
         keys=(
             "sizingRiskPerTradePct",
+            "sizingTotalBotCapitalBudgetTl",
             "sizingMaxCashUtilizationPct",
             "sizingMaxAccountExposurePct",
             "sizingMaxPositionValuePerSymbol",
@@ -686,6 +778,14 @@ CONFIG_LABELS: dict[str, str] = {
     "dailyMaxLossTl": "Günlük Maks. Zarar (TL)",
     "significancePriceMovePct": "Önem Fiyat Eşiği (%)",
     "portfolioScanIntervalMinutes": "Portföy Tarama Aralığı (dk)",
+    "portfolioRotationEnabled": "Otomatik Portföy Rotasyonu",
+    "rotationMinimumOpportunityScoreAdvantage": "Rotasyon Min. Fırsat Puanı Farkı",
+    "rotationMinimumExpectedReturnAdvantagePct": "Rotasyon Min. Getiri Farkı (%)",
+    "rotationReviewIntervalMinutes": "Rotasyon İki İnceleme Aralığı (dk)",
+    "rotationAssessmentMaxAgeMinutes": "Rotasyon Değerlendirme Azami Yaşı (dk)",
+    "rotationMinimumHoldingMinutes": "Rotasyon Min. Elde Tutma Süresi (dk)",
+    "rotationPlanExpiryMinutes": "Rotasyon Planı Geçerliliği (dk)",
+    "rotationMaxPerDay": "Günlük En Fazla Rotasyon",
     "buyAllowedSymbols": "BUY İzinli Semboller (gateway)",
     "sellExitAllowedSymbols": "SELL Çıkış İzinli Semboller",
     "realAccountArmed": "REAL Hesap Arming",
@@ -695,6 +795,7 @@ CONFIG_LABELS: dict[str, str] = {
     "botAllowMarketOrders": "MARKET Emirlere İzin (kilitli)",
     "botHttpTimeoutSeconds": "Bot HTTP Zaman Aşımı (sn)",
     "sizingRiskPerTradePct": "İşlem Başına Risk (%)",
+    "sizingTotalBotCapitalBudgetTl": "Toplam Bot Sermaye Bütçesi (TL)",
     "sizingMaxCashUtilizationPct": "En Fazla Nakit Kullanımı (%)",
     "sizingMaxAccountExposurePct": "En Fazla Hesap Maruziyeti (%)",
     "sizingMaxPositionValuePerSymbol": "Sembol Başına En Fazla Pozisyon (TL)",
@@ -729,6 +830,7 @@ CONFIG_LABELS: dict[str, str] = {
     "researchMaximumRiskScore": "Terfi İçin En Yüksek Risk Puanı",
     "promotionConsecutivePasses": "Terfi İçin Ardışık Başarı Sayısı",
     "promotionMinIntervalMinutes": "Terfi Başarıları Arası Süre (dk)",
+    "autoPromotionEnabled": "Otomatik Terfi Sistemi Aktif",
     "researchCandidateTtlHours": "Araştırma Adayı Geçerliliği (saat)",
     "tradeWatchlistTtlHours": "BUY Yetkisi Geçerliliği (saat)",
     "discoveryMinimumVolumeTl": "En Düşük Seans Hacmi (TL)",

@@ -174,12 +174,16 @@ class TestNormalizeDecision:
                 "qty": 5,
                 "stop_loss": 95.5,
                 "target_price": 110.0,
+                "target_allocation_pct": 25,
+                "opportunity_score": 88,
             }
         )
         assert "qty" not in result
         assert result["_audit_raw_response"]["qty"] == 5
         assert result["stop_loss"] == 95.5
         assert result["target_price"] == 110.0
+        assert result["target_allocation_pct"] == 25.0
+        assert result["opportunity_score"] == 88.0
 
     def test_invalid_optional_fields_skipped(self):
         result = _normalize_decision(
@@ -650,7 +654,7 @@ class TestDeepSeekDecide:
         assert json_body["messages"][0]["role"] == "system"
         assert json_body["messages"][1]["role"] == "user"
         assert "TUPRS" in json_body["messages"][1]["content"]
-        assert '"price": {' in json_body["messages"][1]["content"]
+        assert '"price":{' in json_body["messages"][1]["content"]
         assert "lastPrice" not in json_body["messages"][1]["content"]
 
 

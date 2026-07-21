@@ -14,14 +14,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from decimal import Decimal
 from typing import Any, Awaitable, Callable
 
 from sqlalchemy import delete, select
 
 from app.config import settings
 from app.db.session import async_session_factory
-from app.models.db import BotPosition, OrderLog
+from app.models.db import BotPosition
+from app.services.bot_ownership import load_bot_ownership
 from app.services.matriks_gateway import (
     GatewayError,
     GatewayUnavailable,
@@ -44,7 +44,9 @@ async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
         reddettiyse 0 (istisna fırlatmaz — tarama turunu bozmamalı).
     """
     try:
-        snapshot = await gateway.get_positions()
+        snapshot, health = await asyncio.gather(
+            gateway.get_positions(), gateway.health()
+        )
     except (GatewayUnavailable, GatewayError) as exc:
         logger.warning("Position sync skipped: gateway error %s", exc)
         return 0
@@ -53,63 +55,16 @@ async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
     if confidence not in {"HIGH", "MEDIUM"}:
         logger.info("Position sync skipped: gateway snapshot confidence=%s", confidence)
         return 0
+    account_ref = str(health.get("accountRef") or "").strip()
+    if len(account_ref) != 64:
+        logger.info("Position sync skipped: verified accountRef unavailable")
+        return 0
 
     synced = 0
     try:
         async with async_session_factory() as session:
-            # Bot ownership comes exclusively from cumulative ledger fills.
-            # Replaying a partial/final callback cannot double count because
-            # each request_id has one row and filled_qty is monotonic.
-            orders = (
-                (
-                    await session.execute(
-                        select(OrderLog).where(
-                            OrderLog.status.in_(("PARTIALLY_FILLED", "FILLED"))
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            bought_qty: dict[str, Decimal] = {}
-            sold_qty: dict[str, Decimal] = {}
-            bought_cost: dict[str, Decimal] = {}
-            for order in orders:
-                symbol = order.symbol.strip().upper()
-                filled = Decimal(str(order.filled_qty or 0))
-                if filled <= 0:
-                    continue
-                if order.action.upper() == "BUY":
-                    fill_price = Decimal(
-                        str(
-                            order.avg_price
-                            or order.rounded_limit_price
-                            or order.limit_price
-                            or 0
-                        )
-                    )
-                    bought_qty[symbol] = bought_qty.get(symbol, Decimal("0")) + filled
-                    bought_cost[symbol] = (
-                        bought_cost.get(symbol, Decimal("0")) + filled * fill_price
-                    )
-                else:
-                    sold_qty[symbol] = sold_qty.get(symbol, Decimal("0")) + filled
-
-            # Ledger rows do not have a guaranteed SELECT order. Aggregate all
-            # monotonic request fills first, then compute net ownership so a
-            # SELL row returned before its historical BUY cannot be ignored.
-            positions: dict[str, Decimal] = {}
-            position_costs: dict[str, Decimal] = {}
-            for symbol, total_bought in bought_qty.items():
-                net_qty = max(
-                    Decimal("0"),
-                    total_bought - sold_qty.get(symbol, Decimal("0")),
-                )
-                if net_qty <= 0:
-                    continue
-                average_buy_cost = bought_cost[symbol] / total_bought
-                positions[symbol] = net_qty
-                position_costs[symbol] = average_buy_cost * net_qty
+            ownership = await load_bot_ownership(session, account_ref)
+            positions = ownership.quantities
             for symbol, qty in positions.items():
                 row = (
                     await session.execute(
@@ -118,7 +73,7 @@ async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
                 ).scalar_one_or_none()
 
                 if row is None:
-                    total_cost = position_costs.get(symbol, Decimal("0"))
+                    total_cost = ownership.average_costs[symbol] * qty
                     session.add(
                         BotPosition(
                             symbol=symbol,
@@ -129,7 +84,7 @@ async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
                     )
                 else:
                     row.qty = float(qty)
-                    total_cost = position_costs.get(symbol, Decimal("0"))
+                    total_cost = ownership.average_costs[symbol] * qty
                     row.avg_price = float(total_cost / qty) if qty > 0 else None
                     row.total_value = float(total_cost)
                 synced += 1

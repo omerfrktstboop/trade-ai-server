@@ -133,6 +133,11 @@ def _normalize_decision(raw: dict[str, Any]) -> dict[str, Any]:
         "stop_loss": ("stop_loss", "stopLoss"),
         "target_price": ("target_price", "targetPrice"),
         "risk_score": ("risk_score", "riskScore"),
+        "opportunity_score": ("opportunity_score", "opportunityScore"),
+        "target_allocation_pct": (
+            "target_allocation_pct",
+            "targetAllocationPct",
+        ),
         "research_score": ("research_score", "researchScore"),
     }
     for dest_field, aliases in numeric_aliases.items():
@@ -175,9 +180,35 @@ def _compact_context_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return AiDecisionContext.model_validate(payload).model_dump(exclude_none=True)
 
 
+def _round_prompt_numbers(value: Any) -> Any:
+    """Remove meaningless float tails without changing market precision."""
+    if isinstance(value, float):
+        rounded = round(value, 4)
+        return int(rounded) if rounded.is_integer() else rounded
+    if isinstance(value, dict):
+        return {key: _round_prompt_numbers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_round_prompt_numbers(item) for item in value]
+    return value
+
+
 def _build_payload_str(payload: dict[str, Any]) -> str:
     """Serialize a validated compact decision context for the user message."""
-    return json.dumps(_compact_context_payload(payload), indent=2, ensure_ascii=False)
+    compact = _round_prompt_numbers(_compact_context_payload(payload))
+    return json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
+
+
+def _log_token_usage(data: dict[str, Any], *, phase: str) -> None:
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return
+    logger.info(
+        "DeepSeek tokens phase=%s prompt=%s completion=%s total=%s",
+        phase,
+        usage.get("prompt_tokens"),
+        usage.get("completion_tokens"),
+        usage.get("total_tokens"),
+    )
 
 
 # ── Abstract base ─────────────────────────────────────────────────────────────
@@ -377,9 +408,16 @@ class DeepSeekProvider(AiProvider):
                     "_transient_failure": True,
                 }
         else:
+            system_content = get_trading_system_prompt()
+            user_content = _build_payload_str(payload)
+            logger.info(
+                "DeepSeek input size systemChars=%d contextChars=%d tools=false",
+                len(system_content),
+                len(user_content),
+            )
             messages = [
-                {"role": "system", "content": get_trading_system_prompt()},
-                {"role": "user", "content": _build_payload_str(payload)},
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content},
             ]
 
             body = {
@@ -421,9 +459,17 @@ class DeepSeekProvider(AiProvider):
         executions = 0
         force_json_final = False
 
+        system_content = get_trading_system_prompt(tools_enabled=True)
+        user_content = _build_payload_str(payload)
+        logger.info(
+            "DeepSeek input size systemChars=%d contextChars=%d tools=true toolCount=%d",
+            len(system_content),
+            len(user_content),
+            len(tools),
+        )
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": get_trading_system_prompt(tools_enabled=True)},
-            {"role": "user", "content": _build_payload_str(payload)},
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": user_content},
         ]
 
         for round_index in range(MAX_TOOL_ROUNDS + 1):
@@ -577,6 +623,7 @@ class DeepSeekProvider(AiProvider):
             logger.exception("DeepSeek tool-round unexpected error")
             return None, f"Unexpected error: {exc}"
 
+        _log_token_usage(data, phase="tool-round")
         choices = data.get("choices", [])
         if not choices:
             return None, "Empty response from model"
@@ -643,6 +690,7 @@ class DeepSeekProvider(AiProvider):
                             }
 
                         data = await resp.json()
+                        _log_token_usage(data, phase="decision")
                         break
 
             except aiohttp.ClientError as exc:

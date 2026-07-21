@@ -36,7 +36,11 @@ async def _seed(
             symbol="THYAO",
             action="BUY",
             qty=10,
+            order_qty=10,
             price=100,
+            limit_price=100,
+            request_fingerprint="a" * 64,
+            account_ref="f" * 64,
             status=status,
             order_id=order_id,
             mode="DEMO_LIVE",
@@ -64,7 +68,10 @@ def test_reconciliation_applies_definitive_status_and_order_id():
                     "orderId": "ORD-1",
                     "requestId": "REQ-1",
                     "status": "FILLED",
+                    "qty": 10,
+                    "filledQty": 10,
                     "avgPrice": 101.25,
+                    "price": 100,
                 }
             ]
         )
@@ -89,7 +96,7 @@ def test_reconciliation_does_not_guess_missing_order_status():
     asyncio.run(run())
 
 
-def test_reconciliation_uses_only_unambiguous_order_shape_fallback():
+def test_reconciliation_never_guesses_by_order_shape():
     async def run():
         await drop_all()
         await init_db()
@@ -106,10 +113,10 @@ def test_reconciliation_uses_only_unambiguous_order_shape_fallback():
                 }
             ]
         )
-        assert await reconcile_orders(gateway) == 1
+        assert await reconcile_orders(gateway) == 0
         row = await _load(row_id)
-        assert row.status == "CANCELED"
-        assert row.order_id == "ORD-SHAPE"
+        assert row.status == "SENT_PENDING"
+        assert row.order_id is None
 
     asyncio.run(run())
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import select
@@ -12,6 +13,8 @@ from sqlalchemy import select
 from app.config import settings
 from app.db.session import async_session_factory
 from app.models.db import OrderLog
+from app.services.order_lifecycle import apply_callback
+from app.services.order_ledger import PENDING_STATES
 from app.services.matriks_gateway import (
     GatewayError,
     GatewayUnavailable,
@@ -21,11 +24,21 @@ from app.services.matriks_gateway import (
 
 logger = logging.getLogger(__name__)
 FINAL_STATUSES = {"FILLED", "CANCELED", "CANCELLED", "REJECTED", "EXPIRED"}
-PENDING_STATUSES = {"SENT_PENDING", "NEW", "PARTIALLY_FILLED", "CANCEL_REQUESTED"}
+PENDING_STATUSES = set(PENDING_STATES)
+
+
+def _finite_decimal(value: Any) -> Decimal | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return result if result.is_finite() else None
 
 
 async def reconcile_orders(gateway: MatriksGatewayClient | Any = gateway_client) -> int:
-    """Apply only definitive gateway statuses to local pending rows."""
+    """Reconcile pending rows through the authoritative callback/fill path."""
     try:
         payload = await gateway.get_active_orders()
     except (GatewayUnavailable, GatewayError):
@@ -36,7 +49,9 @@ async def reconcile_orders(gateway: MatriksGatewayClient | Any = gateway_client)
         return 0
 
     states = [row for row in payload.get("orders") or [] if isinstance(row, dict)]
-    by_order_id = {str(row.get("orderId")): row for row in states if row.get("orderId")}
+    by_order_id = {
+        str(row.get("orderId")): row for row in states if row.get("orderId")
+    }
     by_request_id = {
         str(row.get("requestId")): row for row in states if row.get("requestId")
     }
@@ -57,30 +72,59 @@ async def reconcile_orders(gateway: MatriksGatewayClient | Any = gateway_client)
                     local.request_id
                 )
                 if state is None:
-                    candidates = [
-                        item
-                        for item in states
-                        if str(item.get("symbol") or "").upper() == local.symbol.upper()
-                        and str(item.get("side") or "").upper() == local.action.upper()
-                        and abs(float(item.get("qty") or 0) - float(local.qty)) < 1e-9
-                        and abs(float(item.get("price") or 0) - float(local.price or 0))
-                        < 1e-9
-                    ]
-                    if len(candidates) == 1:
-                        state = candidates[0]
-                if state is None:
                     continue
-                if state.get("orderId") and not local.order_id:
-                    local.order_id = str(state["orderId"])
                 status = str(state.get("status") or "").upper()
-                if status in FINAL_STATUSES:
-                    local.status = "CANCELED" if status == "CANCELLED" else status
-                    final_price = state.get("avgPrice") or state.get("price")
-                    if final_price is not None:
-                        local.price = float(final_price)
-                    local.matrix_message = "order reconciliation: gateway final status"
+                if status not in FINAL_STATUSES | PENDING_STATUSES:
+                    continue
+                order_qty = _finite_decimal(state.get("qty"))
+                filled_qty = _finite_decimal(state.get("filledQty"))
+                avg_price = _finite_decimal(state.get("avgPrice"))
+                limit_price = _finite_decimal(state.get("price"))
+                if (
+                    order_qty is None
+                    or order_qty <= 0
+                    or order_qty != order_qty.to_integral_value()
+                    or filled_qty is None
+                    or filled_qty < 0
+                    or filled_qty > order_qty
+                ):
+                    logger.error(
+                        "Order reconciliation rejected invalid quantities requestId=%s",
+                        local.request_id,
+                    )
+                    continue
+                if status == "FILLED" and filled_qty != order_qty:
+                    logger.error(
+                        "Order reconciliation refused FILLED without full cumulative qty requestId=%s",
+                        local.request_id,
+                    )
+                    continue
+                if filled_qty > 0 and (avg_price is None or avg_price <= 0):
+                    logger.error(
+                        "Order reconciliation refused fill without average price requestId=%s",
+                        local.request_id,
+                    )
+                    continue
+                _, changed = await apply_callback(
+                    session,
+                    request_id=local.request_id,
+                    symbol=local.symbol,
+                    action=local.action,
+                    status="CANCELED" if status == "CANCELLED" else status,
+                    order_qty=float(order_qty),
+                    filled_qty=float(filled_qty),
+                    last_fill_qty=float(
+                        max(Decimal("0"), filled_qty - Decimal(str(local.filled_qty or 0)))
+                    ),
+                    avg_price=float(avg_price) if avg_price is not None else None,
+                    limit_price=(
+                        float(limit_price) if limit_price is not None else local.limit_price
+                    ),
+                    order_id=str(state.get("orderId") or local.order_id or "") or None,
+                    message="order reconciliation: gateway cumulative state",
+                )
+                if changed:
                     updated += 1
-            await session.commit()
     except Exception:
         logger.exception("Order reconciliation DB update failed")
         return 0

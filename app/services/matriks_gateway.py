@@ -302,6 +302,8 @@ class MatriksGatewayClient:
         qty: int,
         limit_price: Decimal | float,
         mode: str,
+        account_ref: str,
+        account_session_ref: str,
     ) -> dict[str, Any]:
         """POST /order — gateway'e LIMIT emir isteği gönder.
 
@@ -326,6 +328,8 @@ class MatriksGatewayClient:
             if isinstance(limit_price, Decimal)
             else limit_price,
             "mode": mode.strip().upper(),
+            "accountRef": account_ref.strip(),
+            "accountSessionRef": account_session_ref.strip(),
         }
         try:
             response = await client.post("/order", json=body)

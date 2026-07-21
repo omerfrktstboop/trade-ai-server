@@ -6,7 +6,7 @@ limits on top):
 - v2: ``systemMode`` (OBSERVE_ONLY/AUTO_TRADE), ``realAccountArmed`` ve
   ``armedAccountRef`` gönderilir; C# CheckDispatchGates bunları + accountType
   ile emir yetkisini belirler. Eski mode/DEMO_LIVE/REAL_LIVE downgrade mantığı
-  kaldırıldı. ``contractVersion=2`` uyuşmazlığında iki taraf da fail-closed.
+  kaldırıldı. ``contractVersion=3`` uyuşmazlığında iki taraf da fail-closed.
 - ``configHash`` fingerprints the full response so the gateway (and tests)
   can cheaply detect "did anything change?" across polls.
 """
@@ -15,8 +15,9 @@ import hashlib
 import json
 import math
 from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 
 from app.config import settings
@@ -29,7 +30,9 @@ from app.models.db import (
     TradeWatchlistSymbol,
 )
 from app.services.admin_config import list_admin_configs
+from app.services.bot_ownership import load_bot_ownership
 from app.services.daily_trade_count import get_today_order_count_maps
+from app.services.effective_risk_config import resolve_effective_risk_config
 from app.services.trade_profile import get_active_profile
 
 router = APIRouter(tags=["Gateway"], dependencies=[Depends(verify_gateway_token)])
@@ -54,12 +57,21 @@ def _is_index_symbol(symbol: str, configured_market_index: str) -> bool:
 
 
 @router.get("/gateway/config")
-async def gateway_runtime_config() -> dict:
+async def gateway_runtime_config(
+    account_ref: Annotated[str | None, Query(alias="accountRef")] = None,
+) -> dict:
     """Return the complete fail-closed configuration consumed by Matriks."""
     async with async_session_factory() as session:
         values = {item.key: item.value for item in await list_admin_configs(session)}
         profile = await get_active_profile(session)
+        effective_limits = await resolve_effective_risk_config(session)
         portfolio = (await session.execute(select(BotPosition))).scalars().all()
+        normalized_account_ref = str(account_ref or "").strip()
+        ownership = (
+            await load_bot_ownership(session, normalized_account_ref)
+            if len(normalized_account_ref) == 64
+            else None
+        )
         locked = (await session.execute(select(LockedPosition))).scalars().all()
         research_candidates = (
             (
@@ -131,6 +143,8 @@ async def gateway_runtime_config() -> dict:
     if configured_buy_symbols:
         effective_buy_symbols.intersection_update(configured_buy_symbols)
     symbols.update(row.symbol.strip().upper() for row in portfolio if row.qty > 0)
+    if ownership is not None:
+        symbols.update(ownership.quantities)
     # Data-only subscriptions never enter ``buyAllowedSymbols`` unless a
     # separate active trade-watchlist row exists.  RiskEngine and scanner
     # independently repeat that DB-backed eligibility check.
@@ -155,17 +169,19 @@ async def gateway_runtime_config() -> dict:
         if not math.isfinite(qty) or qty < 0:
             raise ValueError(f"Invalid locked quantity for {symbol}")
         locked_qty[symbol] = locked_qty.get(symbol, 0.0) + qty
-    bot_owned_qty = {
-        row.symbol.strip().upper(): float(row.qty) for row in portfolio if row.qty > 0
-    }
+    bot_owned_qty = (
+        {symbol: float(qty) for symbol, qty in ownership.quantities.items()}
+        if ownership is not None
+        else {}
+    )
 
     config = {
         "ok": True,
-        # v2 kontrat sürümü (Faz 3): gateway ExpectedContractVersion=2 ile
+        # v3 kontrat sürümü: gateway ExpectedContractVersion=3 ile
         # karşılaştırır; uyuşmazlık (alan eksikliği dahil) emir yolunu iki
         # tarafta da fail-closed kapatır. Python ve C# yalnızca atomik deploy
         # ile birlikte yükseltilir.
-        "contractVersion": 2,
+        "contractVersion": 3,
         "symbols": sorted(symbols),
         "subscriptionSymbols": sorted(symbols),
         "marketIndexSymbol": market_index_symbol or None,
@@ -178,6 +194,9 @@ async def gateway_runtime_config() -> dict:
         "killSwitchActive": values["killSwitchEnabled"] == "true",
         "lockedLongTermQty": locked_qty,
         "botOwnedQty": bot_owned_qty,
+        "botOwnershipAccountRef": normalized_account_ref
+        if ownership is not None
+        else None,
         "dailyCounterDate": datetime.now().date().isoformat(),
         "dailyAcceptedOrderCountsBySymbol": daily_counts.accepted_by_symbol,
         "dailyFilledOrderCountsBySymbol": daily_counts.filled_by_symbol,
@@ -194,10 +213,11 @@ async def gateway_runtime_config() -> dict:
         ),
         "realAccountArmed": values.get("realAccountArmed", "false") == "true",
         "armedAccountRef": (values.get("armedAccountRef", "") or "").strip(),
-        "maxOrderValueTl": profile.max_order_value_tl,
-        "maxQtyPerOrder": profile.max_qty_per_order,
+        "maxOrderValueTl": float(effective_limits.max_order_value_tl),
+        "maxQtyPerOrder": effective_limits.max_qty_per_order,
         "maxOrdersPerDay": profile.max_orders_per_day,
         "maxOrdersPerSymbolPerDay": profile.max_orders_per_symbol_per_day,
+        "maxDepthQueueDropPctForBuy": profile.max_depth_queue_drop_pct_for_buy,
         "orderTimeInForce": profile.order_time_in_force,
         "indicatorPeriod": profile.indicator_period,
         "marketDataDiagnosticsEnabled": (

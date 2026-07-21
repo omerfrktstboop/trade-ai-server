@@ -19,6 +19,7 @@ D = Decimal
 def limits(**overrides) -> EffectiveRiskConfig:
     values = {
         "risk_per_trade_pct": D("1"),
+        "total_bot_capital_budget_tl": D("100000"),
         "max_cash_utilization_pct": D("100"),
         "max_account_exposure_pct": D("100"),
         "max_position_value_per_symbol": D("1000000"),
@@ -56,6 +57,8 @@ def account(**overrides) -> AccountSizingContext:
         "current_symbol_qty": 0,
         "current_symbol_value_tl": "0",
         "total_account_exposure_tl": "0",
+        "current_bot_symbol_value_tl": "0",
+        "total_bot_exposure_tl": "0",
         "account_data_age_seconds": "1",
         "account_data_reliable": True,
     }
@@ -71,6 +74,7 @@ def trade(**overrides) -> TradeSizingContext:
         "target_price": "110",
         "confidence": "82",
         "current_price": "100",
+        "target_allocation_pct": "100",
     }
     values.update(overrides)
     return TradeSizingContext(**values)
@@ -120,6 +124,66 @@ def test_binding_limits(account_overrides, limit_overrides, expected, binding):
     assert result.allowed
     assert result.qty == expected
     assert binding in result.binding_limits
+
+
+def test_total_bot_budget_and_ai_target_are_post_trade_limits():
+    budget_limited = calculate(
+        a=account(total_bot_exposure_tl="9000"),
+        risk_limits=limits(total_bot_capital_budget_tl=D("10000")),
+    )
+    assert budget_limited.qty == 10
+    assert "bot_budget" in budget_limited.binding_limits
+
+    target_limited = calculate(
+        a=account(current_bot_symbol_value_tl="1000"),
+        t=trade(target_allocation_pct="25"),
+        risk_limits=limits(total_bot_capital_budget_tl=D("10000")),
+    )
+    assert target_limited.qty == 15
+    assert "ai_target" in target_limited.binding_limits
+
+
+def test_pending_buy_notional_consumes_exposure_symbol_and_ai_capacity():
+    account_with_pending = account(
+        reserved_cash_tl="900",
+        current_symbol_reserved_cash_tl="900",
+        total_account_exposure_tl="9000",
+        current_symbol_value_tl="0",
+        current_bot_symbol_value_tl="0",
+        total_bot_exposure_tl="9000",
+    )
+    result = calculate(
+        a=account_with_pending,
+        t=trade(target_allocation_pct="10"),
+        risk_limits=limits(
+            max_account_exposure_pct=D("10"),
+            max_position_value_per_symbol=D("1000"),
+            total_bot_capital_budget_tl=D("10000"),
+        ),
+    )
+    assert result.qty == 1
+    assert {"account_exposure", "symbol_position", "bot_budget", "ai_target"}.issubset(
+        result.binding_limits
+    )
+
+
+def test_bot_budget_is_risk_base_and_zero_budget_fails_closed():
+    result = calculate(
+        risk_limits=limits(
+            total_bot_capital_budget_tl=D("10000"),
+            risk_per_trade_pct=D("1"),
+        )
+    )
+    assert result.risk_budget_tl == D("100")
+    assert result.qty == 20
+    assert not calculate(
+        risk_limits=limits(total_bot_capital_budget_tl=D("0"))
+    ).allowed
+
+
+def test_missing_or_invalid_ai_allocation_fails_closed():
+    assert not calculate(t=trade(target_allocation_pct=None)).allowed
+    assert not calculate(t=trade(target_allocation_pct="101")).allowed
 
 
 def test_too_narrow_and_too_wide_stop_are_blocked():

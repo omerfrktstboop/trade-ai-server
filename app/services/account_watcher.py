@@ -32,7 +32,7 @@ from app.services.admin_config import (
 
 logger = logging.getLogger(__name__)
 
-EXPECTED_CONTRACT_VERSION = 2
+EXPECTED_CONTRACT_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,7 @@ class AccountCheckResult:
     dispatch_allowed: bool
     reason: str | None
     account_ref: str | None = None
+    account_session_ref: str | None = None
     account_type: str | None = None
 
 
@@ -95,7 +96,7 @@ class AccountWatcher:
         session_ref = _clean(health.get("accountSessionRef"))
         account_type = _clean(health.get("accountType")) or "UNKNOWN"
 
-        if not account_ref or account_type == "UNKNOWN":
+        if not account_ref or not session_ref or account_type == "UNKNOWN":
             # Kimlik doğrulanamıyor → emir yok; olay üretmeye gerek yok
             # (gateway zaten fail-closed).
             return AccountCheckResult(
@@ -156,6 +157,7 @@ class AccountWatcher:
                 False,
                 "account identity changed: " + ", ".join(e for e, _ in changed_events),
                 account_ref=account_ref,
+                account_session_ref=session_ref,
                 account_type=account_type,
             )
 
@@ -191,11 +193,16 @@ class AccountWatcher:
                 False,
                 "armed account/session mismatch — auto-disarmed",
                 account_ref=account_ref,
+                account_session_ref=session_ref,
                 account_type=account_type,
             )
 
         return AccountCheckResult(
-            True, None, account_ref=account_ref, account_type=account_type
+            True,
+            None,
+            account_ref=account_ref,
+            account_session_ref=session_ref,
+            account_type=account_type,
         )
 
     def _remember(

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+from decimal import Decimal
 from typing import Any
 
 from app.config import AIProvider, settings
@@ -62,6 +63,22 @@ def dict_to_risk_decision(raw: dict, _req: SignalRequest | None = None) -> RiskD
         fallbacks.append(f"Invalid AI action '{raw.get('action')}', fallback WAIT")
 
     reason = str(raw.get("reason") or "Provider returned no reason")
+    allocation_raw = raw.get("target_allocation_pct")
+    if allocation_raw is None:
+        allocation_raw = raw.get("targetAllocationPct")
+    target_allocation_pct = _safe_decimal(allocation_raw)
+    if target_allocation_pct is not None and not (
+        Decimal("0") < target_allocation_pct <= Decimal("100")
+    ):
+        target_allocation_pct = None
+        fallbacks.append("Invalid AI target allocation; BUY will remain blocked")
+
+    opportunity_score = _safe_float(
+        raw.get("opportunity_score", raw.get("opportunityScore"))
+    )
+    if not 0 <= opportunity_score <= 100:
+        opportunity_score = 0.0
+        fallbacks.append("Invalid AI opportunity score; fallback 0")
     if fallbacks:
         reason = reason + " | " + " | ".join(fallbacks)
 
@@ -74,6 +91,8 @@ def dict_to_risk_decision(raw: dict, _req: SignalRequest | None = None) -> RiskD
         entry_range=_parse_entry_range(raw),
         stop_loss=_safe_decimal(raw.get("stop_loss") or raw.get("stopLoss")),
         target_price=_safe_decimal(raw.get("target_price") or raw.get("targetPrice")),
+        target_allocation_pct=target_allocation_pct,
+        opportunity_score=opportunity_score,
     )
 
 

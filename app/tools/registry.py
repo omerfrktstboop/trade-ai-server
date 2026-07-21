@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TOOL_TIMEOUT_SECONDS = 8.0
 DEFAULT_MAX_RESULT_CHARS = 16_000
+DEEPSEEK_MAX_RESULT_CHARS = 4_000
 
 #: Sembol kapsamı ihlali / audience reddi gibi güvenlik hataları için sabit
 #: önekler — testler ve audit sorguları bunlara güvenir.
@@ -121,6 +122,47 @@ def _serialize_result(result: Any, max_chars: int) -> tuple[str, bool]:
     if len(text) <= max_chars:
         return text, False
     return text[:max_chars], True
+
+
+def _compact_deepseek_result(value: Any, *, key: str = "", depth: int = 0) -> Any:
+    """Bound tool history while preserving decision-relevant structure."""
+    if depth >= 6:
+        return None
+    if isinstance(value, str):
+        return value[:320]
+    if isinstance(value, list):
+        limit = 20 if key in {"bars", "closeHistory", "history"} else 5
+        selected = (
+            value[-limit:]
+            if key in {"bars", "closeHistory", "history"}
+            else value[:limit]
+        )
+        return [
+            _compact_deepseek_result(item, key=key, depth=depth + 1)
+            for item in selected
+        ]
+    if isinstance(value, dict):
+        noisy = {
+            "agenticSteps",
+            "content",
+            "html",
+            "raw",
+            "rawRequest",
+            "rawResponse",
+            "technicalFeatures",
+            "url",
+        }
+        return {
+            item_key: _compact_deepseek_result(
+                item, key=str(item_key), depth=depth + 1
+            )
+            for item_key, item in value.items()
+            if item_key not in noisy
+        }
+    if isinstance(value, float):
+        rounded = round(value, 4)
+        return int(rounded) if rounded.is_integer() else rounded
+    return value
 
 
 async def _write_audit(
@@ -228,7 +270,14 @@ async def call_tool(
         msg = f"tool failed: {exc}"
         return await _finish({"tool": name, "error": msg}, ok=False, error=msg)
 
-    text, truncated = _serialize_result(result, spec.max_result_chars)
+    if caller == "deepseek":
+        result = _compact_deepseek_result(result)
+    max_chars = (
+        min(spec.max_result_chars, DEEPSEEK_MAX_RESULT_CHARS)
+        if caller == "deepseek"
+        else spec.max_result_chars
+    )
+    text, truncated = _serialize_result(result, max_chars)
     payload: dict[str, Any] = {"tool": name, "result": json.loads(text) if not truncated else text}
     if truncated:
         payload["truncated"] = True

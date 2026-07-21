@@ -79,6 +79,10 @@ from app.services.notifications import (
 from app.services.order_sync import cancel_timed_out_orders
 from app.services.order_ledger import mark_send_result, mark_send_started, reserve_order
 from app.services.order_preflight import parse_finite_decimal, validate_order_preflight
+from app.services.opportunity_rotation import (
+    advance_rotation_plan,
+    maybe_create_rotation_plan,
+)
 from app.services.position_sizing import TradeSizingContext
 from app.services.signal_override import list_pending_override_symbols
 from app.services.significance import (
@@ -330,10 +334,16 @@ class SymbolScanner:
         # kimliği/türü/oturumu izlenir; değişimde account_events yazılır ve
         # REAL arming otomatik düşürülür. Sonuç burada sadece kayıt içindir —
         # emir yolu kendi taze health'iyle ayrıca kontrol eder.
+        tick_account_dispatch_allowed = False
+        tick_account_block_reason = "account watcher check failed"
         try:
             async with async_session_factory() as session:
-                await account_watcher.check(gateway_health, session)
+                tick_account_check = await account_watcher.check(
+                    gateway_health, session
+                )
                 await session.commit()
+            tick_account_dispatch_allowed = tick_account_check.dispatch_allowed
+            tick_account_block_reason = tick_account_check.reason or "unknown"
         except Exception:
             logger.exception("Account watcher tick check failed")
 
@@ -388,6 +398,12 @@ class SymbolScanner:
             # while the account position snapshot is warming up; do not enter
             # normal trade evaluation or the portfolio/order path.
             return []
+        if not tick_account_dispatch_allowed:
+            logger.warning(
+                "TRADING_SKIPPED_ACCOUNT_WATCHER reason=%s",
+                tick_account_block_reason,
+            )
+            return []
 
         # Stale-order cancellation is an order-path operation and must honor
         # the same cutoff and positionsLoaded gates as normal trading.
@@ -396,6 +412,18 @@ class SymbolScanner:
         # (not gated by scan_interval_minutes) so a stuck/HOLD AI cannot let
         # a losing position ride between evaluations.
         await self._run_stop_loss_guard()
+        rotation_active = False
+        try:
+            rotation_active = await advance_rotation_plan(
+                gateway=self._gateway,
+                account_ref=str(gateway_health.get("accountRef") or "") or None,
+                evaluate=evaluate_symbol,
+                dispatch=self._maybe_send_order,
+            )
+        except Exception:
+            logger.exception("ROTATION_ADVANCE_FAILED")
+            # An unreadable rotation state must not permit a competing BUY.
+            rotation_active = True
         # ── Pozisyonları gateway'den tazele ────────────────────────────────
         # Admin panelinin Positions sayfası ve acil "tümünü sat" akışı
         # bot_positions'tan okuyor; eski push endpoint'i kaldırıldığı için
@@ -416,6 +444,7 @@ class SymbolScanner:
         now = datetime.now(timezone.utc)
 
         evaluated: list[str] = []
+        evaluated_results: list[EvaluationResult] = []
         gateway_down_mid_cycle = False
         for symbol in symbols:
             last_scan = self._last_scan_by_symbol.get(symbol)
@@ -453,6 +482,7 @@ class SymbolScanner:
                 continue
 
             response = result.response
+            evaluated_results.append(result)
             logger.info(
                 "Scan decision symbol=%s action=%s confidence=%s allowOrder=%s "
                 "dispatchEligible=%s",
@@ -462,14 +492,41 @@ class SymbolScanner:
                 response.allow_order,
                 result.dispatch_eligible,
             )
-            await self._maybe_send_order(result)
             await record_trade_watchlist_decision(result)
+            if response.action == SignalAction.SELL:
+                # Risk-reducing exits must not age while later BUY candidates
+                # are evaluated and ranked.
+                await self._maybe_send_order(result)
+
+        if not rotation_active:
+            buy_results = sorted(
+                (
+                    result
+                    for result in evaluated_results
+                    if result.response.action == SignalAction.BUY
+                ),
+                key=lambda result: result.opportunity_score or -1,
+                reverse=True,
+            )
+            for result in buy_results:
+                await self._maybe_send_order(result)
 
         # ── Otonom keşif (movers -> watchlist) + portföy re-evaluasyonu ────
         # Discovery yukarıda trade readiness kapılarından bağımsız çalıştı.
         # Gateway tur ortasında düştüyse research/portföy tekrar denenmez.
         if not gateway_down_mid_cycle:
-            await self._run_portfolio_scan(pending_overrides)
+            await self._run_portfolio_scan(
+                pending_overrides, allow_buys=not rotation_active
+            )
+        if not gateway_down_mid_cycle and not rotation_active:
+            try:
+                await maybe_create_rotation_plan(
+                    evaluated_results,
+                    gateway=self._gateway,
+                    account_ref=str(gateway_health.get("accountRef") or "") or None,
+                )
+            except Exception:
+                logger.exception("ROTATION_PLAN_CREATION_FAILED")
 
         self._last_evaluated_symbols = list(evaluated)
         logger.info(
@@ -614,7 +671,9 @@ class SymbolScanner:
         except Exception:
             logger.exception("Research pipeline status refresh failed")
 
-    async def _run_portfolio_scan(self, pending_overrides: set[str]) -> None:
+    async def _run_portfolio_scan(
+        self, pending_overrides: set[str], *, allow_buys: bool = True
+    ) -> None:
         """Eldeki pozisyonları periyodik yeniden değerlendir (Portfolio Manager).
 
         ``bot_positions``ta lot bulunan her sembol LLM'e pozisyon bağlamıyla
@@ -727,7 +786,8 @@ class SymbolScanner:
                 response.confidence_score,
                 response.allow_order,
             )
-            await self._maybe_send_order(result)
+            if response.action == SignalAction.SELL or allow_buys:
+                await self._maybe_send_order(result)
 
     async def _significance_threshold(self) -> Decimal:
         try:
@@ -858,6 +918,7 @@ class SymbolScanner:
             return
 
         dispatch_account_ref: str | None = None
+        dispatch_account_session_ref: str | None = None
         try:
             async with async_session_factory() as session:
                 if await is_kill_switch_enabled(session):
@@ -867,6 +928,17 @@ class SymbolScanner:
                     )
                     return
                 preflight_config = await build_runtime_risk_config(session)
+                preflight_limits = await resolve_effective_risk_config(session)
+            if (
+                response.action == SignalAction.SELL
+                and preflight_config.is_long_term_locked(response.symbol)
+            ):
+                logger.warning(
+                    "SELL blocked: symbol is long-term locked symbol=%s requestId=%s",
+                    response.symbol,
+                    response.request_id,
+                )
+                return
             if not preflight_config.can_trade_now():
                 logger.warning(
                     "Order dispatch blocked by trading cutoff requestId=%s",
@@ -891,6 +963,20 @@ class SymbolScanner:
                 return
             # Bu emrin sabit hesap referansı (fill damgalama için, Fix #1).
             dispatch_account_ref = account_check.account_ref
+            dispatch_account_session_ref = account_check.account_session_ref
+            if response.action == SignalAction.SELL:
+                max_by_value = int(
+                    preflight_limits.max_order_value_tl // parsed_price
+                )
+                safe_sell_qty = min(
+                    int(parsed_qty),
+                    preflight_limits.max_qty_per_order,
+                    max_by_value,
+                )
+                if safe_sell_qty <= 0:
+                    raise ValueError("SELL quantity is zero after hard-cap clamping")
+                response.qty = safe_sell_qty
+                parsed_qty = Decimal(safe_sell_qty)
             preflight_reason = validate_order_preflight(
                 payload=fresh_snapshot.get("payload") or {},
                 positions=fresh_positions,
@@ -900,6 +986,9 @@ class SymbolScanner:
                 limit_price=response.price,
                 decision_created_utc=result.decision_created_utc,
                 max_spread_pct=preflight_config.max_spread_pct_for_buy,
+                max_depth_queue_drop_pct=(
+                    preflight_config.max_depth_queue_drop_pct_for_buy
+                ),
             )
             account_inputs = None
             if response.action == SignalAction.BUY:
@@ -907,6 +996,14 @@ class SymbolScanner:
                     self._gateway,
                     symbol=response.symbol,
                     target_snapshot=fresh_snapshot,
+                    expected_account_ref=dispatch_account_ref,
+                    expected_account_session_ref=dispatch_account_session_ref,
+                    max_position_age_seconds=(
+                        preflight_limits.max_account_data_age_seconds
+                    ),
+                    max_quote_age_seconds=Decimal(
+                        str(preflight_config.max_quote_age_seconds_for_buy)
+                    ),
                 )
         except Exception as exc:
             preflight_reason = "order-time snapshot unavailable: " + str(exc)
@@ -973,7 +1070,11 @@ class SymbolScanner:
             )
             return
 
-        if last_sent is not None and now - last_sent < _ORDER_COOLDOWN:
+        if (
+            result.evaluation_purpose != "STOP_LOSS_GUARD"
+            and last_sent is not None
+            and now - last_sent < _ORDER_COOLDOWN
+        ):
             remaining = _ORDER_COOLDOWN - (now - last_sent)
             logger.warning(
                 "Order skipped: cooldown active symbol=%s side=%s remaining=%ss requestId=%s",
@@ -1039,6 +1140,7 @@ class SymbolScanner:
                             current_price=account_inputs.market_prices[
                                 response.symbol.strip().upper()
                             ],
+                            target_allocation_pct=response.target_allocation_pct,
                         ),
                         limits=limits,
                         adapter=adapter,
@@ -1126,8 +1228,8 @@ class SymbolScanner:
                 {"symbol": response.symbol, "requestId": response.request_id},
             )
 
-        if not dispatch_account_ref:
-            await _block_order("dispatch account_ref is empty")
+        if not dispatch_account_ref or not dispatch_account_session_ref:
+            await _block_order("dispatch account/session reference is empty")
             return
         try:
             async with async_session_factory() as session:
@@ -1159,6 +1261,8 @@ class SymbolScanner:
                 qty=response.qty,
                 limit_price=response.price,
                 mode=_ORDER_DISPATCH_TAG,
+                account_ref=dispatch_account_ref,
+                account_session_ref=dispatch_account_session_ref,
             )
             status = str(outcome.get("status", "UNKNOWN"))
             reason = str(outcome.get("reason", ""))

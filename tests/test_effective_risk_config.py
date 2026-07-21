@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import app.services.effective_risk_config as effective_risk_config_module
 from app.services.effective_risk_config import (
     EffectiveRiskConfigResolver,
     EnvironmentRiskLimits,
@@ -61,6 +62,22 @@ def test_profile_cannot_relax_environment_or_system_limits():
     assert not effective.real_orders_enabled
 
 
+def test_total_bot_budget_is_admin_controlled_and_zero_is_fail_closed():
+    resolver = EffectiveRiskConfigResolver()
+    zero = resolver.resolve(
+        environment_limits=EnvironmentRiskLimits(),
+        system_config=SystemRiskConfig(),
+        trade_profile=profile(),
+    )
+    configured = resolver.resolve(
+        environment_limits=EnvironmentRiskLimits(),
+        system_config=SystemRiskConfig(total_bot_capital_budget_tl="300000"),
+        trade_profile=profile(),
+    )
+    assert zero.total_bot_capital_budget_tl == Decimal("0")
+    assert configured.total_bot_capital_budget_tl == Decimal("300000")
+
+
 def test_boolean_permissions_require_every_layer():
     effective = EffectiveRiskConfigResolver().resolve(
         environment_limits=EnvironmentRiskLimits(demo_orders_enabled=True),
@@ -101,6 +118,24 @@ def test_environment_fingerprint_is_deterministic_and_secret_free():
     second = EnvironmentRiskLimits().fingerprint()
     assert first == second
     assert len(first) == 64
+
+
+def test_environment_limits_use_dotenv_with_process_environment_precedence(
+    monkeypatch, tmp_path
+):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "RISK_MAX_ORDER_VALUE_TL=10000\nRISK_MAX_QTY_PER_ORDER=1000\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(effective_risk_config_module, "_ENV_FILE", env_file)
+    monkeypatch.setenv("RISK_MAX_QTY_PER_ORDER", "500")
+    monkeypatch.delenv("RISK_MAX_ORDER_VALUE_TL", raising=False)
+
+    limits = EnvironmentRiskLimits.from_environment()
+
+    assert limits.max_order_value_tl == Decimal("10000")
+    assert limits.max_qty_per_order == 500
 
 
 def test_reservation_policy_config_rejects_unknown_values():

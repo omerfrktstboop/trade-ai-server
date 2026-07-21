@@ -4,7 +4,12 @@ from decimal import Decimal
 
 import pytest
 
-from app.services.account_context import MatriksAccountContextAdapter
+from app.services.account_context import (
+    MatriksAccountContextAdapter,
+    fetch_fresh_account_inputs,
+)
+from app.services.matriks_gateway import MatriksGatewayClient
+from tests.fake_gateway import FakeGateway
 
 
 def account_payload(**account_overrides):
@@ -168,3 +173,40 @@ def test_position_exposure_uses_fresh_prices_and_missing_price_blocks_buy():
     )
     assert context.total_account_exposure_tl is None
     assert context.account_data_reliable is False
+
+
+async def test_fresh_bundle_requires_matching_account_and_positions_identity():
+    fake = FakeGateway()
+    client = MatriksGatewayClient(
+        base_url="http://fake-gateway", token=fake.token, transport=fake.transport
+    )
+    inputs = await fetch_fresh_account_inputs(
+        client, symbol="THYAO", expected_account_ref="f" * 64
+    )
+    assert inputs.raw_account["accountRef"] == "f" * 64
+
+    fake.account_payload["accountRef"] = "e" * 64
+    with pytest.raises(ValueError, match="identity mismatch"):
+        await fetch_fresh_account_inputs(
+            client, symbol="THYAO", expected_account_ref="f" * 64
+        )
+    await client.close()
+
+
+async def test_fresh_bundle_rejects_stale_or_unreliable_quotes():
+    fake = FakeGateway()
+    fake.snapshot_overrides["THYAO"] = {
+        "quoteAgeSeconds": 31,
+        "quoteReliable": True,
+    }
+    client = MatriksGatewayClient(
+        base_url="http://fake-gateway", token=fake.token, transport=fake.transport
+    )
+    with pytest.raises(ValueError, match="stale or unreliable"):
+        await fetch_fresh_account_inputs(
+            client,
+            symbol="THYAO",
+            expected_account_ref="f" * 64,
+            max_quote_age_seconds=Decimal("30"),
+        )
+    await client.close()

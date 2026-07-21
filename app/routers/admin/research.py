@@ -31,6 +31,12 @@ from app.services.fundamentals_service import (
     upsert_fundamental,
 )
 
+from app.services.research_pipeline import (
+    promote_research_candidate,
+    reject_research_candidate,
+    remove_from_trade_watchlist,
+)
+
 from app.routers.admin._shared import (
     admin_router,
     admin_api_router,
@@ -41,6 +47,7 @@ from app.routers.admin._shared import (
     _split_csv_symbols,
     _status_strip_context,
     _latest,
+    _notify_gateway_config_reload,
 )
 
 
@@ -174,6 +181,56 @@ async def admin_watchlist(request: Request) -> HTMLResponse:
     )
 
 
+@admin_router.post("/research/{symbol}/promote")
+async def admin_research_promote(request: Request, symbol: str) -> RedirectResponse:
+    """Kontrollü/manuel terfi: research bulgusu ne olursa olsun (AI'nin 2-pass
+    onayını beklemeden de) admin bir sembolü Trade Watchlist'e sokabilir —
+    kontrol tamamen admin'de, AI skoru sadece karar destek bilgisidir."""
+    identity = await require_admin(request)
+    form = await request.form()
+    reason = str(form.get("reason") or "").strip() or (
+        f"Manual promotion from Research page by {identity}"
+    )
+    async with async_session_factory() as session:
+        await promote_research_candidate(
+            session, symbol, reason=reason, changed_by=identity
+        )
+    await _notify_gateway_config_reload()
+    filter_qs = str(request.query_params.get("filter") or "")
+    redirect_url = "/admin/research" + (f"?filter={filter_qs}" if filter_qs else "")
+    return RedirectResponse(redirect_url, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@admin_router.post("/research/{symbol}/reject")
+async def admin_research_reject(request: Request, symbol: str) -> RedirectResponse:
+    """"Şimdilik değil" — kalıcı kara liste değildir (declineSymbols'e
+    dokunmaz); discovery ileride yeniden tespit ederse aday geri dönebilir."""
+    identity = await require_admin(request)
+    form = await request.form()
+    reason = str(form.get("reason") or "").strip() or (
+        f"Manually rejected from Research page by {identity}"
+    )
+    async with async_session_factory() as session:
+        await reject_research_candidate(
+            session, symbol, reason=reason, changed_by=identity
+        )
+    filter_qs = str(request.query_params.get("filter") or "")
+    redirect_url = "/admin/research" + (f"?filter={filter_qs}" if filter_qs else "")
+    return RedirectResponse(redirect_url, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@admin_router.post("/watchlist/{symbol}/remove")
+async def admin_watchlist_remove(request: Request, symbol: str) -> RedirectResponse:
+    identity = await require_admin(request)
+    form = await request.form()
+    reason = str(form.get("reason") or "").strip() or (
+        f"Manually removed from Watchlist page by {identity}"
+    )
+    async with async_session_factory() as session:
+        await remove_from_trade_watchlist(session, symbol, reason=reason)
+    return RedirectResponse("/admin/watchlist", status_code=status.HTTP_303_SEE_OTHER)
+
+
 RESEARCH_FRESH_WINDOW = timedelta(hours=24)
 
 
@@ -283,6 +340,8 @@ async def admin_research(request: Request) -> HTMLResponse:
     def visible(row: ResearchCandidate) -> bool:
         if selected_filter == "pending":
             return row.status in {"DETECTED", "RESEARCH_PENDING"}
+        if selected_filter == "ready":
+            return row.status == "READY_FOR_PROMOTION"
         if selected_filter == "near":
             return 60 <= float(row.ai_research_score or 0) < 75
         if selected_filter == "promoted":

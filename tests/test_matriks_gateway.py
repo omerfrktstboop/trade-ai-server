@@ -274,6 +274,8 @@ class TestSendOrder:
             qty=1.0,
             limit_price=71.5,
             mode="demo_live",
+            account_ref="f" * 64,
+            account_session_ref="5" * 64,
         )
 
         assert outcome["accepted"] is True
@@ -283,6 +285,7 @@ class TestSendOrder:
         assert sent["side"] == "BUY"
         assert sent["mode"] == "DEMO_LIVE"
         assert sent["limitPrice"] == 71.5
+        assert sent["accountRef"] == "f" * 64
         await client.close()
 
     async def test_rejected_order_returns_accepted_false(self):
@@ -297,6 +300,8 @@ class TestSendOrder:
             qty=1.0,
             limit_price=71.5,
             mode="DEMO_LIVE",
+            account_ref="f" * 64,
+            account_session_ref="5" * 64,
         )
 
         assert outcome["accepted"] is False
@@ -325,6 +330,8 @@ class TestSendOrder:
                 qty=1.0,
                 limit_price=71.5,
                 mode="DEMO_LIVE",
+                account_ref="f" * 64,
+                account_session_ref="5" * 64,
             )
 
         # Emirde retry YOK — çift emir riski

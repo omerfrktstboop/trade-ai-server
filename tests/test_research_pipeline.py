@@ -24,11 +24,15 @@ from app.services.evaluator import (
     evaluate_symbol,
     with_trade_eligibility,
 )
+from app.services.admin_config import get_admin_config_value
 from app.services.research_pipeline import (
     ResearchPolicy,
     apply_research_result,
     list_trade_eligible_symbols,
     maintain_trade_watchlist,
+    promote_research_candidate,
+    reject_research_candidate,
+    remove_from_trade_watchlist,
     run_research_cycle,
 )
 from app.services.matriks_gateway import MatriksGatewayClient
@@ -129,14 +133,17 @@ class TestPromotion:
         assert row.status == "QUALIFIED"
         assert row.consecutive_pass_count == 1
 
-    async def test_two_spaced_passes_promote(self):
+    async def test_two_spaced_passes_promote_when_auto_promotion_enabled(self):
+        """autoPromotionEnabled=true (opt-in, geriye dönük uyumluluk) rejenerasyon
+        bekçisi: otomatik terfi mekanizması eskisi gibi çalışmaya devam eder."""
         await _seed_candidate()
+        policy = _policy(auto_promotion_enabled=True)
         # Anchored to "now" (not a fixed date) so the promoted watchlist row's
         # TTL-based expires_at never drifts into the past as real time advances.
         first = datetime.now(UTC) - timedelta(minutes=30)
-        await apply_research_result("GARAN", _result(), policy=_policy(), now=first)
+        await apply_research_result("GARAN", _result(), policy=policy, now=first)
         promoted = await apply_research_result(
-            "GARAN", _result(), policy=_policy(), now=first + timedelta(minutes=11)
+            "GARAN", _result(), policy=policy, now=first + timedelta(minutes=11)
         )
         assert promoted is True
         assert await list_trade_eligible_symbols() == ["GARAN"]
@@ -149,6 +156,38 @@ class TestPromotion:
                 )
             ).scalar_one()
         assert watchlist.is_active is True
+        assert watchlist.manual_override is False
+        assert watchlist.source == "RESEARCH_PROMOTION"
+
+    async def test_two_spaced_passes_mark_ready_for_promotion_by_default(self):
+        """autoPromotionEnabled varsayılan false (kontrollü/manuel mod): 2
+        nitelikli pass Trade Watchlist'e OTOMATİK bir satır oluşturmamalı —
+        sadece 'terfiye hazır' işaretlemeli. Admin onayı ayrı bir adım."""
+        await _seed_candidate()
+        policy = _policy()  # auto_promotion_enabled defaults to False
+        first = datetime.now(UTC) - timedelta(minutes=30)
+        await apply_research_result("GARAN", _result(), policy=policy, now=first)
+        promoted = await apply_research_result(
+            "GARAN", _result(), policy=policy, now=first + timedelta(minutes=11)
+        )
+        assert promoted is False
+        assert await list_trade_eligible_symbols() == []
+        async with async_session_factory() as session:
+            row = (
+                await session.execute(
+                    select(ResearchCandidate).where(ResearchCandidate.symbol == "GARAN")
+                )
+            ).scalar_one()
+            watchlist = (
+                await session.execute(
+                    select(TradeWatchlistSymbol).where(
+                        TradeWatchlistSymbol.symbol == "GARAN"
+                    )
+                )
+            ).scalar_one_or_none()
+        assert row.status == "READY_FOR_PROMOTION"
+        assert row.consecutive_pass_count == 2
+        assert watchlist is None
 
     async def test_second_pass_before_minimum_interval_does_not_promote(self):
         await _seed_candidate()
@@ -224,6 +263,104 @@ class TestRemoval:
             await session.commit()
         assert await maintain_trade_watchlist(set()) == ["GARAN"]
         assert await list_trade_eligible_symbols() == []
+
+
+class TestManualPromotion:
+    """Kontrollü/manuel terfi akışı: promote/reject/remove admin fonksiyonları."""
+
+    async def test_promote_creates_watchlist_row_and_updates_allowed_symbols(self):
+        await _seed_candidate()
+        async with async_session_factory() as session:
+            watch = await promote_research_candidate(
+                session, "GARAN", reason="test promotion", changed_by="tester"
+            )
+        assert watch.is_active is True
+        assert watch.manual_override is True
+        assert watch.source == "MANUAL_OVERRIDE"
+        assert await list_trade_eligible_symbols() == ["GARAN"]
+        async with async_session_factory() as session:
+            allowed = await get_admin_config_value(session, "allowedSymbols")
+            candidate = (
+                await session.execute(
+                    select(ResearchCandidate).where(ResearchCandidate.symbol == "GARAN")
+                )
+            ).scalar_one()
+        assert "GARAN" in {s.strip() for s in allowed.split(",")}
+        assert candidate.status == "PROMOTED"
+        assert candidate.promoted_at is not None
+
+    async def test_promote_without_research_candidate_row_still_works(self):
+        """Positions sayfasından hiç research'e girmemiş bir sembol de
+        promote edilebilmeli (candidate güncellemesi sessizce atlanır)."""
+        async with async_session_factory() as session:
+            watch = await promote_research_candidate(
+                session, "THYAO", reason="test", changed_by="tester"
+            )
+        assert watch.is_active is True
+        assert await list_trade_eligible_symbols() == ["THYAO"]
+
+    async def test_reject_marks_status_without_touching_decline_symbols(self):
+        await _seed_candidate()
+        async with async_session_factory() as session:
+            ok = await reject_research_candidate(
+                session, "GARAN", reason="not now", changed_by="tester"
+            )
+            assert ok is True
+            row = (
+                await session.execute(
+                    select(ResearchCandidate).where(ResearchCandidate.symbol == "GARAN")
+                )
+            ).scalar_one()
+            decline = await get_admin_config_value(session, "declineSymbols")
+        assert row.status == "REJECTED"
+        assert row.rejection_reason == "not now"
+        assert row.rejected_at is not None
+        assert "GARAN" not in {s.strip() for s in decline.split(",") if s.strip()}
+
+    async def test_reject_unknown_symbol_returns_false(self):
+        async with async_session_factory() as session:
+            ok = await reject_research_candidate(
+                session, "ZZZZ", reason="n/a", changed_by="tester"
+            )
+        assert ok is False
+
+    async def test_remove_deactivates_manual_row_and_resets_candidate(self):
+        """Bugüne kadar hiçbir yolun yapamadığı şey: manuel (manual_override)
+        bir satırı admin elle çıkarabiliyor artık."""
+        await _seed_candidate()
+        async with async_session_factory() as session:
+            await promote_research_candidate(
+                session, "GARAN", reason="test", changed_by="tester"
+            )
+        async with async_session_factory() as session:
+            removed = await remove_from_trade_watchlist(
+                session, "GARAN", reason="test removal"
+            )
+        assert removed is True
+        assert await list_trade_eligible_symbols() == []
+        async with async_session_factory() as session:
+            watch = (
+                await session.execute(
+                    select(TradeWatchlistSymbol).where(
+                        TradeWatchlistSymbol.symbol == "GARAN"
+                    )
+                )
+            ).scalar_one()
+            candidate = (
+                await session.execute(
+                    select(ResearchCandidate).where(ResearchCandidate.symbol == "GARAN")
+                )
+            ).scalar_one()
+        assert watch.is_active is False
+        assert watch.removal_reason == "test removal"
+        assert candidate.status == "RESEARCHED"
+
+    async def test_remove_unknown_symbol_returns_false(self):
+        async with async_session_factory() as session:
+            removed = await remove_from_trade_watchlist(
+                session, "ZZZZ", reason="n/a"
+            )
+        assert removed is False
 
 
 class TestResearchBudget:

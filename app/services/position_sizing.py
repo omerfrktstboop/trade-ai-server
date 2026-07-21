@@ -38,8 +38,11 @@ class AccountSizingContext(_DecimalModel):
     current_symbol_qty: int
     current_symbol_value_tl: Decimal | None
     total_account_exposure_tl: Decimal | None
+    current_bot_symbol_value_tl: Decimal | None = None
+    total_bot_exposure_tl: Decimal | None = None
     account_data_age_seconds: Decimal | None
     account_data_reliable: bool
+    current_symbol_reserved_cash_tl: Decimal = Decimal("0")
 
     @field_validator("current_symbol_qty")
     @classmethod
@@ -56,6 +59,7 @@ class TradeSizingContext(_DecimalModel):
     target_price: Decimal
     confidence: Decimal
     current_price: Decimal
+    target_allocation_pct: Decimal | None = None
 
 
 class PositionSizingResult(_DecimalModel):
@@ -119,6 +123,8 @@ class PositionSizingService:
             return blocked("BUY blocked: available cash must be positive")
         if account.reserved_cash_tl < zero:
             return blocked("BUY blocked: reserved cash cannot be negative")
+        if account.current_symbol_reserved_cash_tl < zero:
+            return blocked("BUY blocked: symbol reserved cash cannot be negative")
         if account.current_symbol_value_tl is None:
             return blocked("BUY blocked: current symbol value is unknown")
         if account.current_symbol_value_tl < zero:
@@ -127,6 +133,20 @@ class PositionSizingService:
             return blocked("BUY blocked: total account exposure is unknown")
         if account.total_account_exposure_tl < zero:
             return blocked("BUY blocked: total account exposure is invalid")
+        if limits.total_bot_capital_budget_tl <= zero:
+            return blocked("BUY blocked: total bot capital budget is not configured")
+        if account.total_bot_exposure_tl is None:
+            return blocked("BUY blocked: total bot exposure is unknown")
+        if account.total_bot_exposure_tl < zero:
+            return blocked("BUY blocked: total bot exposure is invalid")
+        if account.current_bot_symbol_value_tl is None:
+            return blocked("BUY blocked: current bot symbol value is unknown")
+        if account.current_bot_symbol_value_tl < zero:
+            return blocked("BUY blocked: current bot symbol value is invalid")
+        if trade.target_allocation_pct is None:
+            return blocked("BUY blocked: AI target allocation is unavailable")
+        if not zero < trade.target_allocation_pct <= Decimal("100"):
+            return blocked("BUY blocked: AI target allocation is invalid")
         if min(trade.entry_price, trade.stop_loss, trade.target_price) <= zero:
             return blocked("BUY blocked: entry, stop and target must be positive")
         if trade.current_price <= zero:
@@ -138,9 +158,10 @@ class PositionSizingService:
         if trade.confidence < limits.minimum_buy_confidence:
             return blocked("BUY blocked: confidence is below the effective minimum")
 
-        risk_budget = (
-            account.account_equity_tl * limits.risk_per_trade_pct / Decimal("100")
+        capital_base = min(
+            account.account_equity_tl, limits.total_bot_capital_budget_tl
         )
+        risk_budget = capital_base * limits.risk_per_trade_pct / Decimal("100")
         raw_stop_distance = trade.entry_price - trade.stop_loss
         raw_stop_pct = raw_stop_distance * Decimal("100") / trade.entry_price
         if raw_stop_pct < limits.min_stop_distance_pct:
@@ -176,12 +197,30 @@ class PositionSizingService:
         max_account_exposure = (
             account.account_equity_tl * limits.max_account_exposure_pct / Decimal("100")
         )
+        committed_account_exposure = (
+            account.total_account_exposure_tl + account.reserved_cash_tl
+        )
         remaining_account_capacity = max(
-            zero, max_account_exposure - account.total_account_exposure_tl
+            zero, max_account_exposure - committed_account_exposure
+        )
+        committed_symbol_value = (
+            account.current_symbol_value_tl
+            + account.current_symbol_reserved_cash_tl
         )
         remaining_symbol_capacity = max(
             zero,
-            limits.max_position_value_per_symbol - account.current_symbol_value_tl,
+            limits.max_position_value_per_symbol - committed_symbol_value,
+        )
+        committed_bot_capital = account.total_bot_exposure_tl + account.reserved_cash_tl
+        remaining_bot_budget = max(zero, capital_base - committed_bot_capital)
+        target_position_value = (
+            capital_base * trade.target_allocation_pct / Decimal("100")
+        )
+        remaining_ai_target = max(
+            zero,
+            target_position_value
+            - account.current_bot_symbol_value_tl
+            - account.current_symbol_reserved_cash_tl,
         )
 
         candidates = {
@@ -193,6 +232,8 @@ class PositionSizingService:
             "symbol_position": floor_decimal(
                 remaining_symbol_capacity / trade.entry_price
             ),
+            "bot_budget": floor_decimal(remaining_bot_budget / trade.entry_price),
+            "ai_target": floor_decimal(remaining_ai_target / trade.entry_price),
             "order_value": floor_decimal(limits.max_order_value_tl / trade.entry_price),
             "profile_max_qty": limits.max_qty_per_order,
         }
@@ -205,12 +246,22 @@ class PositionSizingService:
             "raw_stop_distance_pct": raw_stop_pct,
             "cash_budget_tl": cash_budget,
             "maximum_account_exposure_tl": max_account_exposure,
+            "committed_account_exposure_tl": committed_account_exposure,
             "remaining_account_capacity_tl": remaining_account_capacity,
+            "committed_symbol_value_tl": committed_symbol_value,
             "remaining_symbol_capacity_tl": remaining_symbol_capacity,
+            "capital_base_tl": capital_base,
+            "committed_bot_capital_tl": committed_bot_capital,
+            "remaining_bot_budget_tl": remaining_bot_budget,
+            "target_allocation_pct": trade.target_allocation_pct,
+            "target_position_value_tl": target_position_value,
+            "remaining_ai_target_tl": remaining_ai_target,
             "qty_by_risk": candidates["risk_budget"],
             "qty_by_cash": candidates["cash_budget"],
             "qty_by_account_exposure": candidates["account_exposure"],
             "qty_by_symbol_position": candidates["symbol_position"],
+            "qty_by_bot_budget": candidates["bot_budget"],
+            "qty_by_ai_target": candidates["ai_target"],
             "qty_by_order_value": candidates["order_value"],
             "qty_by_profile_max": candidates["profile_max_qty"],
         }

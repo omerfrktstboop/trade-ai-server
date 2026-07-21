@@ -34,6 +34,7 @@ from app.models.signal import (
     SignalRequest,
     SignalResponse,
 )
+from app.services.order_preflight import bid_liquidity_block_reason
 from app.services.effective_risk_config import EffectiveRiskConfig
 from app.services.position_sizing import (
     PositionSizingResult,
@@ -59,6 +60,8 @@ class RiskDecision:
     entry_range: Optional[EntryRange] = None
     stop_loss: Optional[Decimal] = None
     target_price: Optional[Decimal] = None
+    target_allocation_pct: Optional[Decimal] = None
+    opportunity_score: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +101,7 @@ class RiskEngine:
         self.effective_config = effective_config
         self.last_sizing_result: PositionSizingResult | None = None
         self.last_sizing_trade: TradeSizingContext | None = None
+        self.last_buy_viability_passed = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -136,6 +140,7 @@ class RiskEngine:
             decision = DEFAULT_WAIT
         self.last_sizing_result = None
         self.last_sizing_trade = None
+        self.last_buy_viability_passed = False
 
         reasons: list[str] = []
 
@@ -279,38 +284,6 @@ class RiskEngine:
                 f"(bot_pos={request.bot_position_qty}, free_acct={account_free_qty})"
             )
 
-        if action == SignalAction.BUY and self.effective_config is not None:
-            if request.account_sizing_context is None:
-                return self._block(
-                    request,
-                    "BUY blocked: AccountSizingContext unavailable; TASK 1B adapter required",
-                )
-            if (
-                decision.entry_range is None
-                or decision.stop_loss is None
-                or decision.target_price is None
-            ):
-                return self._block(
-                    request,
-                    "BUY blocked: deterministic sizing requires entryRange, stopLoss and targetPrice",
-                )
-            self.last_sizing_trade = TradeSizingContext(
-                symbol=request.symbol,
-                entry_price=decision.entry_range.max,
-                stop_loss=decision.stop_loss,
-                target_price=decision.target_price,
-                confidence=Decimal(str(decision.confidence)),
-                current_price=Decimal(str(request.last_price)),
-            )
-            self.last_sizing_result = PositionSizingService().calculate_buy_size(
-                account=request.account_sizing_context,
-                trade=self.last_sizing_trade,
-                limits=self.effective_config,
-            )
-            if not self.last_sizing_result.allowed:
-                return self._block(request, self.last_sizing_result.reason)
-            qty = self.last_sizing_result.qty
-
         # ── 6. Max position value check ──────────────────────────────
         if action == SignalAction.BUY and qty > 0 and self.effective_config is None:
             current_qty = max(
@@ -419,6 +392,33 @@ class RiskEngine:
                     f"(entry={entry.max}, stop={sl}, target={tp})",
                 )
 
+            if allow_order and self.effective_config is not None:
+                if request.account_sizing_context is None:
+                    return self._block(
+                        request,
+                        "BUY blocked: AccountSizingContext unavailable; TASK 1B adapter required",
+                    )
+                self.last_sizing_trade = TradeSizingContext(
+                    symbol=request.symbol,
+                    entry_price=decision.entry_range.max,
+                    stop_loss=decision.stop_loss,
+                    target_price=decision.target_price,
+                    confidence=Decimal(str(decision.confidence)),
+                    current_price=Decimal(str(request.last_price)),
+                    target_allocation_pct=decision.target_allocation_pct,
+                )
+                self.last_buy_viability_passed = True
+                self.last_sizing_result = PositionSizingService().calculate_buy_size(
+                    account=request.account_sizing_context,
+                    trade=self.last_sizing_trade,
+                    limits=self.effective_config,
+                )
+                if not self.last_sizing_result.allowed:
+                    return self._block(request, self.last_sizing_result.reason)
+                qty = self.last_sizing_result.qty
+            elif allow_order:
+                self.last_buy_viability_passed = True
+
         # ── Determine order type and price ──────────────────────────
         show_details = allow_order
 
@@ -472,6 +472,9 @@ class RiskEngine:
             entryRange=decision.entry_range if show_details else None,
             stopLoss=decision.stop_loss if show_details else None,
             targetPrice=decision.target_price if show_details else None,
+            targetAllocationPct=(
+                decision.target_allocation_pct if show_details else None
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -537,15 +540,15 @@ class RiskEngine:
                     f"{self.config.max_natr_for_buy:.2f}%"
                 )
 
-            depth_drop = request.depth_queue_drop_pct
-            if (
-                depth_drop is not None
-                and depth_drop > self.config.max_depth_queue_drop_pct_for_buy
-            ):
-                return (
-                    f"BUY blocked: bid queue dropped {depth_drop:.1f}% "
-                    f"(max {self.config.max_depth_queue_drop_pct_for_buy:.1f}%)"
-                )
+            liquidity_reason = bid_liquidity_block_reason(
+                metric_ready=request.depth_bid_top5_drop_metric_ready,
+                current_top5_drop_pct=request.depth_bid_top5_drop_pct,
+                recent_top5_drop_pcts=request.depth_bid_top5_drop_recent_pcts,
+                legacy_drop_pct=request.depth_queue_drop_pct,
+                maximum_drop_pct=self.config.max_depth_queue_drop_pct_for_buy,
+            )
+            if liquidity_reason:
+                return liquidity_reason
 
         if self.config.require_alpha_trend_alignment:
             alpha_signal = self._normalise_signal(request.alpha_trend_signal)
@@ -616,6 +619,7 @@ class RiskEngine:
             entryRange=decision.entry_range,
             stopLoss=decision.stop_loss,
             targetPrice=decision.target_price,
+            targetAllocationPct=decision.target_allocation_pct,
         )
 
     def _block(self, request: SignalRequest, reason: str) -> SignalResponse:
@@ -634,4 +638,5 @@ class RiskEngine:
             entryRange=None,
             stopLoss=None,
             targetPrice=None,
+            targetAllocationPct=None,
         )

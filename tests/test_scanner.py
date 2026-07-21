@@ -60,6 +60,7 @@ def make_result(
         entryRange=EntryRange(min=70.0, max=71.5) if price else None,
         stopLoss=Decimal("68.00") if price else None,
         targetPrice=Decimal("75.00") if price else None,
+        targetAllocationPct=Decimal("100") if price else None,
     )
     return EvaluationResult(response=response, dispatch_eligible=dispatch_eligible)
 
@@ -195,6 +196,21 @@ class TestScannerTick:
         assert result == ["THYAO"]
         assert evaluated_symbols == ["THYAO", "AKBNK", "THYAO"]
 
+    async def test_account_change_blocks_the_entire_detection_tick(
+        self, evaluated_symbols, runtime_stubs
+    ):
+        fake = FakeGateway()
+        scanner = SymbolScanner(gateway=make_gateway_client(fake))
+        await scanner.tick()
+        assert evaluated_symbols == ["THYAO", "AKBNK"]
+
+        fake.account_ref = "e" * 64
+        fake.account_session_ref = "6" * 64
+        runtime_stubs["overrides"] = ["THYAO"]
+
+        assert await scanner.tick() == []
+        assert evaluated_symbols == ["THYAO", "AKBNK"]
+
     async def test_pending_portfolio_symbol_outside_watchlist_is_evaluated(
         self, evaluated_symbols, runtime_stubs
     ):
@@ -224,6 +240,45 @@ class TestScannerTick:
         await scanner.tick()
 
         assert calls == ["THYAO", "AKBNK"]
+
+    async def test_active_rotation_blocks_buys_but_not_normal_sells(
+        self, runtime_stubs, monkeypatch
+    ):
+        sent: list[SignalAction] = []
+        portfolio_buy_flags: list[bool] = []
+
+        async def fake_evaluate(symbol: str, **_kwargs: Any):
+            return make_result(
+                symbol=symbol,
+                action=SignalAction.SELL
+                if symbol == "THYAO"
+                else SignalAction.BUY,
+            )
+
+        async def active_rotation(**_kwargs: Any) -> bool:
+            return True
+
+        async def capture_order(_self, result: EvaluationResult) -> None:
+            sent.append(result.response.action)
+
+        async def capture_portfolio(
+            _self,
+            _overrides: set[str],
+            *,
+            allow_buys: bool = True,
+        ) -> None:
+            portfolio_buy_flags.append(allow_buys)
+
+        monkeypatch.setattr(scanner_module, "evaluate_symbol", fake_evaluate)
+        monkeypatch.setattr(scanner_module, "advance_rotation_plan", active_rotation)
+        monkeypatch.setattr(SymbolScanner, "_maybe_send_order", capture_order)
+        monkeypatch.setattr(SymbolScanner, "_run_portfolio_scan", capture_portfolio)
+        scanner = SymbolScanner(gateway=make_gateway_client(FakeGateway()))
+
+        await scanner.tick()
+
+        assert sent == [SignalAction.SELL]
+        assert portfolio_buy_flags == [False]
 
 
 class TestScannerLifecycleLogs:
@@ -472,6 +527,14 @@ class TestOrderPath:
                         value="BACKEND_DEDUCTED",
                         value_type="reservation_handling",
                         description="test account policy",
+                    )
+                )
+                session.add(
+                    SystemConfig(
+                        key="sizingTotalBotCapitalBudgetTl",
+                        value="100000",
+                        value_type="decimal",
+                        description="test bot capital budget",
                     )
                 )
                 # Cutoff testin koştuğu saate bağlı olmasın (17:30 sonrası).

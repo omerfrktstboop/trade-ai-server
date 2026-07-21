@@ -114,12 +114,12 @@ namespace Matriks.Lean.Algotrader
         private string _configVersion = "UNAVAILABLE";
         private GatewayConfigSnapshot _activeConfig = GatewayConfigSnapshot.SafeDefault();
 
-        // ── v2 kontrat + mod/arming durumu (Faz 3) ───────────────────
+        // ── v3 kontrat + mod/arming durumu ───────────────────────────
         // ExpectedContractVersion: bu gateway'in konuştuğu config kontratı.
         // Server farklı bir contractVersion gönderirse (veya hiç göndermezse)
         // emir yolu fail-closed kapanır — iki taraf ancak atomik deploy ile
         // birlikte yükseltilir.
-        private const int ExpectedContractVersion = 2;
+        private const int ExpectedContractVersion = 3;
         private int _serverContractVersion; // 0 = config'te alan yok (legacy)
         // SystemMode: OBSERVE_ONLY | AUTO_TRADE. Bilinmeyen değer fail-closed
         // olarak OBSERVE_ONLY'ye normalize edilir.
@@ -133,6 +133,8 @@ namespace Matriks.Lean.Algotrader
         private string _lastVerifiedSessionRef = string.Empty;
         private string _lastVerifiedAccountType = "UNKNOWN"; // DEMO|REAL|UNKNOWN
         private bool _lastAccountChanged;
+        private string _positionSnapshotAccountRef = string.Empty;
+        private string _positionSnapshotSessionRef = string.Empty;
 
         private SymbolPeriod IndicatorPeriod = SymbolPeriod.Min5;
 
@@ -141,6 +143,7 @@ namespace Matriks.Lean.Algotrader
         private string[] AllowedSymbols = new string[0];
         private Dictionary<string, decimal> LockedLongTermQty = new Dictionary<string, decimal>();
         private Dictionary<string, decimal> BotOwnedQty = new Dictionary<string, decimal>();
+        private string _botOwnershipAccountRef = string.Empty;
 
         // ── Constants ────────────────────────────────────────────────
 
@@ -188,6 +191,10 @@ namespace Matriks.Lean.Algotrader
         private readonly ConcurrentDictionary<string, object> _adxIndicatorBySymbol = new ConcurrentDictionary<string, object>();
         private readonly ConcurrentDictionary<string, PositionMarketSnapshot> _positionMarketBySymbol = new ConcurrentDictionary<string, PositionMarketSnapshot>();
         private readonly ConcurrentDictionary<string, decimal> _maxBid1SizeBySymbol = new ConcurrentDictionary<string, decimal>();
+        private const int DepthLiquidityWindowSeconds = 300;
+        private const int DepthLiquiditySampleIntervalSeconds = 15;
+        private const int DepthLiquidityMinimumBaselineSamples = 3;
+        private readonly ConcurrentDictionary<string, DepthLiquidityWindowState> _depthLiquidityBySymbol = new ConcurrentDictionary<string, DepthLiquidityWindowState>();
         // Günlük referans fiyat (gün içinde görülen ilk geçerli last) — /movers
         // endpoint'inin değişim yüzdesi bu referansa göre hesaplanır.
         private readonly ConcurrentDictionary<string, decimal> _dailyRefPriceBySymbol = new ConcurrentDictionary<string, decimal>();
@@ -253,6 +260,7 @@ namespace Matriks.Lean.Algotrader
             };
             _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ServerApiToken);
 
+            RefreshAccountVerification(true);
             FetchAndApplyServerConfigAsync().GetAwaiter().GetResult();
 
             foreach (string symbol in AllowedSymbols)
@@ -321,6 +329,7 @@ namespace Matriks.Lean.Algotrader
             if ((DateTime.UtcNow - _lastConfigFetchUtc).TotalSeconds >= 60)
                 _ = FetchAndApplyServerConfigAsync();
             CleanupIdempotencyCache();
+            SampleDepthLiquidityBaselines();
             if ((DateTime.UtcNow - _lastPositionSyncUtc).TotalSeconds >= PositionSyncIntervalSeconds)
             {
                 LoadRealPositionsSnapshot();
@@ -385,7 +394,9 @@ namespace Matriks.Lean.Algotrader
                 + " filledQty=" + filledQty
                 + " avgPx=" + avgPx);
 
-            PendingOrderContext? resolvedContext = ResolvePendingOrderContext(orderId, symbol, side);
+            decimal callbackLimitPrice = order.Price > 0m ? order.Price : avgPx;
+            PendingOrderContext? resolvedContext = ResolvePendingOrderContext(
+                orderId, symbol, side, orderQty, callbackLimitPrice);
             PendingOrderContext context;
             if (resolvedContext.HasValue)
             {
@@ -794,7 +805,10 @@ namespace Matriks.Lean.Algotrader
                 return false;
             try
             {
-                using (var result = await _http.GetAsync("api/gateway/config"))
+                RefreshAccountVerification(true);
+                string configPath = "api/gateway/config?accountRef="
+                    + Uri.EscapeDataString(_lastVerifiedAccountRef ?? string.Empty);
+                using (var result = await _http.GetAsync(configPath))
                 {
                     string body = await result.Content.ReadAsStringAsync();
                     if (!result.IsSuccessStatusCode)
@@ -819,6 +833,7 @@ namespace Matriks.Lean.Algotrader
                     Dictionary<string, decimal> botOwnedQty = cfg["botOwnedQty"] != null
                         ? cfg["botOwnedQty"].ToObject<Dictionary<string, decimal>>()
                         : new Dictionary<string, decimal>();
+                    string botOwnershipAccountRef = (cfg.Value<string>("botOwnershipAccountRef") ?? string.Empty).Trim();
                     if (lockedLongTermQty.Any(x => x.Value < 0m))
                     { SafeDebug("Server config rejected: negative locked quantity"); return false; }
                     // v2: eski mode/enableDemoOrders/enableRealOrders/realLive*
@@ -839,10 +854,12 @@ namespace Matriks.Lean.Algotrader
                     decimal maxQtyPerOrder = cfg.Value<decimal?>("maxQtyPerOrder") ?? 0m;
                     int maxOrdersPerDay = cfg.Value<int?>("maxOrdersPerDay") ?? 0;
                     int maxOrdersPerSymbolPerDay = cfg.Value<int?>("maxOrdersPerSymbolPerDay") ?? 0;
+                    decimal? configuredMaxDepthQueueDropPctForBuy = cfg.Value<decimal?>("maxDepthQueueDropPctForBuy");
+                    decimal maxDepthQueueDropPctForBuy = configuredMaxDepthQueueDropPctForBuy ?? 35m;
                     string orderTimeInForce = cfg.Value<string>("orderTimeInForce") ?? "Day";
                     string activeProfileCode = cfg.Value<string>("profileCode") ?? "UNKNOWN";
                     string configVersion = cfg.Value<string>("configHash") ?? "UNKNOWN";
-                    // v2 kontrat alanları — eksikse fail-closed default'lar.
+                    // v3 kontrat alanları — eksikse fail-closed default'lar.
                     int contractVersion = cfg.Value<int?>("contractVersion") ?? 0;
                     string systemMode = NormalizeSystemMode(cfg.Value<string>("systemMode"));
                     bool realAccountArmed = cfg.Value<bool?>("realAccountArmed") ?? false;
@@ -866,9 +883,18 @@ namespace Matriks.Lean.Algotrader
                     // v2: emir dispatch'i sadece AUTO_TRADE'de mümkün — bu modda
                     // sembol listesi ve pozitif risk limitleri zorunlu (fail-closed).
                     bool liveMode = systemMode == "AUTO_TRADE";
+                    if (string.IsNullOrEmpty(_lastVerifiedAccountRef)
+                        || !string.Equals(botOwnershipAccountRef, _lastVerifiedAccountRef, StringComparison.OrdinalIgnoreCase))
+                    {
+                        SafeDebug("Server config rejected: bot ownership account mismatch");
+                        return false;
+                    }
                     if (liveMode && (symbols.Length == 0 || maxOrderValueTl <= 0m
                         || maxQtyPerOrder <= 0m || maxOrdersPerDay <= 0
-                        || maxOrdersPerSymbolPerDay <= 0))
+                        || maxOrdersPerSymbolPerDay <= 0
+                        || !configuredMaxDepthQueueDropPctForBuy.HasValue
+                        || maxDepthQueueDropPctForBuy < 0m
+                        || maxDepthQueueDropPctForBuy > 100m))
                     {
                         SafeDebug("Server config rejected: AUTO_TRADE requires allowed symbols and positive risk limits");
                         return false;
@@ -923,6 +949,7 @@ namespace Matriks.Lean.Algotrader
                         .ToArray();
                     LockedLongTermQty = lockedLongTermQty;
                     BotOwnedQty = botOwnedQty;
+                    _botOwnershipAccountRef = botOwnershipAccountRef;
                     // v2: RuntimeMode yalnızca log/kayıt için systemMode'a eşit.
                     RuntimeMode = systemMode;
                     EnableDemoOrders = enableDemoOrders;
@@ -952,7 +979,22 @@ namespace Matriks.Lean.Algotrader
                     // Publish one immutable reference only after every parsed
                     // field was validated. Order handlers read this snapshot
                     // once, so config reloads cannot mix versions.
-                    _activeConfig = new GatewayConfigSnapshot(systemMode, enableDemoOrders, enableRealOrders, realLiveModeAllowed, realLiveArmed, tradingKillSwitchActive, forceSafeMode, buyAllowedSymbols, sellExitAllowedSymbols, declineSymbols, configVersion, activeProfileCode);
+                    if (_activeConfig.MaxDepthQueueDropPctForBuy != maxDepthQueueDropPctForBuy)
+                        _depthLiquidityBySymbol.Clear();
+                    _activeConfig = new GatewayConfigSnapshot(
+                        systemMode,
+                        enableDemoOrders,
+                        enableRealOrders,
+                        realLiveModeAllowed,
+                        realLiveArmed,
+                        tradingKillSwitchActive,
+                        forceSafeMode,
+                        buyAllowedSymbols,
+                        sellExitAllowedSymbols,
+                        declineSymbols,
+                        configVersion,
+                        activeProfileCode,
+                        maxDepthQueueDropPctForBuy);
                     MaxOrderValueTl = maxOrderValueTl;
                     MaxQtyPerOrder = maxQtyPerOrder;
                     MaxOrdersPerDay = maxOrdersPerDay;
@@ -996,6 +1038,7 @@ namespace Matriks.Lean.Algotrader
                         MaxQtyPerOrder.ToString(),
                         MaxOrdersPerDay.ToString(),
                         MaxOrdersPerSymbolPerDay.ToString(),
+                        maxDepthQueueDropPctForBuy.ToString(),
                         OrderTimeInForce,
                         IndicatorPeriod.ToString(),
                         MarketIndexSymbol,
@@ -1082,7 +1125,7 @@ namespace Matriks.Lean.Algotrader
                 profileCode = ActiveProfileCode,
                 configVersion = _configVersion,
                 runtimeMode = RuntimeMode,
-                // ── v2 kontrat + hesap kimliği raporlama (Faz 3) ──
+                // ── v3 kontrat + hesap kimliği raporlama ──
                 gatewayContractVersion = ExpectedContractVersion,
                 serverContractVersion = _serverContractVersion,
                 systemMode = SystemMode,
@@ -1223,10 +1266,13 @@ namespace Matriks.Lean.Algotrader
             await WriteJsonAsync(stream, 200, new
             {
                 ok = true,
+                accountRef = string.IsNullOrEmpty(_positionSnapshotAccountRef) ? null : _positionSnapshotAccountRef,
+                accountSessionRef = string.IsNullOrEmpty(_positionSnapshotSessionRef) ? null : _positionSnapshotSessionRef,
                 positionsLoaded = _realPositionsLoadedFromSnapshot,
                 snapshotCompleteFlag = _positionSnapshotCompleteFlag,
                 snapshotNonEmpty = _positionSnapshotNonEmpty,
                 snapshotAgeSeconds = _lastPositionSyncUtc == DateTime.MinValue ? (double?)null : Math.Round((DateTime.UtcNow - _lastPositionSyncUtc).TotalSeconds, 1),
+                receivedAtUtc = _lastPositionSyncUtc == DateTime.MinValue ? null : _lastPositionSyncUtc.ToString("o"),
                 snapshotGeneration = _positionSnapshotGeneration,
                 confidence = _positionSnapshotConfidence,
                 positions = entries
@@ -1922,6 +1968,12 @@ namespace Matriks.Lean.Algotrader
                 bool? testAutoOrder = user == null
                     ? (bool?)null
                     : ReadPublicMember(user, "TestAutoOrder") as bool?;
+                string accountType = user == null || testAutoOrder == null
+                    ? "UNKNOWN"
+                    : (testAutoOrder.Value ? "DEMO" : "REAL");
+                string accountRef = string.IsNullOrEmpty(rawAccountId)
+                    ? string.Empty
+                    : BuildAccountRef(rawAccountId, accountType);
                 await WriteJsonAsync(stream, 200, new
                 {
                     ok = true,
@@ -1929,14 +1981,12 @@ namespace Matriks.Lean.Algotrader
                     sourceProvider = "MATRIKS_IQ",
                     receivedAtUtc = DateTime.UtcNow.ToString("o"),
                     accountDataReliable = accountDataReliable,
-                    accountRef = string.IsNullOrEmpty(rawAccountId) ? null : Sha256Hex(rawAccountId),
-                    accountSessionRef = string.IsNullOrEmpty(rawAccountId)
+                    accountRef = string.IsNullOrEmpty(accountRef) ? null : accountRef,
+                    accountSessionRef = string.IsNullOrEmpty(accountRef)
                         ? null
-                        : Sha256Hex(rawAccountId + "|" + _startedAt.Ticks.ToString()),
+                        : Sha256Hex(accountRef + "|" + _startedAt.Ticks.ToString()),
                     accountIdMasked = string.IsNullOrEmpty(rawAccountId) ? null : MaskAccountId(rawAccountId),
-                    accountType = user == null || testAutoOrder == null
-                        ? "UNKNOWN"
-                        : (testAutoOrder.Value ? "DEMO" : "REAL"),
+                    accountType = accountType,
                     account = account
                 });
             }
@@ -2411,12 +2461,14 @@ namespace Matriks.Lean.Algotrader
 
             if (string.IsNullOrWhiteSpace(order.RequestId)
                 || string.IsNullOrWhiteSpace(order.Symbol)
-                || string.IsNullOrWhiteSpace(order.Side))
+                || string.IsNullOrWhiteSpace(order.Side)
+                || string.IsNullOrWhiteSpace(order.AccountRef)
+                || string.IsNullOrWhiteSpace(order.AccountSessionRef))
             {
                 await WriteJsonAsync(stream, 400, new
                 {
                     ok = false,
-                    error = "missing required fields: requestId, symbol, side"
+                    error = "missing required fields: requestId, symbol, side, accountRef, accountSessionRef"
                 });
                 return;
             }
@@ -2426,6 +2478,10 @@ namespace Matriks.Lean.Algotrader
             {
             ResetDailyCachesIfNeeded();
             CleanupIdempotencyCache();
+            // Never rely on the periodic account verification cache for an
+            // order. Refresh immediately and bind this request to the exact
+            // hashed account identity observed by the Python server.
+            RefreshAccountVerification(true);
 
             string side = NormalizeAction(order.Side);
             string symbol = NormalizeSymbol(order.Symbol);
@@ -2472,6 +2528,12 @@ namespace Matriks.Lean.Algotrader
 
             if (side != "BUY" && side != "SELL")
                 rejection = "unknown side=" + order.Side;
+            else if (string.IsNullOrEmpty(_lastVerifiedAccountRef)
+                || !string.Equals(order.AccountRef, _lastVerifiedAccountRef, StringComparison.OrdinalIgnoreCase))
+                rejection = "order accountRef does not match the freshly verified account";
+            else if (string.IsNullOrEmpty(_lastVerifiedSessionRef)
+                || !string.Equals(order.AccountSessionRef, _lastVerifiedSessionRef, StringComparison.OrdinalIgnoreCase))
+                rejection = "order accountSessionRef does not match the freshly verified session";
             else if (!finiteOrderValues)
                 rejection = "qty/limitPrice must be finite";
             else if (orderConfig.TradingKillSwitchActive || orderConfig.ForceSafeMode)
@@ -2522,8 +2584,12 @@ namespace Matriks.Lean.Algotrader
                     + GetAccountAvailableQty(symbol)
                     + " locked=" + GetLockedLongTermQty(symbol) + ")";
             else
-                rejection = ValidateOrderMarketData(symbol, side, roundedPrice);
-            // ── v2 kontrat + dispatch kapıları (TEK mod kapısı) ──
+                rejection = ValidateOrderMarketData(
+                    symbol,
+                    side,
+                    roundedPrice,
+                    orderConfig.MaxDepthQueueDropPctForBuy);
+            // ── v3 kontrat + dispatch kapıları (TEK mod kapısı) ──
             // Sürüm uyuşmazlığı (alan eksikliği dahil) fail-closed emir reddi.
             // Eski CheckModeGates (PAPER/MANUAL/DEMO_LIVE/REAL_LIVE) kaldırıldı;
             // yerini systemMode + accountType + REAL arming (CheckDispatchGates)
@@ -2569,7 +2635,9 @@ namespace Matriks.Lean.Algotrader
 
             try
             {
-                OrderExecutionResult execution = SendGatewayLimitOrder(order.RequestId, symbol, side, qty, price);
+                OrderExecutionResult execution = SendGatewayLimitOrder(
+                    order.RequestId, symbol, side, qty, price,
+                    order.AccountRef, order.AccountSessionRef);
                 if (execution.Success)
                 {
                     reservation.Accepted = true;
@@ -2630,7 +2698,11 @@ namespace Matriks.Lean.Algotrader
         /// Mode kapıları — server'ın bildirdiği mode'a göre son savunma hattı.
         /// null → geçti; aksi halde red gerekçesi.
         /// </summary>
-        private string ValidateOrderMarketData(string symbol, string side, decimal roundedLimitPrice)
+        private string ValidateOrderMarketData(
+            string symbol,
+            string side,
+            decimal roundedLimitPrice,
+            decimal maxDepthQueueDropPctForBuy)
         {
             if (!IsOrderSessionOpen())
                 return "trading session is closed";
@@ -2653,6 +2725,26 @@ namespace Matriks.Lean.Algotrader
                 return "depth sizes are not positive";
             if (side == "BUY" && depth.Analysis.SpreadPct > 0.50m)
                 return "BUY spread exceeds gateway hard limit";
+            if (side == "BUY")
+            {
+                if (depth.Bids == null || depth.Bids.Count < 5 || depth.Analysis.Top5 == null)
+                    return "BUY rolling Top5 bid liquidity baseline is unavailable";
+                DepthLiquidityMetric liquidity = UpdateDepthLiquidityMetric(
+                    symbol,
+                    depth.Analysis.Top5.TotalBidSize,
+                    DateTime.UtcNow,
+                    maxDepthQueueDropPctForBuy);
+                if (!liquidity.MetricReady || liquidity.RecentDropPcts.Count < 2)
+                    return "BUY rolling Top5 bid liquidity baseline is warming";
+                if (liquidity.DropPct > maxDepthQueueDropPctForBuy
+                    && liquidity.RecentDropPcts
+                        .Skip(Math.Max(0, liquidity.RecentDropPcts.Count - 2))
+                        .All(x => x > maxDepthQueueDropPctForBuy))
+                    return "BUY persistent Top5 bid liquidity drop "
+                        + liquidity.DropPct
+                        + " percent exceeds max "
+                        + maxDepthQueueDropPctForBuy;
+            }
             decimal reference = side == "BUY" ? depth.Analysis.BestAsk : depth.Analysis.BestBid;
             decimal driftPct = Math.Abs(roundedLimitPrice - reference) / reference * 100m;
             if (driftPct > 0.75m)
@@ -2697,13 +2789,19 @@ namespace Matriks.Lean.Algotrader
         {
             if (_lastPositionSyncUtc == DateTime.MinValue
                 || (DateTime.UtcNow - _lastPositionSyncUtc).TotalSeconds > MaxPositionSyncAgeSeconds
-                || (_positionSnapshotConfidence != "HIGH" && _positionSnapshotConfidence != "MEDIUM"))
+                || (_positionSnapshotConfidence != "HIGH" && _positionSnapshotConfidence != "MEDIUM")
+                || !string.Equals(_positionSnapshotAccountRef, _lastVerifiedAccountRef, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(_positionSnapshotSessionRef, _lastVerifiedSessionRef, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(_botOwnershipAccountRef, _lastVerifiedAccountRef, StringComparison.OrdinalIgnoreCase))
                 return 0m;
             decimal accountFree = GetAccountAvailableQty(symbol) - GetLockedLongTermQty(symbol);
             return Math.Max(0m, Math.Min(GetBotOwnedQty(symbol), accountFree));
         }
 
-        private OrderExecutionResult SendGatewayLimitOrder(string requestId, string symbol, string side, decimal qty, decimal limitPrice)
+        private OrderExecutionResult SendGatewayLimitOrder(
+            string requestId, string symbol, string side, decimal qty,
+            decimal limitPrice, string expectedAccountRef,
+            string expectedAccountSessionRef)
         {
             if (!TryConvertOrderQuantity(qty, out int quantity, out string quantityError))
             {
@@ -2753,6 +2851,15 @@ namespace Matriks.Lean.Algotrader
 
             try
             {
+                // Last possible account boundary before the account-less
+                // Matriks SDK call. Any account/session change invalidates the
+                // request and the position snapshot instead of crossing over.
+                RefreshAccountVerification(true);
+                if (!string.Equals(expectedAccountRef, _lastVerifiedAccountRef, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(expectedAccountSessionRef, _lastVerifiedSessionRef, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(_positionSnapshotAccountRef, _lastVerifiedAccountRef, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(_positionSnapshotSessionRef, _lastVerifiedSessionRef, StringComparison.OrdinalIgnoreCase))
+                    return new OrderExecutionResult { Success = false, Message = "account/session changed at send boundary" };
                 SendLimitOrder(symbol, quantity, orderSide, roundedPrice, timeInForce, chartIcon);
             }
             catch
@@ -2770,7 +2877,9 @@ namespace Matriks.Lean.Algotrader
             };
         }
 
-        private PendingOrderContext? ResolvePendingOrderContext(string orderId, string symbol, string side)
+        private PendingOrderContext? ResolvePendingOrderContext(
+            string orderId, string symbol, string side, decimal orderQty,
+            decimal limitPrice)
         {
             if (!string.IsNullOrWhiteSpace(orderId)
                 && _pendingOrdersByOrderId.TryGetValue(orderId, out var byOrderId))
@@ -2782,6 +2891,14 @@ namespace Matriks.Lean.Algotrader
             string symbolSideKey = BuildSymbolSideKey(symbol, normalizedSide);
             if (_pendingOrdersBySymbolSide.TryGetValue(symbolSideKey, out var bySymbolSide))
             {
+                if (orderQty <= 0m || limitPrice <= 0m
+                    || bySymbolSide.Qty != orderQty
+                    || bySymbolSide.Price != RoundPriceStepBistViop(symbol, limitPrice))
+                {
+                    SafeDebug("Pending callback shape mismatch; requestId not guessed symbol="
+                        + symbol + " side=" + side);
+                    return null;
+                }
                 if (!string.IsNullOrWhiteSpace(orderId))
                 {
                     _pendingOrdersByOrderId[orderId] = bySymbolSide;
@@ -2793,7 +2910,10 @@ namespace Matriks.Lean.Algotrader
             // that NormalizeOrderSide cannot map to BUY/SELL. A single pending
             // order for this symbol is still an unambiguous match.
             var symbolMatches = _pendingOrdersBySymbolSide.Values
-                .Where(x => NormalizeSymbol(x.Symbol) == NormalizeSymbol(symbol))
+                .Where(x => NormalizeSymbol(x.Symbol) == NormalizeSymbol(symbol)
+                    && orderQty > 0m && x.Qty == orderQty
+                    && limitPrice > 0m
+                    && x.Price == RoundPriceStepBistViop(symbol, limitPrice))
                 .ToList();
             if (symbolMatches.Count == 1)
             {
@@ -2969,9 +3089,9 @@ namespace Matriks.Lean.Algotrader
         /// older than five seconds. A failed read never reuses a previous
         /// successful verification.
         /// </summary>
-        private void RefreshAccountVerification()
+        private void RefreshAccountVerification(bool force = false)
         {
-            if ((DateTime.UtcNow - _lastAccountVerificationUtc).TotalSeconds <= AccountVerificationMaxAgeSeconds)
+            if (!force && (DateTime.UtcNow - _lastAccountVerificationUtc).TotalSeconds <= AccountVerificationMaxAgeSeconds)
                 return;
 
             try
@@ -2982,8 +3102,10 @@ namespace Matriks.Lean.Algotrader
 
                 string accountId = Convert.ToString(tradeUser.AccountId) ?? string.Empty;
                 bool testAutoOrder = tradeUser.TestAutoOrder;
-                bool accountChanged = !string.IsNullOrWhiteSpace(_lastVerifiedAccountId)
-                    && !string.Equals(_lastVerifiedAccountId, accountId, StringComparison.Ordinal);
+                string accountType = testAutoOrder ? "DEMO" : "REAL";
+                string accountRef = BuildAccountRef(accountId, accountType);
+                bool accountChanged = !string.IsNullOrWhiteSpace(_lastVerifiedAccountRef)
+                    && !string.Equals(_lastVerifiedAccountRef, accountRef, StringComparison.OrdinalIgnoreCase);
                 if (accountChanged)
                     SafeDebug("Demo account changed from " + MaskAccountId(_lastVerifiedAccountId) + " to " + MaskAccountId(accountId));
 
@@ -2996,16 +3118,19 @@ namespace Matriks.Lean.Algotrader
                 // başlatıldığında değişir. Matriks SDK'sı aynı hesapla yeniden
                 // login'i ayrıca raporlamadığı için bu, erişilebilir en güçlü
                 // oturum sinyalidir.
-                _lastVerifiedAccountRef = Sha256Hex(accountId);
-                _lastVerifiedSessionRef = Sha256Hex(accountId + "|" + _startedAt.Ticks.ToString());
-                _lastVerifiedAccountType = testAutoOrder ? "DEMO" : "REAL";
+                _lastVerifiedAccountRef = accountRef;
+                _lastVerifiedSessionRef = Sha256Hex(accountRef + "|" + _startedAt.Ticks.ToString());
+                _lastVerifiedAccountType = accountType;
                 _lastAccountChanged = accountChanged;
                 _lastAccountVerificationUtc = DateTime.UtcNow;
+                if (accountChanged)
+                    InvalidatePositionSnapshot("account identity changed");
             }
             catch (Exception ex)
             {
                 _lastAccountVerificationUtc = DateTime.MinValue;
                 _lastVerifiedAccountType = "UNKNOWN";
+                InvalidatePositionSnapshot("account verification failed");
                 SafeDebug("Demo account verification failed: " + ex.Message);
             }
         }
@@ -3042,7 +3167,7 @@ namespace Matriks.Lean.Algotrader
         }
 
         /// <summary>
-        /// v2 emir kapısı (contractVersion=2): SystemMode + otomatik hesap
+        /// v3 emir kapısı (contractVersion=3): SystemMode + otomatik hesap
         /// türü tespiti. DEMO hesapta AUTO_TRADE serbest akar; REAL hesap
         /// yalnızca RealAccountArmed VE gateway'in kendi hesapladığı
         /// accountRef == ArmedAccountRef (aynı sha256 formatı, tekrar hash
@@ -3057,6 +3182,8 @@ namespace Matriks.Lean.Algotrader
                 return "account verification failed or stale";
             if (acct.AccountChanged)
                 return "account changed since last verification — order rejected";
+            if (!string.Equals(acct.AccountRef, _botOwnershipAccountRef, StringComparison.OrdinalIgnoreCase))
+                return "bot ownership config belongs to a different account";
             if (acct.AccountType == "DEMO")
                 return null;
             if (!RealAccountArmed)
@@ -3192,6 +3319,204 @@ namespace Matriks.Lean.Algotrader
             result.Analysis.DepthReadUtc = readCompletedUtc.ToString("o");
             result.Analysis.DepthReadLatencySeconds = Math.Max(0.0, (readCompletedUtc - readStartedUtc).TotalSeconds);
             return result;
+        }
+
+        private static string BuildAccountRef(string accountId, string accountType)
+        {
+            return Sha256Hex((accountType ?? "UNKNOWN").Trim().ToUpperInvariant()
+                + "|" + (accountId ?? string.Empty));
+        }
+
+        private DepthLiquidityMetric UpdateDepthLiquidityMetric(
+            string symbol,
+            decimal currentTop5Size,
+            DateTime observedUtc,
+            decimal maximumDropPct)
+        {
+            var metric = new DepthLiquidityMetric
+            {
+                CurrentTop5Size = currentTop5Size,
+                RecentDropPcts = new List<decimal>()
+            };
+            if (currentTop5Size <= 0m)
+                return metric;
+
+            string normalized = NormalizeSymbol(symbol);
+            DepthLiquidityWindowState state = _depthLiquidityBySymbol.GetOrAdd(
+                normalized,
+                _ => new DepthLiquidityWindowState());
+            lock (state.SyncRoot)
+            {
+                DateTime cutoffUtc = observedUtc.AddSeconds(-DepthLiquidityWindowSeconds);
+                state.Samples.RemoveAll(x => x.ObservedUtc < cutoffUtc);
+
+                List<decimal> baselineSizes = state.Samples
+                    .Where(x => x.IncludeInBaseline && x.Top5BidSize > 0m)
+                    .Select(x => x.Top5BidSize)
+                    .OrderBy(x => x)
+                    .ToList();
+                if (state.FrozenReferenceTop5Size > 0m)
+                {
+                    metric.ReferenceTop5Size = state.FrozenReferenceTop5Size;
+                    metric.MetricReady = true;
+                }
+                else
+                {
+                    metric.ReferenceTop5Size = Median(baselineSizes);
+                    metric.MetricReady = baselineSizes.Count >= DepthLiquidityMinimumBaselineSamples
+                        && metric.ReferenceTop5Size > 0m;
+                }
+                if (metric.MetricReady)
+                {
+                    metric.DropPct = CalculateDepthLiquidityDropPct(
+                        metric.ReferenceTop5Size,
+                        currentTop5Size);
+                    if (metric.DropPct > maximumDropPct
+                        && state.FrozenReferenceTop5Size <= 0m)
+                        state.FrozenReferenceTop5Size = metric.ReferenceTop5Size;
+                }
+
+                DepthLiquiditySample latest = state.Samples.Count > 0
+                    ? state.Samples[state.Samples.Count - 1]
+                    : null;
+                bool shouldRecord = latest == null
+                    || (observedUtc - latest.ObservedUtc).TotalSeconds
+                        >= DepthLiquiditySampleIntervalSeconds;
+                if (shouldRecord)
+                {
+                    bool currentAboveThreshold = metric.MetricReady
+                        && metric.DropPct > maximumDropPct;
+                    if (state.WasAboveThreshold && !currentAboveThreshold)
+                    {
+                        foreach (DepthLiquiditySample sample in state.Samples)
+                            sample.MetricReady = false;
+                    }
+                    state.Samples.Add(new DepthLiquiditySample
+                    {
+                        ObservedUtc = observedUtc,
+                        Top5BidSize = currentTop5Size,
+                        DropPct = metric.DropPct,
+                        MetricReady = metric.MetricReady,
+                        IncludeInBaseline = !metric.MetricReady
+                            || metric.DropPct <= maximumDropPct
+                    });
+                    if (state.FrozenReferenceTop5Size > 0m)
+                    {
+                        state.ConsecutiveRecoverySampleCount = currentAboveThreshold
+                            ? 0
+                            : state.ConsecutiveRecoverySampleCount + 1;
+                        if (state.ConsecutiveRecoverySampleCount >= 3)
+                        {
+                            int removeCount = Math.Max(0, state.Samples.Count - 3);
+                            if (removeCount > 0)
+                                state.Samples.RemoveRange(0, removeCount);
+                            decimal recoveredReference = Median(
+                                state.Samples
+                                    .Select(x => x.Top5BidSize)
+                                    .OrderBy(x => x)
+                                    .ToList());
+                            bool stableRecovery = state.Samples.All(
+                                x => CalculateDepthLiquidityDropPct(
+                                    recoveredReference,
+                                    x.Top5BidSize) <= maximumDropPct);
+                            decimal effectiveReference = stableRecovery
+                                ? recoveredReference
+                                : Math.Max(
+                                    state.FrozenReferenceTop5Size,
+                                    recoveredReference);
+                            foreach (DepthLiquiditySample sample in state.Samples)
+                            {
+                                sample.DropPct = CalculateDepthLiquidityDropPct(
+                                    effectiveReference,
+                                    sample.Top5BidSize);
+                                sample.MetricReady = true;
+                                sample.IncludeInBaseline = stableRecovery
+                                    || sample.DropPct <= maximumDropPct;
+                            }
+                            state.FrozenReferenceTop5Size = stableRecovery
+                                ? 0m
+                                : effectiveReference;
+                            metric.ReferenceTop5Size = effectiveReference;
+                            metric.DropPct = CalculateDepthLiquidityDropPct(
+                                effectiveReference,
+                                currentTop5Size);
+                            currentAboveThreshold = metric.DropPct > maximumDropPct;
+                            state.ConsecutiveRecoverySampleCount = 0;
+                        }
+                    }
+                    state.WasAboveThreshold = currentAboveThreshold;
+                }
+
+                List<DepthLiquiditySample> readySamples = state.Samples
+                    .Where(x => x.MetricReady)
+                    .OrderBy(x => x.ObservedUtc)
+                    .ToList();
+                metric.RecentDropPcts = readySamples
+                    .Skip(Math.Max(0, readySamples.Count - 2))
+                    .Select(x => x.DropPct)
+                    .ToList();
+                metric.SampleCount = state.Samples.Count;
+            }
+            return metric;
+        }
+
+        private static decimal CalculateDepthLiquidityDropPct(
+            decimal referenceSize,
+            decimal currentSize)
+        {
+            if (referenceSize <= 0m || currentSize <= 0m)
+                return 0m;
+            return Math.Max(
+                0m,
+                Math.Min(
+                    100m,
+                    (referenceSize - currentSize) / referenceSize * 100m));
+        }
+
+        private void SampleDepthLiquidityBaselines()
+        {
+            GatewayConfigSnapshot config = _activeConfig;
+            string[] symbols = (config.BuyAllowedSymbols ?? new string[0])
+                .Concat(AllowedSymbols ?? new string[0])
+                .Where(x => IsEquitySymbol(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(50)
+                .ToArray();
+            foreach (string symbol in symbols)
+            {
+                try
+                {
+                    DepthSnapshot depth = ReadDepthSnapshot(symbol, 5);
+                    if (depth == null
+                        || depth.Analysis == null
+                        || !depth.Analysis.DepthReliable
+                        || depth.Analysis.DepthAgeSeconds > MaxDepthAgeSecondsForOrder
+                        || depth.Bids == null
+                        || depth.Bids.Count < 5
+                        || depth.Analysis.Top5 == null
+                        || depth.Analysis.Top5.TotalBidSize <= 0m)
+                        continue;
+                    UpdateDepthLiquidityMetric(
+                        symbol,
+                        depth.Analysis.Top5.TotalBidSize,
+                        DateTime.UtcNow,
+                        config.MaxDepthQueueDropPctForBuy);
+                }
+                catch
+                {
+                    // Snapshot/order paths remain fail-closed if sampling fails.
+                }
+            }
+        }
+
+        private static decimal Median(List<decimal> orderedValues)
+        {
+            if (orderedValues == null || orderedValues.Count == 0)
+                return 0m;
+            int middle = orderedValues.Count / 2;
+            return orderedValues.Count % 2 == 1
+                ? orderedValues[middle]
+                : (orderedValues[middle - 1] + orderedValues[middle]) / 2m;
         }
 
         private static Dictionary<string, object> BuildTradeUserAccountPayload(object user)
@@ -3403,6 +3728,8 @@ namespace Matriks.Lean.Algotrader
             decimal ask1Size = 0m;
             decimal maxBid1Size = 0m;
             decimal depthQueueDropPct = 0m;
+            decimal bidTop5Size = 0m;
+            DepthLiquidityMetric depthLiquidityMetric = new DepthLiquidityMetric();
             bool depthReliable = false;
             string depthSummary = "";
             string depthSkipReason = null;
@@ -3423,6 +3750,9 @@ namespace Matriks.Lean.Algotrader
                     bestBid = depthAnalysis.BestBid;
                     bid1Size = depthAnalysis.BidSizeTop1;
                     ask1Size = depthAnalysis.AskSizeTop1;
+                    bidTop5Size = depthAnalysis.Top5 != null
+                        ? depthAnalysis.Top5.TotalBidSize
+                        : 0m;
                     if (depth.Bids.Count >= 2) secondBid = depth.Bids[1].Price;
                     if (depth.Bids.Count >= 3) thirdBid = depth.Bids[2].Price;
                     if (bestBid > 0m && bid1Size > 0m)
@@ -3438,6 +3768,17 @@ namespace Matriks.Lean.Algotrader
                         }
                     }
                     depthReliable = depthAnalysis.DepthReliable;
+                    if (depthReliable
+                        && depth.Bids.Count >= 5
+                        && depthAnalysis.DepthAgeSeconds <= MaxDepthAgeSecondsForOrder
+                        && bidTop5Size > 0m)
+                    {
+                        depthLiquidityMetric = UpdateDepthLiquidityMetric(
+                            symbol,
+                            bidTop5Size,
+                            DateTime.UtcNow,
+                            _activeConfig.MaxDepthQueueDropPctForBuy);
+                    }
                     if (!depthReliable)
                     {
                         depthQueueDropPct = 0m;
@@ -3461,6 +3802,10 @@ namespace Matriks.Lean.Algotrader
                         + ";bid1Size=" + bid1Size
                         + ";maxBid1Size=" + maxBid1Size
                         + ";depthQueueDropPct=" + depthQueueDropPct
+                        + ";bidTop5Size=" + bidTop5Size
+                        + ";bidTop5ReferenceSize=" + depthLiquidityMetric.ReferenceTop5Size
+                        + ";bidTop5DropPct=" + depthLiquidityMetric.DropPct
+                        + ";bidTop5DropMetricReady=" + depthLiquidityMetric.MetricReady
                         + ";depthReliable=" + depthReliable;
                 }
                 catch (Exception ex)
@@ -3501,6 +3846,8 @@ namespace Matriks.Lean.Algotrader
                 bid1Size,
                 maxBid1Size,
                 depthQueueDropPct,
+                bidTop5Size,
+                depthLiquidityMetric,
                 depthReliable);
 
             var payload = new Dictionary<string, object>();
@@ -4084,15 +4431,47 @@ namespace Matriks.Lean.Algotrader
             return BotOwnedQty.TryGetValue(NormalizeSymbol(symbol), out qty) ? Math.Max(0m, qty) : 0m;
         }
 
+        private void InvalidatePositionSnapshot(string reason)
+        {
+            _accountNetQtyBySymbol = new ConcurrentDictionary<string, decimal>();
+            _accountAvailableQtyBySymbol = new ConcurrentDictionary<string, decimal>();
+            _positionMarketBySymbol.Clear();
+            _lastPositionEventUtcBySymbol.Clear();
+            _realPositionsLoadedFromSnapshot = false;
+            _lastPositionSyncUtc = DateTime.MinValue;
+            _positionSnapshotCompleteFlag = false;
+            _positionSnapshotNonEmpty = false;
+            _positionSnapshotConfidence = "NONE";
+            _positionSnapshotAccountRef = string.Empty;
+            _positionSnapshotSessionRef = string.Empty;
+            _positionSnapshotGeneration++;
+            SafeDebug("Position snapshot invalidated: " + reason);
+        }
+
         private void LoadRealPositionsSnapshot()
         {
             try
             {
+                RefreshAccountVerification(true);
+                string snapshotAccountRef = _lastVerifiedAccountRef;
+                string snapshotSessionRef = _lastVerifiedSessionRef;
+                if (string.IsNullOrEmpty(snapshotAccountRef) || string.IsNullOrEmpty(snapshotSessionRef))
+                {
+                    InvalidatePositionSnapshot("position load has no verified account");
+                    return;
+                }
                 DateTime snapshotStartedUtc = DateTime.UtcNow;
                 var positions = GetRealPositions();
                 if (positions == null)
                 {
                     SafeDebug("GetRealPositions returned null.");
+                    return;
+                }
+                RefreshAccountVerification(true);
+                if (!string.Equals(snapshotAccountRef, _lastVerifiedAccountRef, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(snapshotSessionRef, _lastVerifiedSessionRef, StringComparison.OrdinalIgnoreCase))
+                {
+                    InvalidatePositionSnapshot("account changed during position load");
                     return;
                 }
 
@@ -4152,6 +4531,8 @@ namespace Matriks.Lean.Algotrader
                 _positionSnapshotNonEmpty = positions.Count > 0;
                 _positionSnapshotGeneration++;
                 _positionSnapshotConfidence = PositionReceiveComplated ? "HIGH" : (positions.Count > 0 ? "MEDIUM" : "LOW");
+                _positionSnapshotAccountRef = snapshotAccountRef;
+                _positionSnapshotSessionRef = snapshotSessionRef;
                 SafeDebug("Real positions snapshot loaded count=" + positions.Count);
             }
             catch (Exception ex)
@@ -4164,6 +4545,20 @@ namespace Matriks.Lean.Algotrader
         {
             if (position == null)
                 return;
+
+            RefreshAccountVerification(true);
+            string rawPositionAccountId = Convert.ToString(ReadPublicMember(position, "AccountId")) ?? string.Empty;
+            if (string.IsNullOrEmpty(_lastVerifiedAccountRef)
+                || string.IsNullOrEmpty(_lastVerifiedSessionRef)
+                || (!string.IsNullOrEmpty(rawPositionAccountId)
+                    && !string.Equals(
+                        BuildAccountRef(rawPositionAccountId, _lastVerifiedAccountType),
+                        _lastVerifiedAccountRef,
+                        StringComparison.OrdinalIgnoreCase)))
+            {
+                InvalidatePositionSnapshot(source + " account mismatch");
+                return;
+            }
 
             string symbol = NormalizeSymbol(position.Symbol);
             if (string.IsNullOrWhiteSpace(symbol))
@@ -4183,6 +4578,8 @@ namespace Matriks.Lean.Algotrader
                 _positionMarketBySymbol[symbol] = BuildPositionMarketSnapshot(position, source);
             }
             _lastPositionEventUtcBySymbol[symbol] = DateTime.UtcNow;
+            _positionSnapshotAccountRef = _lastVerifiedAccountRef;
+            _positionSnapshotSessionRef = _lastVerifiedSessionRef;
             SafeDebug(source + " position symbol=" + symbol
                 + " qtyAvailable=" + position.QtyAvailable
                 + " qtyNet=" + position.QtyNet
@@ -4735,6 +5132,8 @@ namespace Matriks.Lean.Algotrader
             decimal bid1Size,
             decimal maxBid1Size,
             decimal depthQueueDropPct,
+            decimal bidTop5Size,
+            DepthLiquidityMetric depthLiquidityMetric,
             bool depthReliable)
         {
             var features = new Dictionary<string, object>();
@@ -4782,6 +5181,14 @@ namespace Matriks.Lean.Algotrader
                 features["depthBid1Size"] = ToDouble(bid1Size);
                 features["depthBid1MaxSize"] = ToDouble(maxBid1Size);
                 features["depthQueueDropPct"] = ToDouble(depthQueueDropPct);
+                features["depthBidTop5Size"] = ToDouble(bidTop5Size);
+                features["depthBidTop5ReferenceSize"] = ToDouble(depthLiquidityMetric.ReferenceTop5Size);
+                features["depthBidTop5DropPct"] = ToDouble(depthLiquidityMetric.DropPct);
+                features["depthBidTop5DropMetricReady"] = depthLiquidityMetric.MetricReady;
+                features["depthBidTop5DropSampleCount"] = depthLiquidityMetric.SampleCount;
+                features["depthBidTop5DropRecentPcts"] = depthLiquidityMetric.RecentDropPcts
+                    .Select(ToDouble)
+                    .ToArray();
             }
             features["symbolTrendRegime"] = ClassifyMarketRegime(volatility.Natr, consensus);
 
@@ -4971,6 +5378,7 @@ namespace Matriks.Lean.Algotrader
 
                 _dailyCounterDate = DateTime.Today;
                 _maxBid1SizeBySymbol.Clear();
+                _depthLiquidityBySymbol.Clear();
                 _dailyTradeCountBySymbol.Clear();
                 _dailyRefPriceBySymbol.Clear();
                 SafeDebug("Daily caches reset.");
@@ -5631,6 +6039,12 @@ namespace Matriks.Lean.Algotrader
 
             [JsonProperty("mode")]
             public string Mode { get; set; }
+
+            [JsonProperty("accountRef")]
+            public string AccountRef { get; set; }
+
+            [JsonProperty("accountSessionRef")]
+            public string AccountSessionRef { get; set; }
         }
 
         private struct CancelOrderRequest
@@ -5719,6 +6133,45 @@ namespace Matriks.Lean.Algotrader
             public bool Success { get; set; }
             public string OrderId { get; set; }
             public string Message { get; set; }
+        }
+
+        private sealed class DepthLiquiditySample
+        {
+            public DateTime ObservedUtc { get; set; }
+            public decimal Top5BidSize { get; set; }
+            public decimal DropPct { get; set; }
+            public bool MetricReady { get; set; }
+            public bool IncludeInBaseline { get; set; }
+        }
+
+        private sealed class DepthLiquidityWindowState
+        {
+            public object SyncRoot { get; private set; }
+            public List<DepthLiquiditySample> Samples { get; private set; }
+            public decimal FrozenReferenceTop5Size { get; set; }
+            public bool WasAboveThreshold { get; set; }
+            public int ConsecutiveRecoverySampleCount { get; set; }
+
+            public DepthLiquidityWindowState()
+            {
+                SyncRoot = new object();
+                Samples = new List<DepthLiquiditySample>();
+            }
+        }
+
+        private sealed class DepthLiquidityMetric
+        {
+            public decimal CurrentTop5Size { get; set; }
+            public decimal ReferenceTop5Size { get; set; }
+            public decimal DropPct { get; set; }
+            public bool MetricReady { get; set; }
+            public int SampleCount { get; set; }
+            public List<decimal> RecentDropPcts { get; set; }
+
+            public DepthLiquidityMetric()
+            {
+                RecentDropPcts = new List<decimal>();
+            }
         }
 
         private sealed class DepthSnapshot
@@ -5886,9 +6339,10 @@ namespace Matriks.Lean.Algotrader
             public readonly string RuntimeMode, ConfigVersion, ProfileCode;
             public readonly bool EnableDemoOrders, EnableRealOrders, RealLiveModeAllowed, RealLiveArmed, TradingKillSwitchActive, ForceSafeMode;
             public readonly string[] BuyAllowedSymbols, SellExitAllowedSymbols, DeclineSymbols;
-            public GatewayConfigSnapshot(string runtimeMode, bool demo, bool real, bool realAllowed, bool armed, bool kill, bool safe, string[] buy, string[] sell, string[] decline, string version, string profile)
-            { RuntimeMode = runtimeMode; EnableDemoOrders = demo; EnableRealOrders = real; RealLiveModeAllowed = realAllowed; RealLiveArmed = armed; TradingKillSwitchActive = kill; ForceSafeMode = safe; BuyAllowedSymbols = buy ?? new string[0]; SellExitAllowedSymbols = sell ?? new string[0]; DeclineSymbols = decline ?? new string[0]; ConfigVersion = version; ProfileCode = profile; }
-            public static GatewayConfigSnapshot SafeDefault() { return new GatewayConfigSnapshot("PAPER", false, false, false, false, true, true, new string[0], new string[0], new string[0], "UNAVAILABLE", "UNAVAILABLE"); }
+            public readonly decimal MaxDepthQueueDropPctForBuy;
+            public GatewayConfigSnapshot(string runtimeMode, bool demo, bool real, bool realAllowed, bool armed, bool kill, bool safe, string[] buy, string[] sell, string[] decline, string version, string profile, decimal maxDepthQueueDropPctForBuy)
+            { RuntimeMode = runtimeMode; EnableDemoOrders = demo; EnableRealOrders = real; RealLiveModeAllowed = realAllowed; RealLiveArmed = armed; TradingKillSwitchActive = kill; ForceSafeMode = safe; BuyAllowedSymbols = buy ?? new string[0]; SellExitAllowedSymbols = sell ?? new string[0]; DeclineSymbols = decline ?? new string[0]; ConfigVersion = version; ProfileCode = profile; MaxDepthQueueDropPctForBuy = maxDepthQueueDropPctForBuy; }
+            public static GatewayConfigSnapshot SafeDefault() { return new GatewayConfigSnapshot("PAPER", false, false, false, false, true, true, new string[0], new string[0], new string[0], "UNAVAILABLE", "UNAVAILABLE", 35m); }
         }
 
         private sealed class IdempotencyEntry

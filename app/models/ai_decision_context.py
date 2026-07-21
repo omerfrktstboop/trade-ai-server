@@ -83,15 +83,15 @@ class DepthContext(_ContextModel):
 
 
 class NewsItemContext(_ContextModel):
-    headline: str = Field(min_length=1, max_length=500)
-    summary: str | None = Field(default=None, max_length=1_000)
+    headline: str = Field(min_length=1, max_length=180)
+    summary: str | None = Field(default=None, max_length=320)
     sentiment: Literal["POSITIVE", "NEGATIVE", "NEUTRAL", "MIXED", "UNKNOWN"] | None = (
         None
     )
 
 
 class NewsContext(_ContextModel):
-    items: list[NewsItemContext] = Field(default_factory=list, max_length=3)
+    items: list[NewsItemContext] = Field(default_factory=list, max_length=2)
     negativeRisk: bool | None = None
 
 

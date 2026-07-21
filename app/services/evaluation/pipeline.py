@@ -9,6 +9,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 from app.config import settings
@@ -30,6 +31,7 @@ from app.services.admin_config import (
     is_kill_switch_enabled,
 )
 from app.services.broker_flow_service import get_broker_flow_context
+from app.services.bot_ownership import load_bot_ownership
 from app.services.account_context import (
     MatriksAccountContextAdapter,
     fetch_fresh_account_inputs,
@@ -43,6 +45,7 @@ from app.services.decision_gate import (
 )
 from app.services.fundamentals_service import get_fundamentals_context
 from app.services.effective_risk_config import (
+    EffectiveRiskConfig,
     EffectiveRiskConfigResolver,
     EnvironmentRiskLimits,
     SystemRiskConfig,
@@ -73,6 +76,11 @@ from app.services.matriks_gateway import (
 from app.services.news_service import get_news_context
 from app.services.kap_service import get_kap_context
 from app.services.risk_engine import RiskEngine
+from app.services.position_sizing import (
+    AccountSizingContext,
+    PositionSizingResult,
+    TradeSizingContext,
+)
 from app.services.signal_override import consume_override, override_to_raw_decision
 from app.services.trade_profile import get_active_profile, get_static_default_profile
 
@@ -114,6 +122,16 @@ class EvaluationResult:
     )
     evaluation_purpose: str = "TRADING"
     research_score: float | None = None
+    opportunity_score: float | None = None
+    target_allocation_pct: float | None = None
+    decision_entry_price: Decimal | None = None
+    decision_target_price: Decimal | None = None
+    sizing_binding_limits: tuple[str, ...] = ()
+    sizing_account: AccountSizingContext | None = None
+    sizing_trade: TradeSizingContext | None = None
+    sizing_result: PositionSizingResult | None = None
+    effective_limits: EffectiveRiskConfig | None = None
+    rotation_eligible: bool = False
     raw_action: SignalAction | None = None
     # "llm" | "preflight-gate" | "admin-override" | "system-gate" | None.
     # Significance dedektörünün baseline'ı YALNIZCA "llm" iken güncellenir
@@ -232,10 +250,20 @@ async def with_fresh_account_sizing_context(
         return req
     try:
         inputs = await fetch_fresh_account_inputs(
-            gateway, symbol=req.symbol, target_snapshot=snapshot
+            gateway,
+            symbol=req.symbol,
+            target_snapshot=snapshot,
+            max_position_age_seconds=effective.max_account_data_age_seconds,
         )
         async with async_session_factory() as session:
-            reserved = await calculate_backend_reserved_cash(session)
+            account_ref = str(inputs.raw_account.get("accountRef") or "").strip()
+            reserved = await calculate_backend_reserved_cash(
+                session, account_ref=account_ref
+            )
+            symbol_reserved = await calculate_backend_reserved_cash(
+                session, account_ref=account_ref, symbol=req.symbol
+            )
+            ownership = await load_bot_ownership(session, account_ref)
             handling = await get_account_reservation_handling(session)
             adapter = MatriksAccountContextAdapter(
                 reservation_handling=handling,
@@ -249,6 +277,8 @@ async def with_fresh_account_sizing_context(
                 backend_reserved_cash_tl=reserved,
                 symbol=req.symbol,
                 market_prices=inputs.market_prices,
+                bot_owned_qty_by_symbol=ownership.quantities,
+                current_symbol_reserved_cash_tl=symbol_reserved,
             )
             await adapter.add_audit(
                 session, request_id=req.request_id, symbol=req.symbol
@@ -525,6 +555,47 @@ async def evaluate_symbol(
     from app.services.daily_pnl import apply_daily_loss_limit
 
     response = await apply_daily_loss_limit(response, gateway=gateway)
+    rotation_eligible = bool(
+        decision.action == SignalAction.BUY
+        and runtime_engine.last_buy_viability_passed
+        and response.action == SignalAction.BUY
+        and response.allow_order
+    )
+    if (
+        decision.action == SignalAction.BUY
+        and runtime_engine.last_buy_viability_passed
+        and runtime_engine.last_sizing_result is not None
+        and not runtime_engine.last_sizing_result.allowed
+        and decision.entry_range is not None
+        and decision.stop_loss is not None
+        and decision.target_price is not None
+    ):
+        viability_probe = SignalResponse(
+            requestId=sig_req.request_id,
+            symbol=sig_req.symbol,
+            action=SignalAction.BUY,
+            qty=1,
+            orderType=OrderType.LIMIT,
+            price=decision.entry_range.max,
+            confidenceScore=decision.confidence,
+            riskScore=decision.risk_score,
+            allowOrder=True,
+            reason=decision.reason or "Rotation viability probe",
+            entryRange=decision.entry_range,
+            stopLoss=decision.stop_loss,
+            targetPrice=decision.target_price,
+            targetAllocationPct=decision.target_allocation_pct,
+        )
+        viability_probe = await apply_news_risk_lock(
+            viability_probe, sig_req.symbol
+        )
+        viability_probe = await apply_daily_loss_limit(
+            viability_probe, gateway=gateway
+        )
+        rotation_eligible = bool(
+            viability_probe.action == SignalAction.BUY
+            and viability_probe.allow_order
+        )
 
     # == 8. Log + persist =================================================
     _log_evaluation(sig_req, response)
@@ -546,6 +617,30 @@ async def evaluate_symbol(
         research_score=(
             _safe_float(raw.get("research_score")) if "research_score" in raw else None
         ),
+        opportunity_score=(
+            _safe_float(raw.get("opportunity_score"))
+            if "opportunity_score" in raw
+            else None
+        ),
+        target_allocation_pct=(
+            _safe_float(raw.get("target_allocation_pct"))
+            if "target_allocation_pct" in raw
+            else None
+        ),
+        decision_entry_price=(
+            decision.entry_range.max if decision.entry_range is not None else None
+        ),
+        decision_target_price=decision.target_price,
+        sizing_binding_limits=(
+            tuple(runtime_engine.last_sizing_result.binding_limits)
+            if runtime_engine.last_sizing_result is not None
+            else ()
+        ),
+        sizing_account=sig_req.account_sizing_context,
+        sizing_trade=runtime_engine.last_sizing_trade,
+        sizing_result=runtime_engine.last_sizing_result,
+        effective_limits=runtime_engine.effective_config,
+        rotation_eligible=rotation_eligible,
         raw_action=decision.action,
         decision_source=payload.get("decisionSource"),
     )

@@ -12,6 +12,7 @@ from app.services.risk_engine import RiskDecision, RiskEngine
 def effective(**overrides) -> EffectiveRiskConfig:
     data = {
         "risk_per_trade_pct": "1",
+        "total_bot_capital_budget_tl": "100000",
         "max_cash_utilization_pct": "100",
         "max_account_exposure_pct": "100",
         "max_position_value_per_symbol": "5000",
@@ -49,6 +50,8 @@ def request(*, with_account=True, **updates) -> SignalRequest:
         current_symbol_qty=0,
         current_symbol_value_tl="0",
         total_account_exposure_tl="0",
+        current_bot_symbol_value_tl="0",
+        total_bot_exposure_tl="0",
         account_data_age_seconds="1",
         account_data_reliable=True,
     )
@@ -76,6 +79,7 @@ def decision(qty=999999) -> RiskDecision:
         entry_range=EntryRange(min="99", max="100"),
         stop_loss=Decimal("95"),
         target_price=Decimal("110"),
+        target_allocation_pct=Decimal("100"),
         reason="AI signal",
     )
 
@@ -133,3 +137,45 @@ def test_sell_quantity_comes_from_bot_owned_sellable_lots():
     )
     assert response.action == SignalAction.SELL
     assert response.qty == 5
+
+
+def test_capital_blocked_buy_is_marked_viable_only_after_non_sizing_gates():
+    full_account = AccountSizingContext(
+        account_equity_tl="100000",
+        effective_available_cash_tl="50000",
+        reserved_cash_tl="0",
+        current_symbol_qty=0,
+        current_symbol_value_tl="0",
+        total_account_exposure_tl="100000",
+        current_bot_symbol_value_tl="0",
+        total_bot_exposure_tl="100000",
+        account_data_age_seconds="1",
+        account_data_reliable=True,
+    )
+    risk_engine = engine()
+    response = risk_engine.evaluate(
+        request(accountSizingContext=full_account), decision()
+    )
+    assert response.action == SignalAction.WAIT
+    assert risk_engine.last_buy_viability_passed is True
+    assert risk_engine.last_sizing_result is not None
+    assert "bot_budget" in risk_engine.last_sizing_result.binding_limits
+
+    low_confidence = decision()
+    low_confidence.confidence = 10
+    risk_engine = engine()
+    response = risk_engine.evaluate(
+        request(accountSizingContext=full_account), low_confidence
+    )
+    assert response.action == SignalAction.BUY
+    assert response.allow_order is False
+    assert risk_engine.last_buy_viability_passed is False
+    assert risk_engine.last_sizing_result is None
+
+    risk_engine = engine()
+    response = risk_engine.evaluate(
+        request(accountSizingContext=full_account, quoteAgeSeconds=999), decision()
+    )
+    assert response.action == SignalAction.WAIT
+    assert risk_engine.last_buy_viability_passed is False
+    assert risk_engine.last_sizing_result is None

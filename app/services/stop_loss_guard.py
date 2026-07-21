@@ -26,11 +26,12 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.db.session import async_session_factory
-from app.models.db import BotPosition, OrderLog, PositionLifecycle
+from app.models.db import OrderLog, PositionLifecycle
 from app.models.signal import OrderType, SignalAction, SignalResponse
 from app.services.admin_config import (
     get_stop_guard_maximum_quote_age_seconds,
 )
+from app.services.bot_ownership import load_bot_ownership
 from app.services.daily_trade_count import _start_of_trading_day
 from app.services.effective_risk_config import decimal_from_external
 from app.services.evaluation.pipeline import EvaluationResult
@@ -41,12 +42,8 @@ from app.services.matriks_gateway import (
     GatewayUnavailable,
     MatriksGatewayClient,
 )
-from app.services.measurement_repair import enqueue_repair_job
 from app.services.order_ledger import PENDING_STATES
-from app.services.position_lifecycle_backfill import ensure_lifecycle_for_legacy_position
 from app.services.position_lifecycle_engine import (
-    LifecycleIntegrityError,
-    get_open_lifecycle,
     record_stop_breach,
 )
 
@@ -79,51 +76,6 @@ class StopLossGuard:
 stop_loss_guard = StopLossGuard()
 
 
-_QTY_MISMATCH_EPSILON = Decimal("0.0000000001")
-
-
-async def _enqueue_lifecycle_repair(symbol: str, last_error: str) -> None:
-    try:
-        async with async_session_factory() as repair_session:
-            await enqueue_repair_job(
-                repair_session,
-                repair_type="LIFECYCLE_RECONCILIATION",
-                last_error=last_error,
-                symbol=symbol,
-            )
-            await repair_session.commit()
-    except Exception:
-        logger.exception("MEASUREMENT_REPAIR_JOB_ENQUEUE_FAILED symbol=%s", symbol)
-
-
-async def _backfill_missing_lifecycles(bot_positions: list[BotPosition]) -> None:
-    """One-time-per-symbol sweep: a BotPosition with qty>0 that has no
-    PositionLifecycle history at all (open or closed) is backfilled once, so
-    protection is not silently lost for positions that predate this feature
-    (Task 6.1). ensure_lifecycle_for_legacy_position is itself a no-op for a
-    symbol that already has any lifecycle history, so calling it here for
-    every positive BotPosition row is safe. This is the *only* use
-    BotPosition still has in this guard, besides the mismatch cross-check
-    below - the breach-checking loop reads exclusively from
-    PositionLifecycle.
-    """
-    for row in bot_positions:
-        symbol = row.symbol.strip().upper()
-        if row.qty is None or row.qty <= 0:
-            continue
-        try:
-            async with async_session_factory() as session:
-                await ensure_lifecycle_for_legacy_position(
-                    session, symbol=symbol, qty=row.qty, avg_price=row.avg_price
-                )
-                await session.commit()
-        except LifecycleIntegrityError as exc:
-            logger.error("STOP_LOSS_GUARD_DUPLICATE_LIFECYCLE symbol=%s", symbol)
-            await _enqueue_lifecycle_repair(symbol, repr(exc))
-        except Exception:
-            logger.exception("STOP_LOSS_GUARD_BACKFILL_FAILED symbol=%s", symbol)
-
-
 async def check_stop_loss_positions(
     gateway: MatriksGatewayClient,
 ) -> list[EvaluationResult]:
@@ -133,24 +85,28 @@ async def check_stop_loss_positions(
     each result through the normal order-dispatch path for those gates.
     """
     try:
+        health = await gateway.health()
+        positions = await gateway.get_positions()
+        account_ref = str(health.get("accountRef") or "").strip()
+        session_ref = str(health.get("accountSessionRef") or "").strip()
+        if (
+            len(account_ref) != 64
+            or len(session_ref) != 64
+            or str(positions.get("accountRef") or "").strip() != account_ref
+            or str(positions.get("accountSessionRef") or "").strip() != session_ref
+            or positions.get("positionsLoaded") is not True
+            or positions.get("snapshotCompleteFlag") is not True
+            or str(positions.get("confidence") or "").upper()
+            not in {"HIGH", "MEDIUM"}
+        ):
+            return []
+        gateway_positions = {
+            str(row.get("symbol") or "").strip().upper(): row
+            for row in positions.get("positions") or []
+            if isinstance(row, dict) and str(row.get("symbol") or "").strip()
+        }
         async with async_session_factory() as session:
-            bot_positions = (
-                (await session.execute(select(BotPosition).where(BotPosition.qty > 0)))
-                .scalars()
-                .all()
-            )
-    except Exception:
-        logger.exception("STOP_LOSS_GUARD_POSITION_READ_FAILED")
-        return []
-
-    await _backfill_missing_lifecycles(bot_positions)
-    bot_position_by_symbol = {row.symbol.strip().upper(): row for row in bot_positions}
-
-    # Task 6.1: the guard's primary source is the open lifecycle, not
-    # BotPosition - BotPosition is used above only to seed a backfill and
-    # below only as a cross-check for data-integrity mismatches.
-    try:
-        async with async_session_factory() as session:
+            ownership = await load_bot_ownership(session, account_ref)
             lifecycles = (
                 (
                     await session.execute(
@@ -188,26 +144,44 @@ async def check_stop_loss_positions(
         sell_qty = int(qty.to_integral_value())
         if sell_qty <= 0:
             continue
-
-        # Task 6.3: lifecycle vs BotPosition mismatch - never auto-sell the
-        # larger figure or silently pick one; stop and surface for repair.
-        bot_position = bot_position_by_symbol.get(symbol)
-        if bot_position is not None and bot_position.qty is not None:
-            bot_qty_d = to_decimal(bot_position.qty)
-            if bot_qty_d is not None and abs(bot_qty_d - qty) > _QTY_MISMATCH_EPSILON:
-                logger.error(
-                    "STOP_GUARD_POSITION_MISMATCH symbol=%s lifecycleQty=%s "
-                    "botPositionQty=%s",
-                    symbol,
-                    qty,
-                    bot_qty_d,
+        gateway_position = gateway_positions.get(symbol)
+        ledger_qty = ownership.quantities.get(symbol, Decimal("0"))
+        gateway_bot_qty = to_decimal(
+            (gateway_position or {}).get("botOwnedQty")
+            if gateway_position is not None
+            else None
+        )
+        if gateway_bot_qty is None and gateway_position is not None:
+            gateway_bot_qty = to_decimal(gateway_position.get("botQty"))
+        async with async_session_factory() as session:
+            entry_order = (
+                await session.execute(
+                    select(OrderLog.id)
+                    .where(
+                        OrderLog.request_id == lifecycle.entry_request_id,
+                        OrderLog.account_ref == account_ref,
+                        OrderLog.request_fingerprint.is_not(None),
+                        OrderLog.action == "BUY",
+                    )
+                    .limit(1)
                 )
-                await _enqueue_lifecycle_repair(
-                    symbol,
-                    f"STOP_GUARD_POSITION_MISMATCH lifecycleQty={qty} "
-                    f"botPositionQty={bot_qty_d}",
-                )
-                continue
+            ).scalar_one_or_none()
+        if (
+            entry_order is None
+            or lifecycle.is_backfilled
+            or lifecycle.data_quality not in {"VERIFIED", "RECONCILED"}
+            or ledger_qty != qty
+            or gateway_bot_qty != qty
+        ):
+            logger.error(
+                "STOP_GUARD_ACCOUNT_OWNERSHIP_MISMATCH symbol=%s lifecycleQty=%s "
+                "ledgerQty=%s gatewayBotQty=%s",
+                symbol,
+                qty,
+                ledger_qty,
+                gateway_bot_qty,
+            )
+            continue
 
         # Task 6.4: never re-trigger while a SELL for this symbol is already
         # in flight - the pending order already represents this breach.
@@ -219,6 +193,7 @@ async def check_stop_loss_positions(
                         .where(
                             OrderLog.symbol == symbol,
                             OrderLog.action == "SELL",
+                            OrderLog.account_ref == account_ref,
                             OrderLog.status.in_(PENDING_STATES),
                         )
                         .limit(1)
@@ -309,8 +284,14 @@ async def check_stop_loss_positions(
         )
         try:
             async with async_session_factory() as breach_session:
-                fresh_lifecycle = await get_open_lifecycle(breach_session, symbol)
-                if fresh_lifecycle is not None:
+                fresh_lifecycle = await breach_session.get(
+                    PositionLifecycle, lifecycle.id, with_for_update=True
+                )
+                if (
+                    fresh_lifecycle is not None
+                    and fresh_lifecycle.status == "OPEN"
+                    and fresh_lifecycle.current_qty == qty
+                ):
                     await record_stop_breach(
                         breach_session,
                         fresh_lifecycle,

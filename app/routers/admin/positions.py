@@ -14,17 +14,14 @@ from app.models.db import (
     LockedPosition,
     PositionManagementDecision,
 )
-from app.services.admin_config import (
-    get_admin_config_value,
-    set_admin_config_value,
-)
+from app.services.admin_config import get_admin_config_value
 from app.services.matriks_gateway import (
     GatewayError,
     GatewayUnavailable,
     gateway_client,
 )
 from app.services.signal_override import SELL_ALL_SENTINEL_QTY, create_override
-from app.services.research_pipeline import add_manual_trade_symbol
+from app.services.research_pipeline import promote_research_candidate
 
 from app.routers.admin._shared import (
     admin_router,
@@ -210,23 +207,12 @@ async def admin_add_to_watchlist(request: Request) -> RedirectResponse:
 
     if symbol:
         async with async_session_factory() as session:
-            current = _split_csv_symbols(
-                await get_admin_config_value(session, "allowedSymbols")
-            )
-            current.add(symbol)
-            await set_admin_config_value(
-                session,
-                "allowedSymbols",
-                ",".join(sorted(current)),
-                changed_by=identity,
-                reason=f"Added {symbol} to watchlist from Positions page",
-            )
-            await add_manual_trade_symbol(
+            await promote_research_candidate(
                 session,
                 symbol,
                 reason=f"Explicit admin override by {identity} from Positions page",
+                changed_by=identity,
             )
-            await session.commit()
 
         await _notify_gateway_config_reload()
 

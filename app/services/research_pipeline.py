@@ -19,7 +19,11 @@ from app.models.db import (
     TradeWatchlistSymbol,
 )
 from app.models.signal import SignalAction
-from app.services.admin_config import list_admin_configs
+from app.services.admin_config import (
+    get_admin_config_value,
+    list_admin_configs,
+    set_admin_config_value,
+)
 from app.services.evaluator import EvaluationResult, evaluate_symbol
 from app.services.matriks_gateway import MatriksGatewayClient, gateway_client
 
@@ -42,6 +46,7 @@ class ResearchPolicy:
     maximum_risk_score: float = 35.0
     consecutive_passes: int = 2
     minimum_pass_interval_minutes: int = 10
+    auto_promotion_enabled: bool = False
     candidate_ttl_hours: int = 24
     trade_watchlist_ttl_hours: int = 24
     minimum_volume_tl: float = 100_000_000.0
@@ -74,6 +79,8 @@ async def load_research_policy(session: AsyncSession | None = None) -> ResearchP
             minimum_pass_interval_minutes=max(
                 1, int(values["promotionMinIntervalMinutes"])
             ),
+            auto_promotion_enabled=str(values["autoPromotionEnabled"]).strip().lower()
+            == "true",
             candidate_ttl_hours=max(1, int(values["researchCandidateTtlHours"])),
             trade_watchlist_ttl_hours=max(1, int(values["tradeWatchlistTtlHours"])),
             minimum_volume_tl=float(values["discoveryMinimumVolumeTl"]),
@@ -266,6 +273,34 @@ async def apply_research_result(
             await session.commit()
             return False
 
+        if not policy.auto_promotion_enabled:
+            # Kontrollü/manuel mod (varsayılan): AI eşiği geçti ama Trade
+            # Watchlist'e giriş bir insanın açık onayını gerektirir. Kapasite
+            # kontrolü ve TradeWatchlistSymbol oluşturma burada YAPILMAZ —
+            # promote_research_candidate() admin tetiklediğinde çalışır.
+            candidate.status = "READY_FOR_PROMOTION"
+            candidate.rejection_reason = None
+            session.add(
+                ResearchCandidateEvent(
+                    candidate_id=candidate.id,
+                    symbol=symbol,
+                    event_type="READY_FOR_PROMOTION",
+                    details={
+                        "consecutivePasses": candidate.consecutive_pass_count,
+                        "researchScore": research_score,
+                        "rewardRiskRatio": reward_risk,
+                    },
+                )
+            )
+            await session.commit()
+            logger.info(
+                "Research candidate ready for manual promotion symbol=%s "
+                "consecutivePasses=%s",
+                symbol,
+                candidate.consecutive_pass_count,
+            )
+            return False
+
         active_count = int(
             (
                 await session.execute(
@@ -456,6 +491,107 @@ async def add_manual_trade_symbol(
     row.removal_reason = None
     await session.flush()
     return row
+
+
+async def promote_research_candidate(
+    session: AsyncSession, symbol: str, *, reason: str, changed_by: str
+) -> TradeWatchlistSymbol:
+    """Manuel/kontrollü terfi: admin bir research adayını (ya da herhangi bir
+    sembolü) Trade Watchlist'e sokar. ``allowedSymbols``'a da eklenir çünkü
+    RiskEngine'in daha dış kapısı (``is_symbol_allowed``) bu olmadan sembolü
+    "not in the allowed order list" ile daha erken reddeder."""
+    symbol = symbol.strip().upper()
+    current = {
+        s.strip().upper()
+        for s in (await get_admin_config_value(session, "allowedSymbols")).split(",")
+        if s.strip()
+    }
+    if symbol not in current:
+        current.add(symbol)
+        await set_admin_config_value(
+            session,
+            "allowedSymbols",
+            ",".join(sorted(current)),
+            changed_by=changed_by,
+            reason=f"Promoted {symbol} from research review by {changed_by}",
+            commit=False,
+        )
+    watch = await add_manual_trade_symbol(session, symbol, reason=reason)
+    candidate = (
+        await session.execute(
+            select(ResearchCandidate).where(ResearchCandidate.symbol == symbol)
+        )
+    ).scalar_one_or_none()
+    if candidate is not None:
+        candidate.status = "PROMOTED"
+        candidate.promoted_at = datetime.now(UTC)
+        session.add(
+            ResearchCandidateEvent(
+                candidate_id=candidate.id,
+                symbol=symbol,
+                event_type="PROMOTED_MANUAL",
+                details={"by": changed_by, "reason": reason},
+            )
+        )
+    await session.commit()
+    await session.refresh(watch)
+    return watch
+
+
+async def reject_research_candidate(
+    session: AsyncSession, symbol: str, *, reason: str, changed_by: str
+) -> bool:
+    """"Şimdilik değil": adayı REJECTED işaretler. Kalıcı bir kara liste
+    DEĞİLDİR — discovery sembolü ileride yeniden bir fırsat olarak tespit
+    ederse mevcut reaktivasyon davranışı (``_upsert_candidates``) onu tekrar
+    RESEARCH_PENDING'e döndürebilir. Kalıcı blacklist için ``declineSymbols``
+    admin anahtarı elle düzenlenir; bu fonksiyon ona dokunmaz."""
+    symbol = symbol.strip().upper()
+    candidate = (
+        await session.execute(
+            select(ResearchCandidate).where(ResearchCandidate.symbol == symbol)
+        )
+    ).scalar_one_or_none()
+    if candidate is None:
+        return False
+    now = datetime.now(UTC)
+    candidate.status = "REJECTED"
+    candidate.rejected_at = now
+    candidate.rejection_reason = reason
+    session.add(
+        ResearchCandidateEvent(
+            candidate_id=candidate.id,
+            symbol=symbol,
+            event_type="REJECTED",
+            details={"by": changed_by, "reason": reason},
+        )
+    )
+    await session.commit()
+    return True
+
+
+async def remove_from_trade_watchlist(
+    session: AsyncSession, symbol: str, *, reason: str
+) -> bool:
+    """Admin'in Trade Watchlist'ten elle çıkarma isteği. Otomatik demotion
+    yolları (``record_trade_watchlist_decision``/``maintain_trade_watchlist``)
+    ``manual_override=True`` satırları bilerek atlar; burada insan bilerek
+    çıkardığı için o kontrol uygulanmaz — ``_remove_watchlist_row`` doğrudan
+    çağrılır."""
+    symbol = symbol.strip().upper()
+    row = (
+        await session.execute(
+            select(TradeWatchlistSymbol).where(
+                TradeWatchlistSymbol.symbol == symbol,
+                TradeWatchlistSymbol.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return False
+    await _remove_watchlist_row(session, row, reason)
+    await session.commit()
+    return True
 
 
 async def record_trade_watchlist_decision(result: EvaluationResult) -> None:

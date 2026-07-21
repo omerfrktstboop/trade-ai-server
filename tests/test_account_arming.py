@@ -62,7 +62,7 @@ class FakeAccountGateway:
 
 def _health(
     *,
-    contract: Any = 2,
+    contract: Any = 3,
     account_ref: str | None = REF_A,
     session_ref: str | None = SESSION_1,
     account_type: str = "DEMO",

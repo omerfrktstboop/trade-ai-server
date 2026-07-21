@@ -51,7 +51,11 @@ async def _seed_fill(request_id: str, symbol: str, side: str, qty: float) -> Non
                 action=side,
                 qty=qty,
                 filled_qty=qty,
+                avg_price=100,
+                limit_price=100,
                 status="FILLED",
+                request_fingerprint="a" * 64,
+                account_ref="f" * 64,
             )
         )
         await session.commit()
@@ -155,3 +159,34 @@ class TestSyncPositions:
         synced = await sync_positions_from_gateway(make_client(fake))
         assert synced == 1
         assert await _positions() == {"AKBNK": 15.0}
+
+    async def test_unknown_origin_and_other_account_fills_are_not_bot_owned(self):
+        fake = FakeGateway()
+        async with async_session_factory() as session:
+            session.add_all(
+                [
+                    OrderLog(
+                        request_id="MATRIKS-manual",
+                        symbol="AKBNK",
+                        action="BUY",
+                        qty=50,
+                        filled_qty=50,
+                        status="FILLED",
+                        account_ref="f" * 64,
+                    ),
+                    OrderLog(
+                        request_id="other-account",
+                        request_fingerprint="b" * 64,
+                        symbol="THYAO",
+                        action="BUY",
+                        qty=40,
+                        filled_qty=40,
+                        status="FILLED",
+                        account_ref="e" * 64,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        assert await sync_positions_from_gateway(make_client(fake)) == 0
+        assert await _positions() == {}

@@ -8,8 +8,19 @@ from tests.fake_gateway import make_snapshot_payload
 def _validate(payload=None, created=None, health=None):
     return validate_order_preflight(
         payload=payload or make_snapshot_payload("THYAO"),
-        positions={"confidence": "HIGH", "snapshotAgeSeconds": 1},
-        health=health or {"configStale": False, "positionsLoaded": True},
+        positions={
+            "confidence": "HIGH",
+            "snapshotAgeSeconds": 1,
+            "accountRef": "f" * 64,
+            "accountSessionRef": "5" * 64,
+        },
+        health=health
+        or {
+            "configStale": False,
+            "positionsLoaded": True,
+            "accountRef": "f" * 64,
+            "accountSessionRef": "5" * 64,
+        },
         side="BUY",
         qty=1,
         limit_price=71.5,
@@ -72,8 +83,17 @@ def test_stale_position_and_config_are_rejected():
     )
     config_reason = validate_order_preflight(
         payload=payload,
-        positions={"confidence": "HIGH", "snapshotAgeSeconds": 1},
-        health={"configStale": True},
+        positions={
+            "confidence": "HIGH",
+            "snapshotAgeSeconds": 1,
+            "accountRef": "f" * 64,
+            "accountSessionRef": "5" * 64,
+        },
+        health={
+            "configStale": True,
+            "accountRef": "f" * 64,
+            "accountSessionRef": "5" * 64,
+        },
         side="BUY",
         qty=1,
         limit_price=71.5,
@@ -111,6 +131,89 @@ def test_non_finite_order_is_rejected():
     assert "invalid" in reason.lower()
 
 
+def test_persistent_top5_liquidity_drop_is_rechecked_before_order():
+    payload = make_snapshot_payload(
+        "THYAO",
+        depthBidTop5DropMetricReady=True,
+        depthBidTop5DropPct=62.0,
+        depthBidTop5DropRecentPcts=[58.0, 62.0],
+    )
+
+    reason = _validate(payload)
+
+    assert "persistent Top5 bid liquidity drop" in reason
+
+
+def test_transient_top5_liquidity_drop_passes_order_preflight():
+    payload = make_snapshot_payload(
+        "THYAO",
+        depthBidTop5DropMetricReady=True,
+        depthBidTop5DropPct=62.0,
+        depthBidTop5DropRecentPcts=[10.0, 62.0],
+    )
+
+    assert _validate(payload) is None
+
+
+def test_partial_top5_liquidity_payload_fails_closed():
+    payload = make_snapshot_payload(
+        "THYAO",
+        depthBidTop5DropMetricReady=True,
+        depthBidTop5DropPct=None,
+        depthBidTop5DropRecentPcts=[60.0, 60.0],
+        depthQueueDropPct=90.0,
+    )
+
+    reason = _validate(payload)
+
+    assert "metric is invalid" in reason
+
+
+def test_missing_top5_readiness_with_rolling_values_fails_closed():
+    payload = make_snapshot_payload(
+        "THYAO",
+        depthBidTop5DropMetricReady=None,
+        depthBidTop5DropPct=60.0,
+        depthBidTop5DropRecentPcts=[60.0, 60.0],
+        depthQueueDropPct=10.0,
+    )
+
+    reason = _validate(payload)
+
+    assert "readiness is unavailable" in reason
+
+
+def test_non_finite_top5_liquidity_metric_fails_closed():
+    payload = make_snapshot_payload(
+        "THYAO",
+        depthBidTop5DropMetricReady=True,
+        depthBidTop5DropPct=float("nan"),
+        depthBidTop5DropRecentPcts=[60.0, 60.0],
+    )
+
+    reason = _validate(payload)
+
+    assert "metric is invalid" in reason
+
+
+def test_legacy_gateway_queue_drop_remains_fail_closed():
+    payload = make_snapshot_payload("THYAO", depthQueueDropPct=90.0)
+    for key in (
+        "depthBidTop5Size",
+        "depthBidTop5ReferenceSize",
+        "depthBidTop5DropPct",
+        "depthBidTop5DropMetricReady",
+        "depthBidTop5DropSampleCount",
+        "depthBidTop5DropRecentPcts",
+    ):
+        payload.pop(key, None)
+        payload["technicalFeatures"].pop(key, None)
+
+    reason = _validate(payload)
+
+    assert "bid queue dropped 90.0%" in reason
+
+
 def test_gateway_has_independent_freshness_and_finite_guards():
     source = (Path(__file__).parents[1] / "matriks" / "TradeAiGateway.cs").read_text(
         encoding="utf-8"
@@ -118,6 +221,10 @@ def test_gateway_has_independent_freshness_and_finite_guards():
     assert "double.IsNaN(order.Qty)" in source
     assert "MaxQuoteAgeSecondsForOrder" in source
     assert "crossed order book" in source
+    assert "BUY persistent Top5 bid liquidity drop" in source
+    assert "SampleDepthLiquidityBaselines();" in source
+    assert "configuredMaxDepthQueueDropPctForBuy.HasValue" in source
+    assert "orderConfig.MaxDepthQueueDropPctForBuy" in source
     history = source.split("private void UpdateBarHistory", 1)[1].split(
         "private List<decimal> GetCloseHistory", 1
     )[0]

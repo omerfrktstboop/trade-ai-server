@@ -505,20 +505,41 @@ class TestDepthReliableFlag:
     def test_unreliable_depth_omits_queue_drop_from_ai_payload(self):
         from app.services.evaluator import build_payload as _build_payload
 
-        req = _req(depthReliable=False, depthQueueDropPct=95.0, depthBid1Size=0.0)
+        req = _req(
+            depthReliable=False,
+            depthQueueDropPct=95.0,
+            depthBid1Size=0.0,
+            depthBidTop5DropPct=80.0,
+            depthBidTop5DropMetricReady=True,
+            depthBidTop5DropRecentPcts=[75.0, 80.0],
+        )
         payload = _build_payload(req)
 
         assert payload["depthReliable"] is False
         assert "depthQueueDropPct" not in payload
         assert payload["technicalFeatures"]["depthReliable"] is False
         assert "depthQueueDropPct" not in payload["technicalFeatures"]
+        assert "depthBidTop5DropPct" not in payload["technicalFeatures"]
+        assert "depthBidTop5DropRecentPcts" not in payload["technicalFeatures"]
 
     def test_reliable_depth_keeps_queue_drop_in_ai_payload(self):
         from app.services.evaluator import build_payload as _build_payload
 
-        req = _req(depthReliable=True, depthQueueDropPct=12.0, depthBid1Size=500.0)
+        req = _req(
+            depthReliable=True,
+            depthQueueDropPct=12.0,
+            depthBid1Size=500.0,
+            depthBidTop5DropPct=8.0,
+            depthBidTop5DropMetricReady=True,
+            depthBidTop5DropRecentPcts=[9.0, 8.0],
+        )
         payload = _build_payload(req)
 
         assert payload["depthReliable"] is True
         assert "depthQueueDropPct" not in payload
         assert payload["technicalFeatures"]["depthQueueDropPct"] == 12.0
+        assert payload["technicalFeatures"]["depthBidTop5DropPct"] == 8.0
+        assert payload["technicalFeatures"]["depthBidTop5DropRecentPcts"] == [
+            9.0,
+            8.0,
+        ]

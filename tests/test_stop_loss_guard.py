@@ -12,12 +12,21 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
 from app.db.init_db import drop_all, init_db
 from app.db.session import async_session_factory
-from app.models.db import BotPosition, RiskDecision, SystemConfig, TradeWatchlistSymbol
+from app.models.db import (
+    BotPosition,
+    OrderLog,
+    PositionLifecycle,
+    RiskDecision,
+    SystemConfig,
+    TradeWatchlistSymbol,
+)
 from app.models.signal import SignalAction
 from app.services import scanner as scanner_module
 from app.services import stop_loss_guard as guard_module
@@ -52,9 +61,10 @@ async def _seed_buy_stop(
     symbol: str, stop_loss: float, *, allow_order: bool = True
 ) -> None:
     async with async_session_factory() as session:
+        request_id = f"{symbol}-buy-seed"
         session.add(
             RiskDecision(
-                request_id=f"{symbol}-buy-seed",
+                request_id=request_id,
                 symbol=symbol,
                 action=SignalAction.BUY.value,
                 confidence=90.0,
@@ -66,17 +76,70 @@ async def _seed_buy_stop(
                 mode="DEMO_LIVE",
             )
         )
+        if allow_order:
+            position = (
+                await session.execute(
+                    select(BotPosition).where(BotPosition.symbol == symbol)
+                )
+            ).scalar_one()
+            session.add(
+                OrderLog(
+                    request_id=request_id,
+                    request_fingerprint="a" * 64,
+                    account_ref="f" * 64,
+                    symbol=symbol,
+                    action="BUY",
+                    qty=position.qty,
+                    order_qty=position.qty,
+                    filled_qty=position.qty,
+                    avg_price=position.avg_price,
+                    limit_price=position.avg_price,
+                    status="FILLED",
+                    state="FILLED",
+                )
+            )
+            session.add(
+                PositionLifecycle(
+                    symbol=symbol,
+                    status="OPEN",
+                    opened_at=datetime.now(timezone.utc) - timedelta(hours=1),
+                    entry_request_id=request_id,
+                    current_qty=Decimal(str(position.qty)),
+                    average_entry_price=Decimal(str(position.avg_price)),
+                    active_stop_loss=Decimal(str(stop_loss)),
+                    initial_stop_loss=Decimal(str(stop_loss)),
+                    data_quality="VERIFIED",
+                    is_backfilled=False,
+                )
+            )
         await session.commit()
+
+
+def _set_fake_position(fake: FakeGateway, symbol: str, qty: int) -> None:
+    fake.positions = [
+        {
+            "symbol": symbol,
+            "accountNetQty": qty,
+            "accountAvailableQty": qty,
+            "botOwnedQty": qty,
+            "botQty": qty,
+            "sellableQty": qty,
+            "totalQty": qty,
+            "lockedLongTermQty": 0,
+        }
+    ]
 
 
 class TestCheckStopLossPositions:
     async def test_no_open_positions_returns_empty(self):
         fake = FakeGateway()
+        _set_fake_position(fake, "THYAO", 10)
         assert await check_stop_loss_positions(make_gateway_client(fake)) == []
 
     async def test_no_recorded_stop_is_a_no_op(self):
         await _seed_position("THYAO", 10)
         fake = FakeGateway()
+        _set_fake_position(fake, "THYAO", 10)
         # lastPrice defaults to 71.5 in the fake snapshot; no RiskDecision
         # seeded, so there is no stop to compare against.
         assert await check_stop_loss_positions(make_gateway_client(fake)) == []
@@ -85,6 +148,7 @@ class TestCheckStopLossPositions:
         await _seed_position("THYAO", 10)
         await _seed_buy_stop("THYAO", stop_loss=60.0)
         fake = FakeGateway()
+        _set_fake_position(fake, "THYAO", 10)
         fake.snapshot_overrides["THYAO"] = {"lastPrice": 71.5}
 
         assert await check_stop_loss_positions(make_gateway_client(fake)) == []
@@ -93,6 +157,7 @@ class TestCheckStopLossPositions:
         await _seed_position("THYAO", 10)
         await _seed_buy_stop("THYAO", stop_loss=68.0)
         fake = FakeGateway()
+        _set_fake_position(fake, "THYAO", 10)
         fake.snapshot_overrides["THYAO"] = {"lastPrice": 68.0}
 
         triggered = await check_stop_loss_positions(make_gateway_client(fake))
@@ -112,6 +177,7 @@ class TestCheckStopLossPositions:
         await _seed_position("THYAO", 3)
         await _seed_buy_stop("THYAO", stop_loss=68.0)
         fake = FakeGateway()
+        _set_fake_position(fake, "THYAO", 3)
         fake.snapshot_overrides["THYAO"] = {"lastPrice": 65.0}
 
         triggered = await check_stop_loss_positions(make_gateway_client(fake))
@@ -161,7 +227,14 @@ class TestCheckStopLossPositions:
                 )
             )
             await session.commit()
+        async with async_session_factory() as session:
+            lifecycle = (
+                await session.execute(select(PositionLifecycle))
+            ).scalar_one()
+            lifecycle.active_stop_loss = Decimal("70")
+            await session.commit()
         fake = FakeGateway()
+        _set_fake_position(fake, "THYAO", 10)
         fake.snapshot_overrides["THYAO"] = {"lastPrice": 69.0}
 
         triggered = await check_stop_loss_positions(make_gateway_client(fake))
@@ -239,6 +312,7 @@ class TestScannerStopLossIntegration:
         await _seed_position("THYAO", 10)
         await _seed_buy_stop("THYAO", stop_loss=68.0)
         fake = FakeGateway()
+        _set_fake_position(fake, "THYAO", 10)
         fake.snapshot_overrides["THYAO"] = {
             "lastPrice": 65.0,
             "bidPrice": 64.95,
@@ -252,7 +326,7 @@ class TestScannerStopLossIntegration:
         assert len(fake.orders) == 1
         assert fake.orders[0]["symbol"] == "THYAO"
         assert fake.orders[0]["side"] == "SELL"
-        assert fake.orders[0]["qty"] == 10
+        assert fake.orders[0]["qty"] == 3
         assert guard_module.stop_loss_guard.is_symbol_cooling_down("THYAO") is True
 
     async def test_kill_switch_blocks_stop_loss_order(self, monkeypatch):
@@ -265,6 +339,7 @@ class TestScannerStopLossIntegration:
         await _seed_position("THYAO", 10)
         await _seed_buy_stop("THYAO", stop_loss=68.0)
         fake = FakeGateway()
+        _set_fake_position(fake, "THYAO", 10)
         fake.snapshot_overrides["THYAO"] = {"lastPrice": 65.0}
         scanner = SymbolScanner(gateway=make_gateway_client(fake))
 
@@ -276,6 +351,7 @@ class TestScannerStopLossIntegration:
         await _seed_position("THYAO", 10)
         await _seed_buy_stop("THYAO", stop_loss=68.0)
         fake = FakeGateway()
+        _set_fake_position(fake, "THYAO", 10)
         fake.snapshot_overrides["THYAO"] = {"lastPrice": 65.0}
         scanner = SymbolScanner(gateway=make_gateway_client(fake))
 
@@ -288,6 +364,7 @@ class TestScannerStopLossIntegration:
         await _seed_position("THYAO", 10)
         await _seed_buy_stop("THYAO", stop_loss=60.0)
         fake = FakeGateway()
+        _set_fake_position(fake, "THYAO", 10)
         fake.snapshot_overrides["THYAO"] = {"lastPrice": 71.5}
         scanner = SymbolScanner(gateway=make_gateway_client(fake))
 

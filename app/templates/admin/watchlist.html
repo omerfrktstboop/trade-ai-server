@@ -6,7 +6,7 @@
   <p class="text-muted text-sm">Yalnız bu listedeki aktif semboller otomatik BUY scannerına girer. Research Candidate listesi ayrıdır.</p>
 </div>
 <div class="table-container"><table>
-  <thead><tr><th>Sembol</th><th>Kaynak</th><th>Research</th><th>Confidence</th><th>Risk</th><th>Aktif</th><th>Eklenme</th><th>Son Geçerlilik</th><th>Neden</th></tr></thead>
+  <thead><tr><th>Sembol</th><th>Kaynak</th><th>Research</th><th>Confidence</th><th>Risk</th><th>Aktif</th><th>Eklenme</th><th>Son Geçerlilik</th><th>Neden</th><th class="sticky-col">İşlem</th></tr></thead>
   <tbody>{% for watch, candidate in rows %}<tr>
     <td><strong>{{ watch.symbol }}</strong></td><td>{{ watch.source }}</td>
     <td>{{ watch.research_score if watch.research_score is not none else '—' }}</td>
@@ -15,6 +15,14 @@
     <td>{{ watch.is_active }}</td><td>{{ watch.eligible_at | local_time }}</td>
     <td>{{ watch.expires_at | local_time if watch.expires_at else 'MANUAL' }}</td>
     <td class="text-muted">{{ watch.promotion_reason or watch.removal_reason or '—' }}</td>
-  </tr>{% else %}<tr class="empty-row"><td colspan="9">Trade Watchlist boş; research promotion veya manuel override bekleniyor.</td></tr>{% endfor %}</tbody>
+    <td class="sticky-col">
+      {% if watch.is_active %}
+      <form method="post" action="/admin/watchlist/{{ watch.symbol }}/remove">
+        <input type="hidden" name="reason" value="Manually removed from Watchlist page">
+        <button class="btn btn-outline-danger btn-sm" type="submit">Çıkar</button>
+      </form>
+      {% endif %}
+    </td>
+  </tr>{% else %}<tr class="empty-row"><td colspan="10">Trade Watchlist boş; research promotion veya manuel override bekleniyor.</td></tr>{% endfor %}</tbody>
 </table></div>
 {% endblock %}

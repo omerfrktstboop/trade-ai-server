@@ -58,9 +58,9 @@ initial defaults for the keys above — see `.env.example`.
    all `Decimal`). `resolve_effective_risk_config(session)` merges three
    layers and takes the **strictest** value on every field, so a looser
    profile or DB override can never relax a global safety boundary:
-   - `EnvironmentRiskLimits.from_environment()` — reads `RISK_*` env vars
-     **directly via `os.environ`**, independently of the `risk_config`
-     singleton (same env-var names, separate read path).
+   - `EnvironmentRiskLimits.from_environment()` — reads `RISK_*` values from
+     the process environment, then `.env` as fallback, independently of the
+     `risk_config` singleton (same names, separate read path).
    - `SystemRiskConfig` — reads a fixed subset of `SystemConfig` DB rows via
      the local `_SYSTEM_CONFIG_KEYS` mapping (bypasses
      `get_admin_config_value`, so a missing row falls back to the pydantic
@@ -88,7 +88,7 @@ initial defaults for the keys above — see `.env.example`.
 | `killSwitchEnabled`, `tradingKillSwitchActive`, `forceSafeMode` | admin_config only (`is_kill_switch_enabled`) | OR of all three. Env/profile play no role. |
 | `allowedSymbols`, `buyAllowedSymbols`, `sellExitAllowedSymbols`, `declineSymbols`, `lockedLongTermSymbols`, `scanUniverseSymbols` | admin_config only | Empty string is a valid, meaningful value for the allow/deny lists (see `EMPTY_ALLOWED_CONFIG_KEYS`) — don't treat empty as "unset". |
 | `tradingMode` (server-side evaluation override) vs `botMode` (value reported to the external gateway) | admin_config, two distinct keys | `get_trading_mode_override` returns `None` (not a default!) when no DB row exists — callers must handle that explicitly. `botMode` is separately downgraded per active profile by `gateway_config._effective_mode`. |
-| Position-sizing limits (`sizingRiskPerTradePct`, `sizingMaxPositionValuePerSymbol`, `sizingMaxOrderValueTl`, stop-distance/slippage bounds, `sizingMinimumBuyConfidence`/`SellConfidence`, `sizingDailyOrderLimit`, ...) | **`resolve_effective_risk_config`** — strictest of env / admin_config / active profile | This is the single entry point T4 asks new sizing code to use. |
+| Position-sizing limits (`sizingRiskPerTradePct`, `sizingMaxPositionValuePerSymbol`, `sizingMaxOrderValueTl`, stop-distance/slippage bounds, `sizingMinimumBuyConfidence`/`SellConfidence`, `sizingDailyOrderLimit`, ...) | **`resolve_effective_risk_config`** — strictest of env / admin_config / active profile | This is the single entry point T4 asks new sizing code to use. `sizingTotalBotCapitalBudgetTl` is the exception: it is an explicit admin allocation, and `0` closes new BUY sizing. |
 | `min_confidence_for_buy`/`sell`, `max_natr_for_buy`, depth/spread gates, `allow_real_live`, `allow_demo_live`, and everything else the active profile defines directly | `build_runtime_risk_config` — **profile value only**, no env/admin_config merge | Not in `EffectiveRiskConfig`'s field set, so there's no strictest-wins merge — the active profile is authoritative. |
 
 ## Known duplicate-read sites

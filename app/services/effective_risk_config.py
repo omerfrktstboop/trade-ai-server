@@ -11,8 +11,10 @@ import hashlib
 import json
 import os
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 
+from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 _DECIMAL_FIELDS = {
     "risk_per_trade_pct",
+    "total_bot_capital_budget_tl",
     "max_cash_utilization_pct",
     "max_account_exposure_pct",
     "max_position_value_per_symbol",
@@ -34,6 +37,8 @@ _DECIMAL_FIELDS = {
     "minimum_buy_confidence",
     "minimum_sell_confidence",
 }
+
+_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 def decimal_from_external(value: Any) -> Decimal:
@@ -56,6 +61,7 @@ class RiskConfigLayer(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     risk_per_trade_pct: Decimal = Decimal("0.50")
+    total_bot_capital_budget_tl: Decimal = Decimal("0")
     max_cash_utilization_pct: Decimal = Decimal("25")
     max_account_exposure_pct: Decimal = Decimal("50")
     max_position_value_per_symbol: Decimal = Decimal("3000")
@@ -104,11 +110,15 @@ class EnvironmentRiskLimits(RiskConfigLayer):
 
     @classmethod
     def from_environment(cls) -> "EnvironmentRiskLimits":
+        dotenv = dotenv_values(_ENV_FILE)
         values: dict[str, Any] = {}
         for name in cls.model_fields:
             env_name = f"RISK_{name.upper()}"
-            if env_name in os.environ:
-                values[name] = os.environ[env_name]
+            value = os.environ.get(env_name)
+            if value is None:
+                value = dotenv.get(env_name)
+            if value is not None:
+                values[name] = value
         return cls.model_validate(values)
 
     def fingerprint(self) -> str:
@@ -181,6 +191,12 @@ class EffectiveRiskConfigResolver:
         for field in self._BOOLEAN_PERMISSIONS:
             resolved[field] = all(getattr(layer, field) for layer in layers)
 
+        # The total bot budget is an explicit operator allocation, not a
+        # trade-profile preference. Zero deliberately closes new BUY sizing.
+        resolved["total_bot_capital_budget_tl"] = (
+            system_config.total_bot_capital_budget_tl
+        )
+
         # The requested profile buffer is a preference, constrained by the
         # effective global minimum/maximum envelope.
         requested_slippage = max(layer.profile_stop_slippage_pct for layer in layers)
@@ -240,6 +256,7 @@ class EffectiveRiskConfigResolver:
 
 _SYSTEM_CONFIG_KEYS = {
     "risk_per_trade_pct": "sizingRiskPerTradePct",
+    "total_bot_capital_budget_tl": "sizingTotalBotCapitalBudgetTl",
     "max_cash_utilization_pct": "sizingMaxCashUtilizationPct",
     "max_account_exposure_pct": "sizingMaxAccountExposurePct",
     "max_position_value_per_symbol": "sizingMaxPositionValuePerSymbol",

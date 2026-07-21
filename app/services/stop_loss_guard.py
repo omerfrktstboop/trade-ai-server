@@ -28,6 +28,7 @@ from sqlalchemy import or_, select
 from app.db.session import async_session_factory
 from app.models.db import OrderLog, PositionLifecycle, PositionStopEvent
 from app.models.signal import OrderType, SignalAction, SignalResponse
+from app.services.account_context import is_position_snapshot_complete
 from app.services.admin_config import (
     PositionExitConfig,
     get_position_exit_config,
@@ -94,7 +95,7 @@ def _validated_gateway_state(
         or str(positions.get("accountSessionRef") or "").strip() != session_ref
         or health.get("positionsLoaded") is not True
         or positions.get("positionsLoaded") is not True
-        or positions.get("snapshotCompleteFlag") is not True
+        or not is_position_snapshot_complete(positions)
         or str(positions.get("confidence") or "").upper()
         not in {"HIGH", "MEDIUM"}
         or position_age is None

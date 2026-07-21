@@ -4476,9 +4476,9 @@ namespace Matriks.Lean.Algotrader
                 }
 
                 // Some Matriks/demo-account builds keep PositionReceiveComplated
-                // false even though GetRealPositions already contains the full
-                // portfolio. A non-empty snapshot is authoritative; an empty
-                // snapshot is accepted only after Matriks reports completion.
+                // false even though GetRealPositions contains a usable portfolio.
+                // Publish that explicit non-empty fallback with MEDIUM confidence;
+                // snapshotCompleteFlag continues to mean native Matriks completion.
                 if (!PositionReceiveComplated && positions.Count == 0)
                 {
                     SafeDebug("Real position snapshot not ready yet; "

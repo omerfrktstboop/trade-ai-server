@@ -526,6 +526,18 @@ class FreshAccountInputs:
     market_prices: dict[str, Decimal]
 
 
+def is_position_snapshot_complete(payload: dict[str, Any]) -> bool:
+    """Accept the Matriks demo fallback only when its full contract is present."""
+
+    if payload.get("snapshotCompleteFlag") is True:
+        return True
+    return bool(
+        payload.get("snapshotCompleteFlag") is False
+        and payload.get("snapshotNonEmpty") is True
+        and str(payload.get("confidence") or "").upper() == "MEDIUM"
+    )
+
+
 async def fetch_fresh_account_inputs(
     gateway: Any,
     *,
@@ -556,7 +568,7 @@ async def fetch_fresh_account_inputs(
         raise ValueError("gateway account bundle has an invalid collection")
     if (
         positions_wrapper.get("positionsLoaded") is not True
-        or positions_wrapper.get("snapshotCompleteFlag") is not True
+        or not is_position_snapshot_complete(positions_wrapper)
         or str(positions_wrapper.get("confidence") or "").upper()
         not in {"HIGH", "MEDIUM"}
     ):

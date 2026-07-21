@@ -20,6 +20,7 @@ from app.models.db import (
     RotationPlan,
 )
 from app.models.signal import OrderType, SignalAction, SignalResponse
+from app.services.account_context import is_position_snapshot_complete
 from app.services.admin_config import (
     build_runtime_risk_config,
     get_admin_config_value,
@@ -404,7 +405,9 @@ async def maybe_create_rotation_plan(
     except Exception:
         logger.exception("ROTATION_PLAN_POSITIONS_UNAVAILABLE")
         return None
-    if not positions.get("positionsLoaded") or not positions.get("snapshotCompleteFlag"):
+    if not positions.get("positionsLoaded") or not is_position_snapshot_complete(
+        positions
+    ):
         return None
     if str(positions.get("accountRef") or "").strip() != account_ref:
         return None
@@ -880,7 +883,7 @@ async def advance_rotation_plan(
         if (
             not positions.get("ok", True)
             or positions.get("positionsLoaded") is not True
-            or positions.get("snapshotCompleteFlag") is not True
+            or not is_position_snapshot_complete(positions)
             or str(positions.get("confidence") or "").upper()
             not in {"HIGH", "MEDIUM"}
             or position_age is None

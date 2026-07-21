@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
+import re
+
 
 _RULES = (
+    (
+        "DATA_QUALITY_UNRELIABLE",
+        ("pre-flight data-quality gate", "data quality unreliable"),
+    ),
+    (
+        "PREFLIGHT_NEUTRAL",
+        ("pre-flight cost gate", "pre-flight gate: indicator consensus neutral"),
+    ),
     ("KILL_SWITCH", ("kill switch",)),
     ("CUTOFF", ("cutoff", "trading cutoff")),
     ("CONFIDENCE_LOW", ("confidence", "güven", "guven")),
@@ -15,7 +25,10 @@ _RULES = (
     ("NATR_HIGH", ("natr",)),
     ("DEPTH_QUEUE_DROP", ("depth", "queue drop", "derinlik")),
     ("ALPHA_TREND_OPPOSES", ("alpha trend",)),
-    ("INDICATOR_CONSENSUS_OPPOSES", ("indicator consensus", "consensus")),
+    (
+        "INDICATOR_CONSENSUS_OPPOSES",
+        ("indicatorconsensus=", "indicator consensus opposes", "consensus opposes"),
+    ),
     ("PAPER_MODE", ("paper mode", "paper")),
     ("DEMO_NOT_ENABLED", ("demo",)),
     ("REAL_NOT_ENABLED", ("real live", "real")),
@@ -27,9 +40,25 @@ _RULES = (
     ("COOLDOWN", ("cooldown",)),
 )
 
+_STRUCTURED_CATEGORY_RE = re.compile(r"^\[([A-Z][A-Z0-9_]*)\]")
+_STABLE_CATEGORIES = frozenset(category for category, _needles in _RULES)
+
+
+def format_block_reason(category: str, reason: str) -> str:
+    """Prefix a human-readable reason with a classifier-stable category."""
+    normalized = category.strip().upper()
+    if normalized not in _STABLE_CATEGORIES:
+        raise ValueError(f"Unknown block category: {category!r}")
+    return f"[{normalized}] {reason.strip()}"
+
 
 def classify_block_reason(reason: str | None) -> str:
-    text = (reason or "").casefold()
+    raw = (reason or "").strip()
+    structured = _STRUCTURED_CATEGORY_RE.match(raw)
+    if structured and structured.group(1) in _STABLE_CATEGORIES:
+        return structured.group(1)
+
+    text = raw.casefold()
     for category, needles in _RULES:
         if any(needle in text for needle in needles):
             return category

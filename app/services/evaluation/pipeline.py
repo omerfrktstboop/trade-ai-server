@@ -37,6 +37,7 @@ from app.services.account_context import (
     fetch_fresh_account_inputs,
     get_account_reservation_handling,
 )
+from app.services.block_reason_classifier import classify_block_reason
 from app.services.cash_reservation import calculate_backend_reserved_cash
 from app.services.daily_trade_count import get_today_trade_counts
 from app.services.decision_gate import (
@@ -493,12 +494,41 @@ async def evaluate_symbol(
         profile=active_profile_code,
         macro_market_regime=market_regime,
         position_context=position_context,
+        research_context=research_context,
     )
     raw: dict[str, Any] | None = None
+
+    # Hard data-quality WAIT outranks every decision source, including an admin
+    # test override. Reliable research remains analytical; reliable active
+    # TRADING watchlist entries bypass only the neutral cost shortcut.
+    gate_reason = preflight_wait_reason(
+        symbol=sig_req.symbol,
+        indicator_consensus=sig_req.indicator_consensus,
+        bot_position_qty=sig_req.bot_position_qty,
+        news_context=news_context,
+        evaluation_purpose=evaluation_purpose,
+        trade_eligible=sig_req.trade_eligible,
+        quote_reliable=sig_req.quote_reliable,
+        ohlc_reliable=sig_req.ohlc_reliable,
+    )
+    gate_category = (
+        classify_block_reason(gate_reason) if gate_reason is not None else None
+    )
+    if gate_category == "DATA_QUALITY_UNRELIABLE":
+        raw = {
+            "action": "WAIT",
+            "confidence": 0.0,
+            "risk_score": 0.0,
+            "reason": gate_reason,
+            "block_category": gate_category,
+        }
+        payload["decisionSource"] = "preflight-gate"
+        payload["preflightBlockCategory"] = gate_category
+
     # v2: admin test override yalnizca research olmayan degerlendirmelerde
     # uygulanir (mod-bagimsiz). Override kararlari da systemMode gate'inden
     # gecmeden emre donusmez.
-    if not research_only:
+    if raw is None and not research_only:
         try:
             async with async_session_factory() as ov_session:
                 override = await consume_override(ov_session, sig_req.symbol)
@@ -509,22 +539,17 @@ async def evaluate_symbol(
             logger.exception("Failed to check signal override for %s", sig_req.symbol)
 
     # == 6.5. Token-cost kapilari (LLM'e gitmeden karar) ==================
-    # Sira: admin override > pre-flight gate > karar cache'i > LLM.
-    if raw is None and not research_only:
-        gate_reason = preflight_wait_reason(
-            symbol=sig_req.symbol,
-            indicator_consensus=sig_req.indicator_consensus,
-            bot_position_qty=sig_req.bot_position_qty,
-            news_context=news_context,
-        )
-        if gate_reason is not None:
-            raw = {
-                "action": "WAIT",
-                "confidence": 0.0,
-                "risk_score": 0.0,
-                "reason": gate_reason,
-            }
-            payload["decisionSource"] = "preflight-gate"
+    # Sira: hard data quality > admin override > neutral cost gate > LLM.
+    if raw is None and gate_reason is not None:
+        raw = {
+            "action": "WAIT",
+            "confidence": 0.0,
+            "risk_score": 0.0,
+            "reason": gate_reason,
+            "block_category": gate_category,
+        }
+        payload["decisionSource"] = "preflight-gate"
+        payload["preflightBlockCategory"] = gate_category
 
     # v2 Faz 5: 15 sn'lik DecisionCache devre dışı bırakıldı — portföy
     # taramasındaki önem dedektörü (app/services/significance.py) LLM

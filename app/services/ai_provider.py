@@ -230,7 +230,7 @@ class AiProvider(ABC):
         """Produce a trading decision from an ``AiDecisionContext`` payload.
 
         Parameters:
-            payload: Serialized ``ai-decision-context-v1`` fields only.
+            payload: Serialized ``ai-decision-context-v2`` fields only.
             request_id: Evaluation request id, forwarded to tool-call audit
                 rows so a tool invocation can be traced to its evaluation.
 
@@ -428,6 +428,7 @@ class DeepSeekProvider(AiProvider):
                 # sentences to the JSON output — a truncated response fails
                 # _extract_json and falls back to WAIT, so leave headroom.
                 "max_tokens": 500,
+                "response_format": {"type": "json_object"},
             }
             result = await self._call_with_retry(body, t0)
 

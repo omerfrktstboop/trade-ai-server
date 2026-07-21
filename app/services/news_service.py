@@ -1,7 +1,8 @@
 """News service — provides news context for AI trading decisions.
 
-Fetches recent headlines per symbol from Google News RSS (free, no API key
-or registration), cleans the HTML summary out of each item, and — on a cache
+Fetches recent BIST-focused headlines per symbol from Google News RSS (free,
+no API key or registration), rejects headlines that do not name the requested
+symbol, cleans the HTML summary out of each item, and — on a cache
 miss only — makes a bounded best-effort attempt to pull the article body so
 the AI reads more than just a headline. Results are cached in ``news_cache``
 for a short window so every evaluation cycle doesn't re-hit the feed. Any
@@ -86,7 +87,9 @@ async def get_news_context(symbols: list[str]) -> dict[str, Any]:
     for symbol in symbols:
         normalized = symbol.strip().upper()
         try:
-            items = await _get_or_refresh(normalized)
+            items = _filter_relevant_items(
+                normalized, await _get_or_refresh(normalized)
+            )
         except Exception:
             logger.exception("Failed to load news context for %s", normalized)
             items = []
@@ -106,9 +109,9 @@ async def get_news_context(symbols: list[str]) -> dict[str, Any]:
 async def _get_or_refresh(symbol: str) -> list[dict[str, Any]]:
     cached = await _load_fresh_cache(symbol)
     if cached is not None:
-        return cached
+        return _filter_relevant_items(symbol, cached)
 
-    fetched = await _fetch_rss(symbol)
+    fetched = _filter_relevant_items(symbol, await _fetch_rss(symbol))
     # Tam metin zenginleştirme yalnızca taze çekimde (cache-miss) yapılır.
     fetched = await _enrich_with_fulltext(fetched)
     await _store_cache(symbol, fetched)
@@ -211,13 +214,45 @@ def _serialize_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _fetch_rss(symbol: str) -> list[dict[str, Any]]:
-    url = _RSS_URL.format(query=quote(f"{symbol} hisse"))
+    query = f'"{symbol}" (hisse OR BIST OR "Borsa İstanbul")'
+    url = _RSS_URL.format(query=quote(query))
     timeout = aiohttp.ClientTimeout(total=_FETCH_TIMEOUT_SECONDS)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.get(url) as resp:
             resp.raise_for_status()
             body = await resp.text()
-    return _parse_rss(body)[:_MAX_ITEMS_PER_SYMBOL]
+    return _filter_relevant_items(symbol, _parse_rss(body))[:_MAX_ITEMS_PER_SYMBOL]
+
+
+def _filter_relevant_items(
+    symbol: str, items: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Keep only headlines that name the requested BIST symbol explicitly."""
+    normalized = symbol.strip().upper()
+    if not normalized:
+        return []
+    symbol_pattern = re.compile(
+        rf"(?<![A-Z0-9]){re.escape(normalized)}(?![A-Z0-9])",
+        re.IGNORECASE,
+    )
+    relevant: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        source = str(item.get("source") or "").strip()
+        source_suffix = f" - {source}" if source else ""
+        if source_suffix and title.casefold().endswith(source_suffix.casefold()):
+            title = title[: -len(source_suffix)].rstrip()
+        if symbol_pattern.search(title):
+            relevant.append(item)
+        else:
+            logger.debug(
+                "Discarding unrelated news headline symbol=%s title=%s",
+                normalized,
+                str(item.get("title") or "")[:160],
+            )
+    return relevant
 
 
 def _parse_rss(xml_text: str) -> list[dict[str, Any]]:

@@ -6,6 +6,7 @@ build a SignalRequest from a gateway snapshot in the first place.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -141,6 +142,7 @@ def build_ai_decision_context(
     profile: str | None = None,
     macro_market_regime: str | None = None,
     position_context: dict[str, Any] | None = None,
+    research_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the only market-data contract sent to an AI provider.
 
@@ -218,6 +220,7 @@ def build_ai_decision_context(
 
     context = AiDecisionContext.model_validate(
         {
+            "schemaVersion": "ai-decision-context-v2",
             "symbol": symbol,
             "period": {
                 "requested": req.requested_timeframe or req.timeframe,
@@ -261,13 +264,72 @@ def build_ai_decision_context(
                 "alphaTrendSignal": req.alpha_trend_signal,
                 "indicatorConsensus": req.indicator_consensus,
                 "indicatorConsensusRatio": req.indicator_consensus_ratio,
+                "indicatorBuyCount": req.indicator_buy_count,
+                "indicatorSellCount": req.indicator_sell_count,
+                "indicatorNeutralCount": req.indicator_neutral_count,
             },
             "depth": depth,
             "position": position,
             "events": events or None,
+            "research": _build_research_evidence(research_context),
         }
     )
     return context.model_dump(exclude_none=True)
+
+
+def _build_research_evidence(
+    research_context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Select and bound only discovery evidence useful to the provider."""
+    if not isinstance(research_context, dict):
+        return None
+
+    raw_sources = research_context.get("candidateSource")
+    if isinstance(raw_sources, str):
+        raw_sources = [raw_sources]
+    sources: list[str] = []
+    if isinstance(raw_sources, (list, tuple)):
+        for value in raw_sources:
+            source = str(value or "").strip()[:48]
+            if source and source not in sources:
+                sources.append(source)
+            if len(sources) >= 4:
+                break
+
+    raw_trend = research_context.get("recentTrend")
+    trend: dict[str, float] = {}
+    if isinstance(raw_trend, dict):
+        for key in (
+            "changePct30m",
+            "changePct60m",
+            "changePctDaily",
+            "relativeVolume",
+            "volumeTl",
+            "ema20Slope",
+        ):
+            value = _finite_float_or_none(raw_trend.get(key))
+            if value is not None:
+                trend[key] = value
+
+    evidence: dict[str, Any] = {}
+    score = _finite_float_or_none(research_context.get("trendPreScore"))
+    if score is not None and 0 <= score <= 100:
+        evidence["trendPreScore"] = score
+    if sources:
+        evidence["candidateSource"] = sources
+    if trend:
+        evidence["recentTrend"] = trend
+    return evidence or None
+
+
+def _finite_float_or_none(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return parsed if math.isfinite(parsed) else None
 
 
 def _build_depth_context(req: SignalRequest) -> dict[str, Any]:

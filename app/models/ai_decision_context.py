@@ -7,7 +7,7 @@ of forwarding the gateway's full snapshot.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat
 
@@ -55,9 +55,9 @@ class TechnicalContext(_ContextModel):
     alphaTrendSignal: str | None = None
     indicatorConsensus: str | None = None
     indicatorConsensusRatio: FiniteFloat | None = None
-    indicatorBuyCount: int | None = Field(default=None, ge=0)
-    indicatorSellCount: int | None = Field(default=None, ge=0)
-    indicatorNeutralCount: int | None = Field(default=None, ge=0)
+    indicatorBuyCount: int | None = Field(default=None, ge=0, le=1_000)
+    indicatorSellCount: int | None = Field(default=None, ge=0, le=1_000)
+    indicatorNeutralCount: int | None = Field(default=None, ge=0, le=1_000)
 
 
 class DataQualityContext(_ContextModel):
@@ -115,6 +115,24 @@ class EventsContext(_ContextModel):
     kap: KapContext | None = None
 
 
+_ResearchSource = Annotated[str, Field(min_length=1, max_length=48)]
+
+
+class ResearchTrendContext(_ContextModel):
+    changePct30m: FiniteFloat | None = None
+    changePct60m: FiniteFloat | None = None
+    changePctDaily: FiniteFloat | None = None
+    relativeVolume: FiniteFloat | None = Field(default=None, ge=0)
+    volumeTl: FiniteFloat | None = Field(default=None, ge=0)
+    ema20Slope: FiniteFloat | None = None
+
+
+class ResearchEvidenceContext(_ContextModel):
+    trendPreScore: FiniteFloat | None = Field(default=None, ge=0, le=100)
+    candidateSource: list[_ResearchSource] | None = Field(default=None, max_length=4)
+    recentTrend: ResearchTrendContext | None = None
+
+
 class PositionContext(_ContextModel):
     botQty: FiniteFloat = Field(ge=0)
     botAvgCost: FiniteFloat | None = Field(default=None, ge=0)
@@ -130,7 +148,7 @@ class AiDecisionContext(_ContextModel):
     information (``None``) from a known zero-valued measurement.
     """
 
-    schemaVersion: Literal["ai-decision-context-v1"] = "ai-decision-context-v1"
+    schemaVersion: Literal["ai-decision-context-v2"] = "ai-decision-context-v2"
     symbol: str = Field(min_length=1)
     period: PeriodContext
     profile: str | None = None
@@ -142,3 +160,4 @@ class AiDecisionContext(_ContextModel):
     depth: DepthContext | None = None
     position: PositionContext | None = None
     events: EventsContext | None = None
+    research: ResearchEvidenceContext | None = None

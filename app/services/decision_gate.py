@@ -2,11 +2,11 @@
 
 İki mekanizma, ikisi de LLM çağrısını tamamen atlatır:
 
-1. **Pre-flight (rule-based gating).** Gateway'in kendi indikatör konsensüsü
-   ``NEUTRAL`` ise, sembol için taze haber yoksa ve yönetilecek açık bot
-   pozisyonu da yoksa, LLM'in vereceği tek makul karar zaten WAIT'tir —
-   sormaya gerek yok. Açık pozisyon varken kapı devre dışı kalır: çıkış
-   (stop/target) kararları her zaman LLM'e gider.
+1. **Pre-flight (rule-based gating).** Güvenilir quote/OHLC yoksa veri kapısı
+   fail-closed WAIT üretir. Güvenilir veride aktif Trade Watchlist ``TRADING``
+   değerlendirmeleri ve araştırma değerlendirmeleri yalnızca konsensüs
+   ``NEUTRAL`` diye kapatılmaz. Diğer değerlendirmelerde nötr konsensüs +
+   habersizlik + açık pozisyon yokluğu maliyet kapısını çalıştırabilir.
 
 2. **Karar cache'i (zaman/fiyat/haber duyarlı).** Aynı sembol için son
    ``_CACHE_TTL`` içinde LLM'e sorulmuş, fiyat o karardan bu yana %1'den az
@@ -14,19 +14,21 @@
    Cache YALNIZCA gerçek LLM cevaplarını saklar (pre-flight WAIT'leri değil)
    ve süreç içi (in-memory) yaşar — restart'ta temiz başlar.
 
-Her iki kapı da fail-open'dır: beklenmedik veri şekli → kapı devreye girmez,
-LLM çağrısı normal yoluna devam eder. Kapılar asla BUY/SELL üretmez; yalnızca
-"LLM'e sormadan WAIT dön" ya da "önceki kararı tekrarla" diyebilir.
+Kapılar asla BUY/SELL üretmez; yalnızca "LLM'e sormadan WAIT dön" ya da
+"önceki kararı tekrarla" diyebilir. Piyasa veri kalitesi açıkça güvenilir
+değilse fail-closed, haber yapısı beklenmedikse maliyet kapısı fail-open'dır.
 """
 
 from __future__ import annotations
 
-import logging
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+
+from app.services.block_reason_classifier import format_block_reason
 
 logger = logging.getLogger(__name__)
 
@@ -48,25 +50,48 @@ def preflight_wait_reason(
     indicator_consensus: str | None,
     bot_position_qty: float,
     news_context: dict[str, Any] | None,
+    evaluation_purpose: str = "TRADING",
+    trade_eligible: bool = False,
+    quote_reliable: bool | None = True,
+    ohlc_reliable: bool | None = True,
 ) -> str | None:
     """LLM'siz WAIT gerekçesi döndür; kapı uygulanamıyorsa None.
 
-    Koşullar (hepsi birden):
-    - Gateway konsensüsü kesin olarak ``NEUTRAL`` (eksik/None ise kapı yok —
-      veri yokluğu nötrlük kanıtı değildir),
-    - Sembol için taze haber yok (KAP veya son 12 saatte yayınlanmış başlık),
-    - Yönetilecek açık bot pozisyonu yok.
+    Veri kalitesi kapısı tüm değerlendirme amaçlarında önce çalışır: quote ve
+    OHLC güvenilirliği açıkça ``True`` değilse LLM çağrısı yapılmaz. Güvenilir
+    ``RESEARCH_DISCOVERY`` değerlendirmeleri araştırma davranışını korur ve
+    nötr maliyet kapısına girmez. Güvenilir, aktif Trade Watchlist ``TRADING``
+    değerlendirmeleri de yalnızca nötr konsensüs nedeniyle kapatılmaz.
+
+    Yeni kalite argümanlarının varsayılanları eski doğrudan çağıranlar içindir;
+    evaluation pipeline her birini gateway verisinden açıkça geçirir.
     """
-    if (indicator_consensus or "").strip().upper() != "NEUTRAL":
+    if quote_reliable is not True or ohlc_reliable is not True:
+        return format_block_reason(
+            "DATA_QUALITY_UNRELIABLE",
+            "Pre-flight data-quality gate: quoteReliable and ohlcReliable must "
+            "both be true "
+            f"(quoteReliable={quote_reliable!r}, ohlcReliable={ohlc_reliable!r}); "
+            "WAIT without LLM call.",
+        )
+
+    purpose = str(evaluation_purpose or "TRADING").strip().upper()
+    if purpose == "RESEARCH_DISCOVERY":
+        return None
+    if purpose == "TRADING" and trade_eligible:
         return None
     if bot_position_qty > 0:
-        # Açık pozisyon = çıkış kararı gerekebilir; LLM devrede kalmalı.
+        # Açık pozisyon = çıkış kararı gerekebilir; güvenilir veride LLM devrede.
+        return None
+    if (indicator_consensus or "").strip().upper() != "NEUTRAL":
         return None
     if _has_fresh_news(symbol, news_context):
         return None
-    return (
-        "Pre-flight gate: indicator consensus NEUTRAL, no fresh news, "
-        "no open position — WAIT without LLM call."
+    return format_block_reason(
+        "PREFLIGHT_NEUTRAL",
+        "Pre-flight cost gate: indicator consensus NEUTRAL, no fresh news, "
+        "no open position, and not an active TRADING watchlist evaluation; "
+        "WAIT without LLM call.",
     )
 
 

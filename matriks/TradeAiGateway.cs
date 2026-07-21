@@ -230,6 +230,7 @@ namespace Matriks.Lean.Algotrader
         private string _lastVerifiedAccountId = string.Empty;
         private bool _subscriptionsInitialized;
         private readonly object _symbolSubscriptionLock = new object();
+        private readonly HashSet<string> _subscribedSymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly SemaphoreSlim _configFetchLock = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim _orderGate = new SemaphoreSlim(1, 1);
         private readonly ConcurrentQueue<OrderResultEnvelope> _orderResultQueue = new ConcurrentQueue<OrderResultEnvelope>();
@@ -266,20 +267,10 @@ namespace Matriks.Lean.Algotrader
             foreach (string symbol in AllowedSymbols)
             {
                 string normalized = NormalizeSymbol(symbol);
-                AddSymbol(normalized, SymbolPeriod.Min);
-                if (IndicatorPeriod != SymbolPeriod.Min)
-                {
-                    AddSymbol(normalized, IndicatorPeriod);
-                }
-                AddSymbolMarketData(normalized);
-                if (IsEquitySymbol(normalized))
-                    AddSymbolMarketDepth(normalized);
-                RegisterNewsSubscriptionsForSymbol(normalized);
-                InitializeIndicators(normalized);
+                EnsureSymbolSubscribed(normalized);
 
                 _accountNetQtyBySymbol[normalized] = 0m;
                 _accountAvailableQtyBySymbol[normalized] = 0m;
-                _closeHistoryBySymbol[BuildSeriesKey(normalized, IndicatorPeriod.ToString())] = new List<decimal>();
             }
             _subscriptionsInitialized = true;
             RegisterGlobalNewsKeywordSubscriptions();
@@ -312,6 +303,9 @@ namespace Matriks.Lean.Algotrader
 
         public override void OnDataUpdate(BarDataEventArgs barData)
         {
+            if (barData == null)
+                return;
+
             ResetDailyCachesIfNeeded();
             string eventSymbol = ResolveBarEventSymbol(barData.SymbolId);
             if (!string.IsNullOrWhiteSpace(eventSymbol))
@@ -915,21 +909,22 @@ namespace Matriks.Lean.Algotrader
                     buyAllowedSymbols = buyAllowedSymbols.Where(x => !IsIndexSymbol(x)).ToArray();
                     sellExitAllowedSymbols = sellExitAllowedSymbols.Where(x => !IsIndexSymbol(x)).ToArray();
                     declineSymbols = declineSymbols.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
-                    if (_subscriptionsInitialized)
-                    {
-                        foreach (string symbol in symbols)
-                            EnsurePortfolioSymbolSubscribed(symbol);
-                    }
                     bool indicatorPeriodChanged = IndicatorPeriod != indicatorPeriod;
                     IndicatorPeriod = indicatorPeriod;
                     if (_subscriptionsInitialized && indicatorPeriodChanged)
                     {
-                        foreach (string subscribedSymbol in symbols)
+                        foreach (string subscribedSymbol in GetSubscribedSymbols())
                         {
-                            AddSymbol(subscribedSymbol, IndicatorPeriod);
+                            if (IndicatorPeriod != SymbolPeriod.Min)
+                                AddSymbol(subscribedSymbol, IndicatorPeriod);
                             InitializeIndicators(subscribedSymbol);
                         }
                         SafeDebug("Indicator/bar period changed; subscriptions refreshed period=" + IndicatorPeriod);
+                    }
+                    if (_subscriptionsInitialized)
+                    {
+                        foreach (string symbol in symbols)
+                            EnsureSymbolSubscribed(symbol);
                     }
                     // Config reload must not remove market-data subscriptions
                     // discovered from the real account portfolio. They remain
@@ -1551,7 +1546,7 @@ namespace Matriks.Lean.Algotrader
                 return;
             }
             MarketDataPayload market = BuildMarketData(symbol, "INDICATORS");
-            string[] keys = { "rsi", "ema20", "ema50", "macd", "macdSignal", "indicatorSource", "technicalFeatures", "ohlcReliable", "ohlcSource" };
+            string[] keys = { "rsi", "ema20", "ema20Slope", "ema20SlopePeriod", "ema20SlopeSource", "ema50", "macd", "macdSignal", "indicatorSource", "technicalFeatures", "ohlcReliable", "ohlcSource" };
             var indicators = market.Payload.Where(x => keys.Contains(x.Key)).ToDictionary(x => x.Key, x => x.Value);
             await WriteJsonAsync(stream, 200, new { ok = true, symbol = symbol, indicators = indicators, timestamp = market.Timestamp });
         }
@@ -3818,6 +3813,8 @@ namespace Matriks.Lean.Algotrader
 
             double? rsi = GetNativeRsi(symbol) ?? CalculateRsi(symbol, 14);
             double? ema20 = GetNativeEma20(symbol) ?? CalculateEma(symbol, 20);
+            string ema20SlopePeriod;
+            double? ema20Slope = CalculateEmaSlope(symbol, 20, out ema20SlopePeriod);
             double? ema50 = GetNativeEma50(symbol) ?? CalculateEma(symbol, 50);
             double? macd = GetNativeMacdLine(symbol) ?? CalculateMacdLine(symbol);
             double? macdSignal = GetNativeMacdSignal(symbol) ?? CalculateMacdSignal(symbol);
@@ -3936,6 +3933,9 @@ namespace Matriks.Lean.Algotrader
                 : NormalizeMatriksLastTickUtc(ohlc.LastTickTime).ToString("o");
             payload["rsi"] = rsi;
             payload["ema20"] = ema20;
+            payload["ema20Slope"] = ema20Slope;
+            payload["ema20SlopePeriod"] = ema20SlopePeriod;
+            payload["ema20SlopeSource"] = ema20Slope.HasValue ? "RELIABLE_BAR_CLOSE_HISTORY" : "UNAVAILABLE";
             payload["ema50"] = ema50;
             payload["macd"] = macd;
             payload["macdSignal"] = macdSignal;
@@ -4509,7 +4509,7 @@ namespace Matriks.Lean.Algotrader
                         _positionMarketBySymbol[symbol] = BuildPositionMarketSnapshot(position, "MATRIX_POSITION_SNAPSHOT");
                     }
                     if (position.QtyNet != 0m || position.QtyAvailable != 0m)
-                        EnsurePortfolioSymbolSubscribed(symbol);
+                        EnsureSymbolSubscribed(symbol);
                 }
                 // Publish complete snapshots with atomic reference swaps. Readers
                 // can observe either the previous or the new valid snapshot,
@@ -4565,7 +4565,7 @@ namespace Matriks.Lean.Algotrader
                 return;
 
             if (position.QtyNet != 0m || position.QtyAvailable != 0m)
-                EnsurePortfolioSymbolSubscribed(symbol);
+                EnsureSymbolSubscribed(symbol);
             _accountNetQtyBySymbol[symbol] = position.QtyNet;
             _accountAvailableQtyBySymbol[symbol] = position.QtyAvailable;
             if (position.QtyNet == 0m && position.QtyAvailable == 0m)
@@ -4604,35 +4604,49 @@ namespace Matriks.Lean.Algotrader
         }
 
         /// <summary>
-        /// A portfolio symbol may not be part of the configured market-data
-        /// watchlist.  Manual SELL must still be able to obtain its price and
-        /// pass the gateway allow-list, so subscribe it when a real position
-        /// is discovered.
+        /// Config reloads and portfolio discovery can both add symbols. Track
+        /// actual SDK subscriptions independently from the policy allow-list so
+        /// each symbol is subscribed once while portfolio SELL data stays live.
         /// </summary>
-        private void EnsurePortfolioSymbolSubscribed(string symbol)
+        private void EnsureSymbolSubscribed(string symbol)
         {
-            if (IsAllowedSymbol(symbol))
+            symbol = NormalizeSymbol(symbol);
+            if (string.IsNullOrWhiteSpace(symbol))
                 return;
 
             lock (_symbolSubscriptionLock)
             {
-                if (IsAllowedSymbol(symbol))
-                    return;
+                if (!_subscribedSymbols.Contains(symbol))
+                {
+                    AddSymbol(symbol, SymbolPeriod.Min);
+                    if (IndicatorPeriod != SymbolPeriod.Min)
+                        AddSymbol(symbol, IndicatorPeriod);
+                    AddSymbolMarketData(symbol);
+                    if (IsEquitySymbol(symbol))
+                        AddSymbolMarketDepth(symbol);
+                    RegisterNewsSubscriptionsForSymbol(symbol);
+                    InitializeIndicators(symbol);
 
-                AddSymbol(symbol, SymbolPeriod.Min);
-                if (IndicatorPeriod != SymbolPeriod.Min)
-                    AddSymbol(symbol, IndicatorPeriod);
-                AddSymbolMarketData(symbol);
-                if (IsEquitySymbol(symbol))
-                    AddSymbolMarketDepth(symbol);
-                RegisterNewsSubscriptionsForSymbol(symbol);
-                InitializeIndicators(symbol);
+                    _subscribedSymbols.Add(symbol);
+                    _closeHistoryBySymbol.TryAdd(
+                        BuildSeriesKey(symbol, IndicatorPeriod.ToString()),
+                        new List<decimal>());
+                    SafeDebug("Symbol subscribed symbol=" + symbol + " period=" + IndicatorPeriod);
+                }
 
-                AllowedSymbols = AllowedSymbols.Concat(new[] { symbol }).ToArray();
-                _closeHistoryBySymbol.TryAdd(
-                    BuildSeriesKey(symbol, IndicatorPeriod.ToString()),
-                    new List<decimal>());
-                SafeDebug("Portfolio symbol subscribed symbol=" + symbol);
+                if (AllowedSymbols == null
+                    || !AllowedSymbols.Any(x => NormalizeSymbol(x) == symbol))
+                {
+                    AllowedSymbols = (AllowedSymbols ?? new string[0]).Concat(new[] { symbol }).ToArray();
+                }
+            }
+        }
+
+        private string[] GetSubscribedSymbols()
+        {
+            lock (_symbolSubscriptionLock)
+            {
+                return _subscribedSymbols.ToArray();
             }
         }
 
@@ -4825,16 +4839,21 @@ namespace Matriks.Lean.Algotrader
         {
             try
             {
+                if (barData == null)
+                    return;
+
                 string symbol = ResolveBarEventSymbol(barData.SymbolId);
                 if (string.IsNullOrWhiteSpace(symbol))
                     return;
 
-                var subscribedBarData = GetBarData(symbol, IndicatorPeriod);
-                if (subscribedBarData == null || subscribedBarData.PeriodInfo != barData.PeriodInfo)
+                string actualBarPeriod = NormalizePeriodName(Convert.ToString(barData.PeriodInfo));
+                string configuredPeriod = NormalizePeriodName(IndicatorPeriod.ToString());
+                if (string.IsNullOrWhiteSpace(actualBarPeriod)
+                    || !PeriodsEquivalent(actualBarPeriod, configuredPeriod))
                     return;
 
-                // The event carries the current bar. Reading it directly avoids
-                // GetBarData() selecting another symbol in a multi-symbol algo.
+                // The push event is authoritative; dictionary-backed GetBarData
+                // can throw before a newly subscribed series has created its key.
                 decimal close = barData.BarData.Close;
                 if (close <= 0m)
                 {
@@ -4855,7 +4874,6 @@ namespace Matriks.Lean.Algotrader
                 DateTime barTimestamp = barData.BarData.Dtime;
                 bool hasDtime = barTimestamp != DateTime.MinValue;
                 DateTime lastTickTime = barData.LastTickTime;
-                string actualBarPeriod = NormalizePeriodName(Convert.ToString(barData.PeriodInfo));
                 string seriesKey = BuildSeriesKey(symbol, actualBarPeriod);
                 int periodSeconds = PeriodSeconds(actualBarPeriod);
                 DateTime officialFallbackTime = DateTime.MinValue;
@@ -4918,7 +4936,7 @@ namespace Matriks.Lean.Algotrader
 
         private string ResolveBarEventSymbol(int symbolId)
         {
-            foreach (string symbolRaw in AllowedSymbols)
+            foreach (string symbolRaw in GetSubscribedSymbols())
             {
                 string symbol = NormalizeSymbol(symbolRaw);
                 if (GetSymbolId(symbol) == symbolId)
@@ -5085,6 +5103,46 @@ namespace Matriks.Lean.Algotrader
             }
 
             return ToDouble(ema);
+        }
+
+        private double? CalculateEmaSlope(string symbol, int period, out string actualPeriod)
+        {
+            actualPeriod = null;
+            OhlcvSnapshot current;
+            if (!_lastOhlcvBySymbol.TryGetValue(NormalizeSymbol(symbol), out current)
+                || string.IsNullOrWhiteSpace(current.ActualBarPeriod))
+            {
+                return null;
+            }
+
+            actualPeriod = NormalizePeriodName(current.ActualBarPeriod);
+            string seriesKey = BuildSeriesKey(symbol, actualPeriod);
+            var closes = new List<decimal>();
+            lock (_closeLock)
+            {
+                List<OhlcvBarPoint> bars;
+                if (!_ohlcvHistoryBySeries.TryGetValue(seriesKey, out bars) || bars == null)
+                    return null;
+
+                for (int i = bars.Count - 1; i >= 0; i--)
+                {
+                    OhlcvBarPoint point = bars[i];
+                    if (!point.Reliable || point.Close <= 0m)
+                        break;
+                    closes.Add(point.Close);
+                }
+            }
+
+            if (closes.Count <= period)
+                return null;
+
+            closes.Reverse();
+            double? currentEma = CalculateEma(closes, period);
+            closes.RemoveAt(closes.Count - 1);
+            double? previousEma = CalculateEma(closes, period);
+            if (!currentEma.HasValue || !previousEma.HasValue)
+                return null;
+            return currentEma.Value - previousEma.Value;
         }
 
         private double? CalculateMacdLine(string symbol)

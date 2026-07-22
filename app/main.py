@@ -15,6 +15,10 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
 from app.config import settings
+from app.core.logger import configure_file_logging
+
+configure_file_logging()
+
 from app.db.init_db import init_db
 from app.routers.admin import admin_api_router, admin_router
 from app.routers.gateway_log import router as gateway_log_router

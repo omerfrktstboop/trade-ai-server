@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import logging.handlers
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "signal.log"
 MATRIKS_LOG_FILE = LOG_DIR / "matriks.log"
 RUNTIME_EVENTS_LOG_FILE = LOG_DIR / "runtime_events.log"
+APP_LOG_FILE = LOG_DIR / "app.log"
 
 # Timestamps are written in Europe/Istanbul local time (with an explicit
 # offset, so still unambiguous/machine-parseable) rather than UTC, since
@@ -98,3 +100,39 @@ def log_runtime_event(*, event_type: str, detail: str) -> None:
         _append_json_line(RUNTIME_EVENTS_LOG_FILE, entry)
     except OSError:
         logger.exception("Failed to write runtime event log entry")
+
+
+_file_logging_configured = False
+
+
+def configure_file_logging() -> None:
+    """Attach a rotating file handler to the root logger, once.
+
+    Every ``logger.warning``/``logger.info`` call across the app (order
+    dispatch gates, preflight rejections, account watcher events, ...)
+    otherwise only reaches the console. On this deployment console output
+    is redirected to a fixed-path file that gets overwritten on every
+    process restart (see ``Start-TradeAiServer.ps1``), so any decision
+    made between two restarts is unrecoverable once the next restart
+    happens — which is routine during active deploys. A rotating file
+    that the app itself appends to survives restarts.
+    """
+    global _file_logging_configured
+    if _file_logging_configured:
+        return
+    _ensure_log_dir()
+    handler = logging.handlers.RotatingFileHandler(
+        APP_LOG_FILE, maxBytes=20_000_000, backupCount=5, encoding="utf-8"
+    )
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S%z",
+        )
+    )
+    handler.setLevel(logging.INFO)
+    root = logging.getLogger()
+    root.addHandler(handler)
+    if root.level > logging.INFO or root.level == logging.NOTSET:
+        root.setLevel(logging.INFO)
+    _file_logging_configured = True

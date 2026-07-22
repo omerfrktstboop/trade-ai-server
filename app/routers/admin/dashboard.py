@@ -32,6 +32,7 @@ from app.services.matriks_gateway import (
     GatewayUnavailable,
     gateway_client,
 )
+from app.core.runtime_flags import dispatch_block_reason, is_dispatch_blocked
 from app.services.notifications import notification_service
 from app.services.position_sync import position_synchronizer
 from app.services.scanner import scanner
@@ -329,7 +330,19 @@ async def _bot_status(*, db_error: str | None = None) -> dict[str, Any]:
         "gateway": {"reachable": False, "health": None, "error": None},
         "scanner": scanner.get_status(),
         "positionSync": position_synchronizer.get_status(),
-        "runtime": {"dbAvailable": db_error is None, "dbError": db_error},
+        "runtime": {
+            "dbAvailable": db_error is None,
+            "dbError": db_error,
+            # In-memory fail-closed latch set by main.py's startup lifespan
+            # if the unconditional REAL-account disarm check fails. Once set
+            # it is never cleared without a process restart (see
+            # app/core/runtime_flags.py), and every subsequent order attempt
+            # is silently skipped in scanner._maybe_send_order — surfacing it
+            # here is the only way an operator can see this state without
+            # reading raw process stdout.
+            "dispatchHardBlocked": is_dispatch_blocked(),
+            "dispatchHardBlockReason": dispatch_block_reason(),
+        },
     }
     # get_status() env varsayılanını gösterir; panel override'ı varsa onu yansıt.
     try:

@@ -234,7 +234,9 @@ class RiskEngine:
         ):
             return self._block(
                 request,
-                f"Trading blocked: after cutoff time {self.config.disable_trading_after}",
+                "Trading blocked: outside trading window "
+                f"{self.config.enable_trading_after}-"
+                f"{self.config.disable_trading_after}",
             )
 
         # v2: eski trade-profile mod izni (REAL_LIVE/DEMO_LIVE) kaldırıldı.

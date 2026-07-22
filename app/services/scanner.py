@@ -414,9 +414,22 @@ class SymbolScanner:
         # kalır. Discovery kendi movers/snapshot tazelik kontrollerini yapar
         # ve gateway tur ortasında düşerse hatayı yutup bu turu atlar.
         await self._run_discovery()
-        # Research discovery is forced PAPER market-data work, so it must run
-        # before account/trading gates and can never enter trade/order paths.
-        await self._run_research(runtime_cfg._declined_set())
+        # Research evaluation calls the LLM per candidate. Gate it on the
+        # trading window so no AI requests (and their token cost) are made
+        # outside 09:30–17:30 (enableTradingAfter/disableTradingAfter); the
+        # market is closed then anyway. Discovery above is rule-based market
+        # data only, so it stays available to keep the universe warm.
+        if runtime_cfg.can_trade_now():
+            # Research discovery is forced PAPER market-data work; it never
+            # enters the trade/order path.
+            await self._run_research(runtime_cfg._declined_set())
+        else:
+            self._warn_throttled(
+                "window-research",
+                "Outside trading window; skipping AI research evaluation "
+                f"({runtime_cfg.enable_trading_after}-"
+                f"{runtime_cfg.disable_trading_after} {runtime_cfg.timezone})",
+            )
         # Bounded, market-data-only observation collection for outcome
         # measurement. Runs here (before the trading/cutoff gates) so a symbol
         # awaiting forward-return measurement is still observed after the

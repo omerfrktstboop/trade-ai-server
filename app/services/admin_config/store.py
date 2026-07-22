@@ -385,6 +385,7 @@ async def build_runtime_risk_config(session: AsyncSession) -> RiskConfig:
         # şeması için korunur.
         real_live_mode_allowed=False,
         demo_live_mode_allowed=profile.allow_demo_live,
+        enable_trading_after=values["enableTradingAfter"],
         disable_trading_after=values["disableTradingAfter"],
         timezone=values["timezone"],
         _env_file="",

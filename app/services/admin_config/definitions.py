@@ -56,6 +56,12 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         risk_config.locked_long_term_symbols,
         "Uzun vadeli kilitli semboller. Bu semboller otomatik SELL kararlarından korunur.",
     ),
+    "enableTradingAfter": ConfigDefinition(
+        "enableTradingAfter",
+        "time",
+        risk_config.enable_trading_after,
+        "Bu saatten önce BUY/SELL kararları ve AI araştırma çağrıları yapılmaz. Format HH:MM.",
+    ),
     "disableTradingAfter": ConfigDefinition(
         "disableTradingAfter",
         "time",
@@ -670,6 +676,7 @@ CONFIG_SECTION_DEFINITIONS = (
             "sellExitAllowedSymbols",
             "declineSymbols",
             "lockedLongTermSymbols",
+            "enableTradingAfter",
             "disableTradingAfter",
             "timezone",
         ),
@@ -837,6 +844,7 @@ CONFIG_LABELS: dict[str, str] = {
     "allowedSymbols": "İzinli Semboller (BUY beyaz liste)",
     "declineSymbols": "Yasaklı Semboller (kara liste)",
     "lockedLongTermSymbols": "Uzun Vade Kilitli Semboller",
+    "enableTradingAfter": "İşlem Başlangıç Saati",
     "disableTradingAfter": "İşlem Kesim Saati",
     "timezone": "Saat Dilimi",
     "systemMode": "Çalışma Modu (OBSERVE_ONLY / AUTO_TRADE)",

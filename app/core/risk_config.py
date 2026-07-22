@@ -163,6 +163,10 @@ class RiskConfig(BaseSettings):
         default=True,
         description="Active trade profile permits DEMO_LIVE",
     )
+    enable_trading_after: str = Field(
+        default="09:30",
+        description="Local time (HH:MM) before which trading (and AI research) is paused",
+    )
     disable_trading_after: str = Field(
         default="17:30",
         description="Local time (HH:MM) after which trading is paused",
@@ -174,21 +178,19 @@ class RiskConfig(BaseSettings):
 
     # ── Normalisation ──────────────────────────────────────────────────────
 
-    @field_validator("disable_trading_after")
+    @field_validator("enable_trading_after", "disable_trading_after")
     @classmethod
     def _validate_cutoff_time(cls, v: str) -> str:
-        """Ensure the cutoff time is a valid HH:MM string (fail fast at load time)."""
+        """Ensure the window boundary is a valid HH:MM string (fail fast at load)."""
         parts = v.split(":")
         if len(parts) != 2:
-            raise ValueError(
-                f"RISK_DISABLE_TRADING_AFTER must be in HH:MM format, got: {v!r}"
-            )
+            raise ValueError(f"Trading window time must be in HH:MM format, got: {v!r}")
         try:
             hour, minute = int(parts[0]), int(parts[1])
             time(hour, minute)
         except ValueError as exc:
             raise ValueError(
-                f"RISK_DISABLE_TRADING_AFTER must be a valid HH:MM time, got: {v!r}"
+                f"Trading window time must be a valid HH:MM time, got: {v!r}"
             ) from exc
         return v
 
@@ -242,7 +244,12 @@ class RiskConfig(BaseSettings):
         return symbol.strip().upper() in _to_set(self.locked_long_term_symbols)
 
     def can_trade_now(self, now: datetime | None = None) -> bool:
-        """Return True if trading is allowed at the current time."""
+        """Return True if the current local time is inside the trading window.
+
+        The window is ``[enable_trading_after, disable_trading_after)`` — trading
+        (and the AI research/eval calls gated on this) is paused both before the
+        morning start and after the evening cutoff.
+        """
         timezone = ZoneInfo(self.timezone)
         if now is None:
             now = datetime.now(timezone)
@@ -250,9 +257,10 @@ class RiskConfig(BaseSettings):
             now = now.replace(tzinfo=timezone)
         else:
             now = now.astimezone(timezone)
-        h, m = map(int, self.disable_trading_after.split(":"))
-        cutoff = time(h, m)
-        return now.time() < cutoff
+        start_h, start_m = map(int, self.enable_trading_after.split(":"))
+        end_h, end_m = map(int, self.disable_trading_after.split(":"))
+        current = now.time()
+        return time(start_h, start_m) <= current < time(end_h, end_m)
 
     def get_min_confidence(self, action: str) -> float:
         """Return the confidence threshold for a given action."""

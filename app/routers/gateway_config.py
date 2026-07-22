@@ -116,11 +116,6 @@ async def gateway_runtime_config(
     }
     symbols = set(manually_allowed)
     market_index_symbol = settings.market_index_symbol.strip().upper()
-    configured_buy_symbols = {
-        s.strip().upper()
-        for s in values["buyAllowedSymbols"].split(",")
-        if s.strip() and not _is_index_symbol(s, market_index_symbol)
-    }
     sell_symbols = [
         s.strip().upper()
         for s in values["sellExitAllowedSymbols"].split(",")
@@ -137,11 +132,13 @@ async def gateway_runtime_config(
         if str(symbol).strip()
         and not _is_index_symbol(str(symbol), market_index_symbol)
     }
+    # BUY yetkisi tek kaynak: aktif Trade Watchlist (research pipeline onayı)
+    # eksi kara liste, ayrıca manuel allowedSymbols filtresiyle daraltılır.
+    # Eski ``buyAllowedSymbols`` üçüncü kesişim kaynağıydı; güncellenmesi
+    # unutulduğunda sessizce izin listesini daraltıyordu, kaldırıldı.
     effective_buy_symbols = eligible_symbols.difference(decline_symbols)
     if manually_allowed:
         effective_buy_symbols.intersection_update(manually_allowed)
-    if configured_buy_symbols:
-        effective_buy_symbols.intersection_update(configured_buy_symbols)
     symbols.update(row.symbol.strip().upper() for row in portfolio if row.qty > 0)
     if ownership is not None:
         symbols.update(ownership.quantities)

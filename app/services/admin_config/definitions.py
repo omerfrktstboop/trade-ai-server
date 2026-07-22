@@ -212,12 +212,6 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "2",
         "Bir hesapta bir günde başlatılabilecek en fazla otomatik rotasyon.",
     ),
-    "buyAllowedSymbols": ConfigDefinition(
-        "buyAllowedSymbols",
-        "string",
-        risk_config.allowed_symbols,
-        "Gateway için ek manuel BUY filtresi; Trade Watchlist yetkisi yerine geçmez.",
-    ),
     "sellExitAllowedSymbols": ConfigDefinition(
         "sellExitAllowedSymbols",
         "string",
@@ -640,7 +634,6 @@ READ_ONLY_CONFIG_KEYS = frozenset(
 EMPTY_ALLOWED_CONFIG_KEYS = frozenset(
     {
         "allowedSymbols",
-        "buyAllowedSymbols",
         "sellExitAllowedSymbols",
         "declineSymbols",
         "lockedLongTermSymbols",
@@ -674,7 +667,6 @@ CONFIG_SECTION_DEFINITIONS = (
         ),
         keys=(
             "allowedSymbols",
-            "buyAllowedSymbols",
             "sellExitAllowedSymbols",
             "declineSymbols",
             "lockedLongTermSymbols",
@@ -864,7 +856,6 @@ CONFIG_LABELS: dict[str, str] = {
     "rotationMinimumHoldingMinutes": "Rotasyon Min. Elde Tutma Süresi (dk)",
     "rotationPlanExpiryMinutes": "Rotasyon Planı Geçerliliği (dk)",
     "rotationMaxPerDay": "Günlük En Fazla Rotasyon",
-    "buyAllowedSymbols": "BUY İzinli Semboller (gateway)",
     "sellExitAllowedSymbols": "SELL Çıkış İzinli Semboller",
     "realAccountArmed": "REAL Hesap Arming",
     "armedAccountRef": "Arm Edilen Hesap Ref (sha256)",

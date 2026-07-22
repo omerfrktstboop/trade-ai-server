@@ -121,7 +121,6 @@ def _serialize_value(key: str, raw_value: Any, value_type: str) -> str:
     if key in {
         "allowedSymbols",
         "declineSymbols",
-        "buyAllowedSymbols",
         "sellExitAllowedSymbols",
         "lockedLongTermSymbols",
         "scanUniverseSymbols",

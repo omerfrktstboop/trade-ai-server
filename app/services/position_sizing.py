@@ -194,15 +194,6 @@ class PositionSizingService:
             * limits.max_cash_utilization_pct
             / Decimal("100")
         )
-        max_account_exposure = (
-            account.account_equity_tl * limits.max_account_exposure_pct / Decimal("100")
-        )
-        committed_account_exposure = (
-            account.total_account_exposure_tl + account.reserved_cash_tl
-        )
-        remaining_account_capacity = max(
-            zero, max_account_exposure - committed_account_exposure
-        )
         committed_symbol_value = (
             account.current_symbol_value_tl
             + account.current_symbol_reserved_cash_tl
@@ -226,9 +217,6 @@ class PositionSizingService:
         candidates = {
             "risk_budget": floor_decimal(risk_budget / effective_stop_distance),
             "cash_budget": floor_decimal(cash_budget / trade.entry_price),
-            "account_exposure": floor_decimal(
-                remaining_account_capacity / trade.entry_price
-            ),
             "symbol_position": floor_decimal(
                 remaining_symbol_capacity / trade.entry_price
             ),
@@ -245,9 +233,6 @@ class PositionSizingService:
             "effective_slippage_pct": slippage_pct,
             "raw_stop_distance_pct": raw_stop_pct,
             "cash_budget_tl": cash_budget,
-            "maximum_account_exposure_tl": max_account_exposure,
-            "committed_account_exposure_tl": committed_account_exposure,
-            "remaining_account_capacity_tl": remaining_account_capacity,
             "committed_symbol_value_tl": committed_symbol_value,
             "remaining_symbol_capacity_tl": remaining_symbol_capacity,
             "capital_base_tl": capital_base,
@@ -258,7 +243,6 @@ class PositionSizingService:
             "remaining_ai_target_tl": remaining_ai_target,
             "qty_by_risk": candidates["risk_budget"],
             "qty_by_cash": candidates["cash_budget"],
-            "qty_by_account_exposure": candidates["account_exposure"],
             "qty_by_symbol_position": candidates["symbol_position"],
             "qty_by_bot_budget": candidates["bot_budget"],
             "qty_by_ai_target": candidates["ai_target"],

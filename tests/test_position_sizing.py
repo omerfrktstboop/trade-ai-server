@@ -106,12 +106,6 @@ def test_normal_risk_calculation_and_invariant():
             1,
             "symbol_position",
         ),
-        (
-            {"total_account_exposure_tl": "9900"},
-            {"max_account_exposure_pct": D("10")},
-            1,
-            "account_exposure",
-        ),
         ({}, {"max_order_value_tl": D("300")}, 3, "order_value"),
         ({}, {"max_qty_per_order": 4}, 4, "profile_max_qty"),
     ],
@@ -143,7 +137,7 @@ def test_total_bot_budget_and_ai_target_are_post_trade_limits():
     assert "ai_target" in target_limited.binding_limits
 
 
-def test_pending_buy_notional_consumes_exposure_symbol_and_ai_capacity():
+def test_pending_buy_notional_consumes_symbol_and_ai_capacity():
     account_with_pending = account(
         reserved_cash_tl="900",
         current_symbol_reserved_cash_tl="900",
@@ -156,15 +150,15 @@ def test_pending_buy_notional_consumes_exposure_symbol_and_ai_capacity():
         a=account_with_pending,
         t=trade(target_allocation_pct="10"),
         risk_limits=limits(
-            max_account_exposure_pct=D("10"),
             max_position_value_per_symbol=D("1000"),
             total_bot_capital_budget_tl=D("10000"),
         ),
     )
     assert result.qty == 1
-    assert {"account_exposure", "symbol_position", "bot_budget", "ai_target"}.issubset(
+    assert {"symbol_position", "bot_budget", "ai_target"}.issubset(
         result.binding_limits
     )
+    assert "account_exposure" not in result.binding_limits
 
 
 def test_bot_budget_is_risk_base_and_zero_budget_fails_closed():

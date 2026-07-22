@@ -376,6 +376,7 @@ async def build_runtime_risk_config(session: AsyncSession) -> RiskConfig:
         max_spread_pct_for_buy=profile.max_spread_pct_for_buy,
         min_depth_bid_ask_ratio_top10_for_buy=profile.min_depth_bid_ask_ratio_top10_for_buy,
         max_depth_sell_pressure_score_for_buy=profile.max_depth_sell_pressure_score_for_buy,
+        max_decision_age_seconds_for_buy=profile.max_decision_age_seconds_for_buy,
         block_buy_on_strong_sell_pressure=profile.block_buy_on_strong_sell_pressure,
         block_buy_on_near_ask_wall=profile.block_buy_on_near_ask_wall,
         near_wall_distance_pct=profile.near_wall_distance_pct,

@@ -92,6 +92,9 @@ class TradeProfile(Base):
     max_depth_sell_pressure_score_for_buy: Mapped[float] = mapped_column(
         Float, default=80.0, nullable=False
     )
+    max_decision_age_seconds_for_buy: Mapped[float] = mapped_column(
+        Float, default=60.0, nullable=False
+    )
     block_buy_on_strong_sell_pressure: Mapped[bool] = mapped_column(
         Boolean, default=True
     )

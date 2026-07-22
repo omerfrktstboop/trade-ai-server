@@ -96,6 +96,7 @@ def validate_order_preflight(
     decision_created_utc: datetime,
     max_spread_pct: float,
     max_depth_queue_drop_pct: float = 35.0,
+    max_decision_age_seconds: float = MAX_DECISION_AGE_SECONDS,
 ) -> str | None:
     now = datetime.now(timezone.utc)
     created = (
@@ -103,7 +104,7 @@ def validate_order_preflight(
         if decision_created_utc.tzinfo
         else decision_created_utc.replace(tzinfo=timezone.utc)
     )
-    if (now - created).total_seconds() > MAX_DECISION_AGE_SECONDS:
+    if (now - created).total_seconds() > max_decision_age_seconds:
         return "decision is stale"
     if payload.get("sessionOpen") is not True:
         return "trading session is closed or unknown"

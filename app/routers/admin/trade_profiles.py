@@ -87,6 +87,9 @@ class TradeProfileFieldsBody(BaseModel):
     max_depth_sell_pressure_score_for_buy: float | None = Field(
         None, alias="maxDepthSellPressureScoreForBuy"
     )
+    max_decision_age_seconds_for_buy: float | None = Field(
+        None, alias="maxDecisionAgeSecondsForBuy"
+    )
     block_buy_on_strong_sell_pressure: bool | None = Field(
         None, alias="blockBuyOnStrongSellPressure"
     )
@@ -355,6 +358,7 @@ def _trade_profile_dict(profile: TradeProfile, active_code: str) -> dict[str, An
         "maxSpreadPctForBuy": profile.max_spread_pct_for_buy,
         "minDepthBidAskRatioTop10ForBuy": profile.min_depth_bid_ask_ratio_top10_for_buy,
         "maxDepthSellPressureScoreForBuy": profile.max_depth_sell_pressure_score_for_buy,
+        "maxDecisionAgeSecondsForBuy": profile.max_decision_age_seconds_for_buy,
         "blockBuyOnStrongSellPressure": profile.block_buy_on_strong_sell_pressure,
         "blockBuyOnNearAskWall": profile.block_buy_on_near_ask_wall,
         "nearWallDistancePct": profile.near_wall_distance_pct,

@@ -1055,6 +1055,9 @@ class SymbolScanner:
                 max_depth_queue_drop_pct=(
                     preflight_config.max_depth_queue_drop_pct_for_buy
                 ),
+                max_decision_age_seconds=(
+                    preflight_config.max_decision_age_seconds_for_buy
+                ),
             )
             account_inputs = None
             if response.action == SignalAction.BUY:

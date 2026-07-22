@@ -107,6 +107,7 @@
   {{ num_field('max_spread_pct_for_buy', 'AL için En Yüksek Spread (%)', p.max_spread_pct_for_buy, 'Alış-satış fiyat farkının (spread) AL işlemi için izin verilen en yüksek yüzdesi.') }}
   {{ num_field('min_depth_bid_ask_ratio_top10_for_buy', 'AL için En Düşük Alım/Satım Derinlik Oranı (İlk 10)', p.min_depth_bid_ask_ratio_top10_for_buy, 'Emir defterinin ilk 10 kademesinde alım hacminin satım hacmine oranının en düşük değeri.') }}
   {{ num_field('max_depth_sell_pressure_score_for_buy', 'AL için En Yüksek Satış Baskısı Skoru', p.max_depth_sell_pressure_score_for_buy, 'Bu skorun üzerinde AL sinyalleri otomatik engellenir.') }}
+  {{ num_field('max_decision_age_seconds_for_buy', 'Karar Tazelik Süresi (sn)', p.max_decision_age_seconds_for_buy, 'AI kararı verildikten sonra emrin gönderilmesine kadar izin verilen en fazla süre; aşılırsa "decision is stale" ile emir iptal edilir.') }}
   {{ num_field('near_wall_distance_pct', 'Satış Duvarına Yakınlık Mesafesi (%)', p.near_wall_distance_pct, 'Fiyatın büyük bir satış duvarına ne kadar yakınsa "yakın" sayılacağını belirleyen yüzde mesafe.') }}
   {{ bool_field('block_buy_on_strong_sell_pressure', 'Güçlü Satış Baskısında AL\'ı Engelle', p.block_buy_on_strong_sell_pressure, 'Açık: satış baskısı skoru eşiği aşarsa AL sinyalleri otomatik engellenir.') }}
   {{ bool_field('block_buy_on_near_ask_wall', 'Satış Duvarına Yakınken AL\'ı Engelle', p.block_buy_on_near_ask_wall, 'Açık: fiyat büyük bir satış duvarına çok yaklaşmışsa AL sinyalleri engellenir.') }}

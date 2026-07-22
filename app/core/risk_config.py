@@ -131,6 +131,14 @@ class RiskConfig(BaseSettings):
     near_wall_distance_pct: float = Field(default=0.30, ge=0)
     max_quote_age_seconds_for_buy: float = Field(default=30.0, ge=0)
     max_depth_age_seconds_for_buy: float = Field(default=15.0, ge=0)
+    max_decision_age_seconds_for_buy: float = Field(
+        default=60.0,
+        ge=0,
+        description=(
+            "Max seconds between AI decision creation and order-time "
+            "preflight before the decision is rejected as stale."
+        ),
+    )
 
     # ── Restrictions ───────────────────────────────────────────────────────
 

@@ -241,6 +241,21 @@ class AccountWatcher:
             account_type,
             detail,
         )
+        # Operatör bildirimi: hesap kimliği değişimleri ve otomatik disarm
+        # emir yolunu sessizce durdurabilir; log'a ek olarak Telegram'a da
+        # düşür ki fark edilmeden saatlerce OBSERVE_ONLY'de kalınmasın. Best
+        # effort — notify_* asla exception fırlatmaz, watcher davranışını
+        # etkilemez.
+        from app.services.notifications import notify_error
+
+        await notify_error(
+            f"Hesap olayı: {event_type}",
+            {
+                "accountType": account_type,
+                "detail": detail,
+                "accountRef": (account_ref or "")[:12],
+            },
+        )
 
 
 def _clean(value: Any) -> str | None:

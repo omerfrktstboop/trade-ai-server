@@ -76,10 +76,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as _disarm_exc:
         from app.core.logger import log_runtime_event
         from app.core.runtime_flags import block_dispatch
+        from app.services.notifications import notify_error
 
         _block_reason = f"startup disarm failed: {_disarm_exc}"
         block_dispatch(_block_reason)
         log_runtime_event(event_type="DISPATCH_HARD_BLOCKED", detail=_block_reason)
+        # Bu latch süreç boyunca TÜM emirleri sessizce durdurur ve ancak
+        # restart ile temizlenir; operatör hemen haberdar olmalı.
+        await notify_error(
+            "Dispatch hard-blocked on startup (fail-closed)",
+            {"reason": _block_reason},
+        )
         print(
             f"⛔ Startup disarm FAILED — dispatch hard-blocked (fail-closed): "
             f"{_disarm_exc}"

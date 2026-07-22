@@ -112,6 +112,9 @@ class RiskEngine:
         request: SignalRequest,
         decision: RiskDecision | None = None,
         market_regime: str | None = None,
+        *,
+        account_type: str | None = None,
+        allow_demo_downtrend_buy: bool = False,
     ) -> SignalResponse:
         """Run all risk checks and return a safe ``SignalResponse``.
 
@@ -135,6 +138,12 @@ class RiskEngine:
                 ``HIGH_VOLATILITY`` / diğerleri. ``None``/``UNKNOWN`` iken
                 makro filtre uygulanmaz (fail-open: endeks verisi yok diye
                 sistem durmaz). SELL hiçbir rejimde bloklanmaz.
+            account_type: Fresh gateway health and account payload against
+                which the pipeline verified the account type. Only exact
+                ``DEMO`` is eligible for the DOWNTREND override.
+            allow_demo_downtrend_buy: DB-backed policy flag. It bypasses only
+                the BUY+DOWNTREND gate for a verified DEMO account; REAL and
+                unknown accounts remain blocked.
         """
         if decision is None:
             decision = DEFAULT_WAIT
@@ -192,11 +201,16 @@ class RiskEngine:
         # eşiği sertleşir — sadece en net sinyaller geçer.
         regime = (market_regime or "").strip().upper()
         if regime == "DOWNTREND" and action == SignalAction.BUY:
-            return self._block(
-                request,
-                "BUY blocked: market index is in DOWNTREND (bear regime) — "
-                "no new long positions while the broad market falls",
-            )
+            if account_type == "DEMO" and allow_demo_downtrend_buy is True:
+                reasons.append(
+                    "DEMO policy override: BUY allowed while market index is in DOWNTREND"
+                )
+            else:
+                return self._block(
+                    request,
+                    "BUY blocked: market index is in DOWNTREND (bear regime) — "
+                    "no new long positions while the broad market falls",
+                )
         if regime == "HIGH_VOLATILITY" and action == SignalAction.BUY:
             confidence_penalty = 15.0
             reasons.append(

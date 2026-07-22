@@ -28,6 +28,7 @@ from app.models.signal import (
 from app.services.ai_provider import AiProvider, get_default_provider
 from app.services.admin_config import (
     build_runtime_risk_config,
+    is_demo_downtrend_buy_enabled,
     is_kill_switch_enabled,
 )
 from app.services.broker_flow_service import get_broker_flow_context
@@ -142,12 +143,13 @@ class EvaluationResult:
 
 async def with_runtime_controls(
     req: SignalRequest,
-) -> tuple[SignalRequest, RiskEngine, bool]:
+) -> tuple[SignalRequest, RiskEngine, bool, bool]:
     """Apply DB-backed runtime config controls when available."""
     try:
         async with async_session_factory() as session:
             runtime_config = await build_runtime_risk_config(session)
             kill_switch_enabled = await is_kill_switch_enabled(session)
+            demo_allow_downtrend_buy = await is_demo_downtrend_buy_enabled(session)
             effective_config = await resolve_effective_risk_config(session)
     except Exception:
         logger.exception(
@@ -155,10 +157,15 @@ async def with_runtime_controls(
             req.request_id,
             req.symbol,
         )
-        return req, _static_risk_engine, False
+        return req, _static_risk_engine, False, False
 
     # v2: eski tradingMode override kaldırıldı. Emir yetkisi mod-bağımsızdır.
-    return req, RiskEngine(runtime_config, effective_config), kill_switch_enabled
+    return (
+        req,
+        RiskEngine(runtime_config, effective_config),
+        kill_switch_enabled,
+        demo_allow_downtrend_buy,
+    )
 
 
 def kill_switch_response(req: SignalRequest) -> SignalResponse:
@@ -244,11 +251,12 @@ async def with_fresh_account_sizing_context(
     gateway: MatriksGatewayClient,
     snapshot: dict[str, Any],
     runtime_engine: RiskEngine,
-) -> SignalRequest:
+) -> tuple[SignalRequest, str | None]:
     """Attach normalized account data for an AI BUY, otherwise fail closed."""
+    req = req.model_copy(update={"account_sizing_context": None})
     effective = runtime_engine.effective_config
     if effective is None:
-        return req
+        return req, None
     try:
         inputs = await fetch_fresh_account_inputs(
             gateway,
@@ -256,6 +264,19 @@ async def with_fresh_account_sizing_context(
             target_snapshot=snapshot,
             max_position_age_seconds=effective.max_account_data_age_seconds,
         )
+        health = await gateway.health()
+        account_type = health.get("accountType") if isinstance(health, dict) else None
+        if (
+            not isinstance(health, dict)
+            or health.get("ok") is not True
+            or health.get("gatewayContractVersion") != 3
+            or account_type not in {"DEMO", "REAL"}
+            or health.get("accountRef") != inputs.raw_account.get("accountRef")
+            or health.get("accountSessionRef")
+            != inputs.raw_account.get("accountSessionRef")
+            or account_type != inputs.raw_account.get("accountType")
+        ):
+            raise ValueError("fresh gateway health/account identity mismatch")
         async with async_session_factory() as session:
             account_ref = str(inputs.raw_account.get("accountRef") or "").strip()
             reserved = await calculate_backend_reserved_cash(
@@ -285,13 +306,13 @@ async def with_fresh_account_sizing_context(
                 session, request_id=req.request_id, symbol=req.symbol
             )
             await session.commit()
-        return req.model_copy(update={"account_sizing_context": context})
+        return req.model_copy(update={"account_sizing_context": context}), account_type
     except Exception:
         logger.exception(
-            "Fresh account normalization failed; BUY remains blocked request_id=%s",
+            "Fresh account verification/normalization failed; BUY remains blocked request_id=%s",
             req.request_id,
         )
-        return req
+        return req, None
 
 
 def _has_explicit_daily_trade_count(req: SignalRequest) -> bool:
@@ -391,7 +412,12 @@ async def evaluate_symbol(
     dispatch_eligible = not research_only
 
     # == 4. Runtime kontroller ============================================
-    sig_req, runtime_engine, kill_switch_enabled = await with_runtime_controls(sig_req)
+    (
+        sig_req,
+        runtime_engine,
+        kill_switch_enabled,
+        demo_allow_downtrend_buy,
+    ) = await with_runtime_controls(sig_req)
     sig_req = await with_resolved_daily_trade_count(sig_req)
     sig_req = await with_trade_eligibility(sig_req)
 
@@ -563,13 +589,23 @@ async def evaluate_symbol(
     # == 7. RiskEngine (makro rejim filtresiyle) ==========================
     decision = dict_to_risk_decision(raw, sig_req)
     if decision.action == SignalAction.BUY and not research_only:
-        sig_req = await with_fresh_account_sizing_context(
+        sig_req, verified_account_type = await with_fresh_account_sizing_context(
             sig_req,
             gateway=gateway,
             snapshot=snapshot,
             runtime_engine=runtime_engine,
         )
-    response = runtime_engine.evaluate(sig_req, decision, market_regime=market_regime)
+        response = runtime_engine.evaluate(
+            sig_req,
+            decision,
+            market_regime=market_regime,
+            account_type=verified_account_type,
+            allow_demo_downtrend_buy=demo_allow_downtrend_buy,
+        )
+    else:
+        response = runtime_engine.evaluate(
+            sig_req, decision, market_regime=market_regime
+        )
     await persist_sizing_audit(sig_req, runtime_engine)
     from app.services.news_risk_lock import apply_news_risk_lock
 

@@ -74,6 +74,13 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
         "false",
         "Acil durdurma: açıkken tüm sinyal değerlendirmeleri WAIT döner, hiçbir emir gönderilmez.",
     ),
+    "demoAllowDowntrendBuy": ConfigDefinition(
+        "demoAllowDowntrendBuy",
+        "bool",
+        "false",
+        "Yalnızca doğrulanmış DEMO hesapta XU100 DOWNTREND BUY engelini kaldırır. "
+        "REAL veya doğrulanamayan hesaplarda engel her zaman devam eder.",
+    ),
     # ── v2 mod katmanı: tek çalışma modu anahtarı systemMode. Eski
     # tradingMode/botMode/botEnableDemoOrders/botEnableRealOrders/
     # tradingKillSwitchActive/forceSafeMode kaldırıldı.
@@ -566,6 +573,7 @@ CONFIG_DEFINITIONS: dict[str, ConfigDefinition] = {
 RISKY_CONFIG_KEYS = {
     "systemMode",
     "realAccountArmed",
+    "demoAllowDowntrendBuy",
     "dailyMaxLossPct",
     "dailyMaxLossTl",
     "killSwitchEnabled",
@@ -650,6 +658,7 @@ CONFIG_SECTION_DEFINITIONS = (
         keys=(
             "systemMode",
             "killSwitchEnabled",
+            "demoAllowDowntrendBuy",
             "scannerEnabled",
             "aiToolCallingEnabled",
             "dailyMaxLossPct",
@@ -840,6 +849,7 @@ CONFIG_LABELS: dict[str, str] = {
     "timezone": "Saat Dilimi",
     "systemMode": "Çalışma Modu (OBSERVE_ONLY / AUTO_TRADE)",
     "killSwitchEnabled": "Acil Durdurma (Kill Switch)",
+    "demoAllowDowntrendBuy": "DEMO Düşüş Trendinde BUY İzni",
     "scannerEnabled": "Tarayıcı Aktif",
     "aiToolCallingEnabled": "AI Tool-Calling Aktif",
     "dailyMaxLossPct": "Günlük Maks. Zarar (%)",

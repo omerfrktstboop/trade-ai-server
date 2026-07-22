@@ -173,6 +173,13 @@ async def is_kill_switch_enabled(session: AsyncSession) -> bool:
     return _parse_bool(await get_admin_config_value(session, "killSwitchEnabled"))
 
 
+async def is_demo_downtrend_buy_enabled(session: AsyncSession) -> bool:
+    """Return the DB-backed DEMO-only DOWNTREND BUY policy switch."""
+    return _parse_bool(
+        await get_admin_config_value(session, "demoAllowDowntrendBuy")
+    )
+
+
 # ── v2 mod katmanı (Faz 4) ──────────────────────────────────────────────────
 
 

@@ -57,7 +57,12 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
     5. Log to ``logs/signal.log``.
     6. Persist to ``market_snapshots``, ``ai_decisions``, ``risk_decisions``.
     """
-    body, runtime_engine, kill_switch_enabled = await with_runtime_controls(body)
+    (
+        body,
+        runtime_engine,
+        kill_switch_enabled,
+        _demo_allow_downtrend_buy,
+    ) = await with_runtime_controls(body)
     # ``tradeEligible`` is server-authoritative.  Never trust the value sent by
     # a caller of this diagnostic endpoint; resolve the active, non-expired DB
     # watchlist row exactly as the in-process scanner does.

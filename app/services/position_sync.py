@@ -29,6 +29,9 @@ from app.services.matriks_gateway import (
     gateway_client,
 )
 from app.services.decision_gate import decision_cache
+from app.services.lifecycle_flat_reconciliation import (
+    reconcile_open_lifecycles_to_ownership,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +97,17 @@ async def sync_positions_from_gateway(gateway: MatriksGatewayClient) -> int:
                 )
             else:
                 await session.execute(delete(BotPosition))
+            # bot_positions temizliğiyle simetrik: doğrulanmış snapshot artık
+            # tutmadığımızı söylediği sembollerin OPEN lifecycle'larını da
+            # flat'e eşitle. Aynı transaction, aynı koruma koşulları.
+            await reconcile_open_lifecycles_to_ownership(
+                session,
+                positions.keys(),
+                reason=(
+                    "Position no longer held per verified gateway snapshot "
+                    "(out-of-bot exit); reconciled to flat."
+                ),
+            )
             await session.commit()
             decision_cache.clear()
     except Exception:

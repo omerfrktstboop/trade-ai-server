@@ -50,3 +50,6 @@ logs/
 .hermes/
 CLAUDE_CODE_BRIEF.md
 task.md.txt
+
+# Kişisel trade planı - repoya gitmemeli, sadece bu makinede kalsın
+docs/demo-kisa-vadeli-trade-plani.txt

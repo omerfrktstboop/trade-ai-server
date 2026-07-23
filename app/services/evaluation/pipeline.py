@@ -18,7 +18,7 @@ from app.core.risk_config import risk_config
 from app.db.session import async_session_factory
 from sqlalchemy import select
 
-from app.models.db import TradeWatchlistSymbol
+from app.models.db import OrderLog, TradeWatchlistSymbol
 from app.models.signal import (
     EntryRange,
     OrderType,
@@ -700,6 +700,58 @@ async def evaluate_symbol(
             decision.action = SignalAction.WAIT
             decision.reason = (decision.reason or "") + f" | {cooldown_reason}"
             payload["decisionSource"] = "reentry-cooldown"
+
+    # == 6.85. Add-on BUY / pyramiding kapalı (Plan Faz 2.5) =============
+    # İlk pilotta bir pozisyon tamamen kapanmadan ya da aynı sembolde bekleyen
+    # bir BUY emri varken yeni giriş yapılmaz. Flag açıkken böyle bir BUY
+    # WAIT'e indirilir.
+    if (
+        settings.deterministic_entry_enabled
+        and decision.action == SignalAction.BUY
+        and not research_only
+    ):
+        pyramiding_block: str | None = None
+        if sig_req.bot_position_qty > 0:
+            pyramiding_block = (
+                "Add-on BUY disabled (pilot): open position "
+                f"qty={sig_req.bot_position_qty}"
+            )
+        else:
+            try:
+                async with async_session_factory() as pb_session:
+                    pending_buy = (
+                        await pb_session.execute(
+                            select(OrderLog)
+                            .where(
+                                OrderLog.symbol == sig_req.symbol,
+                                OrderLog.action == "BUY",
+                                OrderLog.status.not_in(
+                                    (
+                                        "FILLED",
+                                        "REJECTED",
+                                        "CANCELED",
+                                        "CANCELLED",
+                                        "EXPIRED",
+                                    )
+                                ),
+                            )
+                            .limit(1)
+                        )
+                    ).scalar_one_or_none()
+            except Exception:
+                logger.exception(
+                    "Pending-BUY check failed symbol=%s", sig_req.symbol
+                )
+                pending_buy = None
+            if pending_buy is not None:
+                pyramiding_block = (
+                    "New entry blocked: a BUY order is already pending for "
+                    "this symbol"
+                )
+        if pyramiding_block is not None:
+            decision.action = SignalAction.WAIT
+            decision.reason = (decision.reason or "") + f" | {pyramiding_block}"
+            payload["decisionSource"] = "pyramiding-disabled"
 
     # == 6.9. Deterministik fiyat seviyeleri (Plan Faz 1.5) ==============
     # Flag açıkken model-üretimli entry/stop/target emir kararında

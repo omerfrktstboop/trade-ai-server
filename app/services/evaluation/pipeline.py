@@ -38,8 +38,14 @@ from app.services.account_context import (
     fetch_fresh_account_inputs,
     get_account_reservation_handling,
 )
+from app.services.ai_call_gate import (
+    compute_setup_fingerprint,
+    resolve_bar_key,
+    try_claim_ai_call,
+)
 from app.services.block_reason_classifier import classify_block_reason
 from app.services.cash_reservation import calculate_backend_reserved_cash
+from app.services.entry_setup import compute_entry_levels, compute_setup_score
 from app.services.daily_trade_count import get_today_trade_counts
 from app.services.decision_gate import (
     decision_context_fingerprint,
@@ -125,6 +131,7 @@ class EvaluationResult:
     evaluation_purpose: str = "TRADING"
     research_score: float | None = None
     opportunity_score: float | None = None
+    setup_score: float | None = None
     target_allocation_pct: float | None = None
     decision_entry_price: Decimal | None = None
     decision_target_price: Decimal | None = None
@@ -577,6 +584,74 @@ async def evaluate_symbol(
         payload["decisionSource"] = "preflight-gate"
         payload["preflightBlockCategory"] = gate_category
 
+    # == 6.6. Deterministik entry kapısı (Plan Faz 1.3) ==================
+    # Flag açıkken: zayıf ya da yetersiz-veri setup'ları LLM'e gitmeden elenir;
+    # güçlü setup'lar bar/setup bazında kalıcı AI-call claim ile kapılanır
+    # (aynı bar içinde aynı setup tekrar LLM'e sorulmaz, restart sonrası dahil).
+    setup_score_value: float | None = None
+    if settings.deterministic_entry_enabled and raw is None and not research_only:
+        setup = compute_setup_score(sig_req)
+        setup_score_value = setup.total
+        payload["setupScore"] = setup.total
+        payload["setupComponents"] = setup.components
+        threshold = settings.deterministic_entry_min_setup_score
+        if not setup.data_sufficient or setup.total < threshold:
+            raw = {
+                "action": "WAIT",
+                "confidence": 0.0,
+                "risk_score": 0.0,
+                "reason": (
+                    f"Deterministic setup gate: score={setup.total} "
+                    f"threshold={threshold} dataSufficient={setup.data_sufficient}"
+                ),
+                "block_category": "SETUP_SCORE_LOW",
+            }
+            payload["decisionSource"] = "deterministic-setup-gate"
+        else:
+            levels_preview = compute_entry_levels(sig_req)
+            fingerprint = compute_setup_fingerprint(
+                action="BUY",
+                setup_score=setup.total,
+                entry=levels_preview.entry if levels_preview else None,
+                stop_loss=levels_preview.stop_loss if levels_preview else None,
+                target=levels_preview.target if levels_preview else None,
+            )
+            try:
+                async with async_session_factory() as claim_session:
+                    claimed = await try_claim_ai_call(
+                        claim_session,
+                        symbol=sig_req.symbol,
+                        bar_key=resolve_bar_key(sig_req),
+                        setup_fingerprint=fingerprint,
+                        evaluation_purpose=evaluation_purpose,
+                    )
+                    await claim_session.commit()
+            except Exception:
+                # Claim altyapısı hatası LLM'i engellememeli (fail-open).
+                logger.exception("AI call claim failed symbol=%s", sig_req.symbol)
+                claimed = True
+            if not claimed:
+                raw = {
+                    "action": "WAIT",
+                    "confidence": 0.0,
+                    "risk_score": 0.0,
+                    "reason": "AI already asked for this bar/setup; skip re-ask",
+                    "block_category": "AI_CALL_ALREADY_CLAIMED",
+                }
+                payload["decisionSource"] = "ai-call-gate"
+            else:
+                # Güçlü, yeni setup: AI'ya deterministik bağlamı ver (veto için).
+                ai_context["deterministicSetup"] = {
+                    "setupScore": setup.total,
+                    "components": setup.components,
+                    "entry": float(levels_preview.entry) if levels_preview else None,
+                    "stopLoss": float(levels_preview.stop_loss)
+                    if levels_preview
+                    else None,
+                    "target": float(levels_preview.target) if levels_preview else None,
+                    "rewardRisk": levels_preview.reward_risk if levels_preview else None,
+                }
+
     # v2 Faz 5: 15 sn'lik DecisionCache devre dışı bırakıldı — portföy
     # taramasındaki önem dedektörü (app/services/significance.py) LLM
     # çağrısını zaten baseline'a göre kapılıyor; kısa-TTL cache'in kalan
@@ -683,6 +758,7 @@ async def evaluate_symbol(
             if "opportunity_score" in raw
             else None
         ),
+        setup_score=setup_score_value,
         target_allocation_pct=(
             _safe_float(raw.get("target_allocation_pct"))
             if "target_allocation_pct" in raw

@@ -160,6 +160,12 @@ class Settings(BaseSettings):
     outcome_labeler_interval_seconds: int = 300
     measurement_reconciliation_enabled: bool = True
     measurement_reconciliation_interval_seconds: int = 300
+    # Deterministik entry akışı (Plan Faz 1.3-1.5). Varsayılan KAPALI: açıkken
+    # canlı karar akışını değiştirir — zayıf setup'lar LLM'e gitmeden elenir,
+    # fiyat seviyeleri deterministik hesaplanır, AI yalnızca BUY/WAIT veto
+    # katmanı olur. Kapalıyken mevcut LLM-üretimli davranış birebir korunur.
+    deterministic_entry_enabled: bool = False
+    deterministic_entry_min_setup_score: float = 72.0
 
     # Makro filtre: piyasa geneli rejim bu endeks sembolünden okunur.
     # Boş string makro filtreyi tamamen kapatır.

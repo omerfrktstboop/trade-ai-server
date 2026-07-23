@@ -557,13 +557,21 @@ class SymbolScanner:
                 await self._maybe_send_order(result)
 
         if not rotation_active:
+            # Deterministik entry açıkken shortlist önceliği deterministik setup
+            # skorundan gelir (Plan Faz 1.3); kapalıyken eski opportunity_score
+            # sıralaması korunur.
+            def _rank_key(result: EvaluationResult) -> float:
+                if settings.deterministic_entry_enabled and result.setup_score is not None:
+                    return result.setup_score
+                return result.opportunity_score or -1
+
             buy_results = sorted(
                 (
                     result
                     for result in evaluated_results
                     if result.response.action == SignalAction.BUY
                 ),
-                key=lambda result: result.opportunity_score or -1,
+                key=_rank_key,
                 reverse=True,
             )
             for result in buy_results:

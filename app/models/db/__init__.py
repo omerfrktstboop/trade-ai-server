@@ -37,3 +37,4 @@ from app.models.db.tool_call_audit import ToolCallAudit  # noqa: F401
 from app.models.db.account_event import AccountEvent  # noqa: F401
 from app.models.db.rotation_plan import RotationPlan  # noqa: F401
 from app.models.db.ai_call_claim import AiCallClaim  # noqa: F401
+from app.models.db.exit_intent import ExitIntent  # noqa: F401

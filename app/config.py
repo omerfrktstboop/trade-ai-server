@@ -166,6 +166,11 @@ class Settings(BaseSettings):
     # katmanı olur. Kapalıyken mevcut LLM-üretimli davranış birebir korunur.
     deterministic_entry_enabled: bool = False
     deterministic_entry_min_setup_score: float = 72.0
+    # Deterministik hızlı exit (Plan Faz 2). Varsayılan KAPALI: açıkken bağımsız
+    # exit monitörü çalışır ve scanner-tick'e bağlı stop_loss_guard devre dışı
+    # kalır (tek yetki kuralı). Kapalıyken mevcut exit davranışı birebir korunur.
+    deterministic_exit_enabled: bool = False
+    exit_monitor_interval_seconds: float = 7.0
 
     # Makro filtre: piyasa geneli rejim bu endeks sembolünden okunur.
     # Boş string makro filtreyi tamamen kapatır.

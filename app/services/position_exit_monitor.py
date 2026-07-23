@@ -177,6 +177,13 @@ class PositionExitMonitor:
 
     async def _tick_once(self) -> int:
         policy = get_active_exit_policy()
+
+        # Faz 2.3: dolmayan stale çıkış emirlerini iptal et (urgency'ye göre).
+        # İptal edilen semboller bu tur yeniden değerlendirilmez — cancel
+        # gateway'de otururken çift SELL göndermemek için; bir sonraki tur taze
+        # best bid'den yeniden tetikler.
+        repriced_symbols = await self._reprice_stale_intents(policy)
+
         async with async_session_factory() as session:
             from sqlalchemy import select
 
@@ -199,6 +206,8 @@ class PositionExitMonitor:
 
         dispatched = 0
         for lc in open_positions:
+            if lc.symbol.upper() in repriced_symbols:
+                continue
             trigger = await self._evaluate_position(lc, policy)
             if trigger is None:
                 continue
@@ -311,6 +320,97 @@ class PositionExitMonitor:
         )
         await self._dispatch(result)
         return True
+
+    async def _reprice_stale_intents(self, policy: ExitPolicy) -> set[str]:
+        """Dolmayan stale çıkış emirlerini iptal et; iptal edilen sembolleri döndür.
+
+        Acil çıkışlar (stop/breakeven/stagnation/max-hold) ``urgent_reprice``,
+        pasif kâr-al (hard target/trailing) ``passive_reprice`` penceresinden
+        sonra reprice edilir. İptal edilen ExitIntent CANCELED işaretlenir ve
+        pozisyon açık kaldığı için bir sonraki tur taze fiyattan yeniden
+        tetiklenir (cancel-and-re-fire).
+        """
+        from sqlalchemy import select
+
+        from app.models.db import OrderLog
+        from app.services.exit_policy import (
+            open_exit_intents,
+            update_exit_intent_status,
+        )
+
+        urgent_reasons = {"STOP", "BREAKEVEN", "STAGNATION", "MAX_HOLD"}
+        now = datetime.now(timezone.utc)
+        repriced: set[str] = set()
+        async with async_session_factory() as session:
+            intents = await open_exit_intents(session)
+            for intent in intents:
+                trig = intent.trigger_at
+                if trig.tzinfo is None:
+                    trig = trig.replace(tzinfo=timezone.utc)
+                window = (
+                    policy.urgent_reprice_seconds
+                    if intent.exit_reason in urgent_reasons
+                    else policy.passive_reprice_seconds
+                )
+                if (now - trig).total_seconds() < window:
+                    continue
+
+                order = (
+                    await session.execute(
+                        select(OrderLog).where(OrderLog.request_id == intent.request_id)
+                    )
+                ).scalar_one_or_none()
+                if order is None:
+                    # Emre hiç dönüşmemiş (dispatch kapıları reddetmiş); niyeti
+                    # serbest bırak ki açık pozisyon yeniden tetiklenebilsin.
+                    await update_exit_intent_status(session, intent, status="FAILED")
+                    continue
+
+                status = (order.status or "").upper()
+                filled = bool(
+                    order.filled_qty
+                    and order.order_qty
+                    and order.filled_qty >= order.order_qty
+                )
+                if status == "FILLED" or filled:
+                    await update_exit_intent_status(
+                        session, intent, status="FILLED", order_id=order.order_id
+                    )
+                    continue
+                if status in {"REJECTED", "ERROR", "CANCELED"}:
+                    await update_exit_intent_status(
+                        session, intent, status="FAILED", order_id=order.order_id
+                    )
+                    continue
+
+                # Hâlâ bekliyor ve stale → iptal et, yeniden tetiklenmeye bırak.
+                if order.order_id:
+                    try:
+                        await self._gateway.cancel_order(order.order_id)
+                    except (GatewayUnavailable, GatewayError) as exc:
+                        logger.warning(
+                            "Exit reprice cancel failed symbol=%s orderId=%s %s",
+                            intent.symbol,
+                            order.order_id,
+                            exc,
+                        )
+                        continue
+                await update_exit_intent_status(
+                    session,
+                    intent,
+                    status="CANCELED",
+                    order_id=order.order_id,
+                    bump_generation=True,
+                )
+                repriced.add(intent.symbol.upper())
+                logger.warning(
+                    "EXIT_INTENT_REPRICED symbol=%s reason=%s ageSec=%.0f",
+                    intent.symbol,
+                    intent.exit_reason,
+                    (now - trig).total_seconds(),
+                )
+            await session.commit()
+        return repriced
 
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():

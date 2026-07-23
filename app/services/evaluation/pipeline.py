@@ -20,6 +20,7 @@ from sqlalchemy import select
 
 from app.models.db import TradeWatchlistSymbol
 from app.models.signal import (
+    EntryRange,
     OrderType,
     SignalAction,
     SignalRequest,
@@ -663,6 +664,40 @@ async def evaluate_symbol(
 
     # == 7. RiskEngine (makro rejim filtresiyle) ==========================
     decision = dict_to_risk_decision(raw, sig_req)
+
+    # == 6.9. Deterministik fiyat seviyeleri (Plan Faz 1.5) ==============
+    # Flag açıkken model-üretimli entry/stop/target emir kararında
+    # KULLANILMAZ; seviyeler best-ask + ATR'den deterministik hesaplanır. AI
+    # yalnızca yön onayı (BUY/WAIT) verir. Güvenli bir setup üretilemiyorsa
+    # (aşırı oynak / veri eksik) BUY, WAIT'e indirilir.
+    if (
+        settings.deterministic_entry_enabled
+        and decision.action == SignalAction.BUY
+        and not research_only
+    ):
+        levels = compute_entry_levels(sig_req)
+        if levels is None:
+            decision.action = SignalAction.WAIT
+            decision.entry_range = None
+            decision.stop_loss = None
+            decision.target_price = None
+            decision.reason = (
+                (decision.reason or "")
+                + " | Deterministik seviye üretilemedi (oynaklık/veri); WAIT"
+            )
+            payload["decisionSource"] = "deterministic-levels-unavailable"
+        else:
+            decision.entry_range = EntryRange(min=levels.entry, max=levels.entry)
+            decision.stop_loss = levels.stop_loss
+            decision.target_price = levels.target
+            payload["deterministicLevels"] = {
+                "entry": float(levels.entry),
+                "stopLoss": float(levels.stop_loss),
+                "target": float(levels.target),
+                "rewardRisk": levels.reward_risk,
+                "stopDistancePct": levels.stop_distance_pct,
+            }
+
     if decision.action == SignalAction.BUY and not research_only:
         sig_req, verified_account_type = await with_fresh_account_sizing_context(
             sig_req,

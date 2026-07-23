@@ -31,6 +31,7 @@ from app.models.db import (
     RiskDecision,
 )
 from app.services.block_reason_classifier import classify_block_reason
+from app.services.event_counters import build_event_counters
 from app.services.fill_ledger import to_decimal
 from app.services.matriks_gateway import (
     GatewayError,
@@ -143,6 +144,9 @@ async def build_performance_report(
             ).all()
         )
 
+        # Faz 3.1: gerçek order/lifecycle olay sayaçları (risk kararları değil).
+        event_counters = await build_event_counters(session, since)
+
     actions = Counter(row.action for row in risks)
     categories = Counter(
         classify_block_reason(row.reason) for row in risks if not row.allow_order
@@ -204,6 +208,7 @@ async def build_performance_report(
         + repair_status_counts.get("PROCESSING", 0),
         "failedRepairJobCount": repair_status_counts.get("FAILED", 0)
         + repair_status_counts.get("MANUAL_REVIEW", 0),
+        "eventCounters": event_counters,
         **ledger,
         **sessions,
         **slippage,

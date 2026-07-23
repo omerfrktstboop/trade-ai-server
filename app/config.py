@@ -154,6 +154,12 @@ class Settings(BaseSettings):
     order_sync_enabled: bool = True
     order_sync_interval_seconds: int = 900
     order_pending_timeout_minutes: int = 15
+    # Ölçüm hattı (Faz 0): karar sonuçlarını etiketler ve fill/lifecycle
+    # tutarsızlıklarını onarır. Trade akışına dokunmaz; emir gönderemez.
+    outcome_labeler_enabled: bool = True
+    outcome_labeler_interval_seconds: int = 300
+    measurement_reconciliation_enabled: bool = True
+    measurement_reconciliation_interval_seconds: int = 300
 
     # Makro filtre: piyasa geneli rejim bu endeks sembolünden okunur.
     # Boş string makro filtreyi tamamen kapatır.

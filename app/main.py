@@ -108,6 +108,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         order_synchronizer.start()
 
+    if settings.outcome_labeler_enabled:
+        from app.services.measurement_workers import outcome_labeler_worker
+
+        outcome_labeler_worker.start()
+
+    if settings.measurement_reconciliation_enabled:
+        from app.services.measurement_workers import measurement_reconciliation_worker
+
+        measurement_reconciliation_worker.start()
+
     async with AsyncExitStack() as stack:
         if _mcp_session_manager is not None:
             await stack.enter_async_context(_mcp_session_manager.run())
@@ -126,6 +136,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from app.services.order_sync import order_synchronizer
 
         await order_synchronizer.stop()
+    if settings.outcome_labeler_enabled:
+        from app.services.measurement_workers import outcome_labeler_worker
+
+        await outcome_labeler_worker.stop()
+    if settings.measurement_reconciliation_enabled:
+        from app.services.measurement_workers import measurement_reconciliation_worker
+
+        await measurement_reconciliation_worker.stop()
     print(f"👋 {settings.app_name} shutting down...")
 
 

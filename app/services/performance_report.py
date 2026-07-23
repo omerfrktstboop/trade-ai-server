@@ -14,7 +14,9 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from statistics import median
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
@@ -35,6 +37,11 @@ from app.services.matriks_gateway import (
     GatewayUnavailable,
     MatriksGatewayClient,
 )
+
+# Round-trip'ler tamamlandıkları takvim gününe (BIST seansına) göre gruplanır.
+# Sistem geneli gibi Europe/Istanbul yerel saatiyle: UTC'ye göre gruplasaydık
+# akşam kapanan işlemler bir sonraki güne kayardı.
+_ISTANBUL = ZoneInfo("Europe/Istanbul")
 
 
 def range_start(value: str) -> datetime | None:
@@ -144,6 +151,7 @@ async def build_performance_report(
     by_symbol_decisions = Counter(row.symbol for row in risks)
 
     ledger = _build_ledger_summary(closed_lifecycles, outcomes_by_request)
+    sessions = _session_summary(closed_lifecycles)
     slippage = _slippage_summary(fills)
     outcome_summary = _outcome_summary(outcomes)
     missing_fill_count = _count_missing_fills(orders, fills)
@@ -197,6 +205,7 @@ async def build_performance_report(
         "failedRepairJobCount": repair_status_counts.get("FAILED", 0)
         + repair_status_counts.get("MANUAL_REVIEW", 0),
         **ledger,
+        **sessions,
         **slippage,
         **outcome_summary,
     }
@@ -392,6 +401,70 @@ def _build_ledger_summary(
         "resultsBySymbol": _finalize(by_symbol),
         "resultsByMarketRegime": _finalize(by_regime),
         "resultsByDiscoverySource": _finalize(by_discovery),
+    }
+
+
+def _session_summary(closed_lifecycles: list[PositionLifecycle]) -> dict[str, Any]:
+    """Tamamlanmış round-trip'leri BIST seansına (Europe/Istanbul takvim günü)
+    göre grupla. Pilotun başarı kriteri "seans başına medyan 5-10 round trip"
+    ve net beklenti seans düzeyinde okunabilsin diye (plan bölüm 8/11).
+
+    PnL/beklenti metrikleri ``pnl_verified=true`` lifecycle'lardan hesaplanır
+    (ledger özetiyle aynı ilke); round-trip sayımı ise gerçekten kapanmış tüm
+    lifecycle'ları içerir çünkü reconciled bir çıkış da tamamlanmış bir
+    round-trip'tir, yalnızca P&L'i doğrulanmamıştır.
+    """
+    by_day: dict[str, list[PositionLifecycle]] = defaultdict(list)
+    for lc in closed_lifecycles:
+        if lc.closed_at is None:
+            continue
+        closed_at = lc.closed_at
+        if closed_at.tzinfo is None:
+            closed_at = closed_at.replace(tzinfo=timezone.utc)
+        day = closed_at.astimezone(_ISTANBUL).date().isoformat()
+        by_day[day].append(lc)
+
+    sessions: list[dict[str, Any]] = []
+    for day in sorted(by_day):
+        day_lcs = by_day[day]
+        verified = [lc for lc in day_lcs if lc.pnl_verified]
+        wins = [lc for lc in verified if (lc.net_realized_pnl_tl or Decimal("0")) > 0]
+        net_pnl = sum((lc.net_realized_pnl_tl or Decimal("0")) for lc in verified)
+        gross_pnl = sum((lc.gross_realized_pnl_tl or Decimal("0")) for lc in verified)
+        cost = sum(
+            (lc.total_buy_cost_tl or Decimal("0")) + (lc.total_sell_cost_tl or Decimal("0"))
+            for lc in day_lcs
+        )
+        hold_minutes = [
+            (lc.closed_at - lc.opened_at).total_seconds() / 60
+            for lc in day_lcs
+            if lc.closed_at is not None and lc.opened_at is not None
+        ]
+        sessions.append(
+            {
+                "date": day,
+                "completedRoundTrips": len(day_lcs),
+                "verifiedRoundTrips": len(verified),
+                "winningTrades": len(wins),
+                "winRate": round(len(wins) / len(verified) * 100, 2) if verified else None,
+                "grossPnl": _f(gross_pnl) if verified else None,
+                "netPnl": _f(net_pnl) if verified else None,
+                "transactionCost": _f(cost) if day_lcs else None,
+                # Net beklenti = doğrulanmış round-trip başına ortalama net P&L.
+                "netExpectancyPerTrip": _f(net_pnl / len(verified)) if verified else None,
+                "avgHoldingMinutes": round(sum(hold_minutes) / len(hold_minutes), 1)
+                if hold_minutes
+                else None,
+            }
+        )
+
+    round_trip_counts = [s["completedRoundTrips"] for s in sessions]
+    return {
+        "sessions": sessions,
+        "sessionCount": len(sessions),
+        "medianRoundTripsPerSession": float(median(round_trip_counts))
+        if round_trip_counts
+        else None,
     }
 
 

@@ -225,7 +225,11 @@ class AiProvider(ABC):
 
     @abstractmethod
     async def decide(
-        self, payload: dict[str, Any], *, request_id: str | None = None
+        self,
+        payload: dict[str, Any],
+        *,
+        request_id: str | None = None,
+        veto_only: bool = False,
     ) -> dict[str, Any]:
         """Produce a trading decision from an ``AiDecisionContext`` payload.
 
@@ -265,7 +269,11 @@ class MockAiProvider(AiProvider):
     """Always returns WAIT — safe no-op for testing and development."""
 
     async def decide(
-        self, payload: dict[str, Any], *, request_id: str | None = None
+        self,
+        payload: dict[str, Any],
+        *,
+        request_id: str | None = None,
+        veto_only: bool = False,
     ) -> dict[str, Any]:
         _compact_context_payload(payload)
         logger.debug("MockAiProvider.decide called — returning WAIT")
@@ -358,7 +366,11 @@ class DeepSeekProvider(AiProvider):
         self.last_failure_at = None
 
     async def decide(
-        self, payload: dict[str, Any], *, request_id: str | None = None
+        self,
+        payload: dict[str, Any],
+        *,
+        request_id: str | None = None,
+        veto_only: bool = False,
     ) -> dict[str, Any]:
         """Send compact decision context to DeepSeek, parse JSON response.
 
@@ -391,7 +403,9 @@ class DeepSeekProvider(AiProvider):
         t0 = time.monotonic()
         self.last_attempt_at = t0
 
-        if self.tools_enabled:
+        # Veto akışı (Plan Faz 1.4) tool'suz çalışır: seviyeler zaten
+        # deterministik, AI yalnızca BUY/WAIT onayı verir.
+        if self.tools_enabled and not veto_only:
             # Fix #5: 12 sn'lik toplam bütçe LLM turları + tool çağrıları +
             # audit dahil KESİN bir asyncio.timeout ile uygulanır. Deadline
             # kontrolleri son turu erken zorlar; bu timeout ise takılan bir
@@ -408,7 +422,7 @@ class DeepSeekProvider(AiProvider):
                     "_transient_failure": True,
                 }
         else:
-            system_content = get_trading_system_prompt()
+            system_content = get_trading_system_prompt(veto_only=veto_only)
             user_content = _build_payload_str(payload)
             logger.info(
                 "DeepSeek input size systemChars=%d contextChars=%d tools=false",

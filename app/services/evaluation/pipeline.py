@@ -659,8 +659,18 @@ async def evaluate_symbol(
     # değeri yoktu. Sınıf kullanım dışıdır ve Faz 8 cutover'ında silinecek.
     if raw is None:
         provider = provider or get_default_provider()
-        raw = await provider.decide(ai_context, request_id=sig_req.request_id)
-        payload["decisionSource"] = "llm"
+        # Veto akışı (Plan Faz 1.4) yalnızca yeni girişte: açık pozisyon
+        # yönetimi (SELL/HOLD) tam prompt'a ihtiyaç duyar, deterministik exit
+        # (Faz 2) henüz yok. Research değerlendirmeleri de analitiktir.
+        veto_only = bool(
+            settings.deterministic_entry_enabled
+            and not research_only
+            and sig_req.bot_position_qty == 0
+        )
+        raw = await provider.decide(
+            ai_context, request_id=sig_req.request_id, veto_only=veto_only
+        )
+        payload["decisionSource"] = "llm-veto" if veto_only else "llm"
 
     # == 7. RiskEngine (makro rejim filtresiyle) ==========================
     decision = dict_to_risk_decision(raw, sig_req)

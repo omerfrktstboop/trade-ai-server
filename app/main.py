@@ -118,6 +118,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         measurement_reconciliation_worker.start()
 
+    if settings.deterministic_exit_enabled:
+        # Bağımsız exit monitörü (Plan Faz 2.1). Dispatch scanner'ın
+        # _maybe_send_order'ıdır; tüm çıkışlar aynı güvenlik kapılarından geçer.
+        from app.services.position_exit_monitor import position_exit_monitor
+        from app.services.scanner import scanner
+
+        position_exit_monitor.set_dispatch(scanner._maybe_send_order)
+        position_exit_monitor.start()
+
     async with AsyncExitStack() as stack:
         if _mcp_session_manager is not None:
             await stack.enter_async_context(_mcp_session_manager.run())
@@ -144,6 +153,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from app.services.measurement_workers import measurement_reconciliation_worker
 
         await measurement_reconciliation_worker.stop()
+    if settings.deterministic_exit_enabled:
+        from app.services.position_exit_monitor import position_exit_monitor
+
+        await position_exit_monitor.stop()
     print(f"👋 {settings.app_name} shutting down...")
 
 

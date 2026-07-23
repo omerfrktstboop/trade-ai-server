@@ -407,7 +407,10 @@ class SymbolScanner:
         ):
             # Risk-reducing deterministic exits run before slower market-data
             # discovery/research, but still enter the normal dispatch gates.
-            await self._run_stop_loss_guard()
+            # Tek yetki (Plan Faz 2.1): deterministik exit monitörü açıkken
+            # çıkışları o üstlenir; scanner-tick guard'ı devre dışı bırakılır.
+            if not settings.deterministic_exit_enabled:
+                await self._run_stop_loss_guard()
 
         # Discovery yalnızca gateway market-data yüzeyine dayanır; account
         # positionsLoaded hazır olana kadar bekletilirse research evreni boş

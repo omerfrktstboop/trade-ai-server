@@ -40,6 +40,13 @@ class ExitPolicy:
     # Pasif kâr-al emri dolmazsa bu süre sonra cancel/reprice.
     passive_reprice_seconds: float = 90.0
 
+    # Re-entry cooldown (plan bölüm 7): pozisyonu tamamen kapatan final SELL
+    # fill'inden itibaren, çıkış nedenine göre. Kâr-al sonrası kısa, zaman
+    # çıkışı sonrası orta, stop sonrası uzun bekleme.
+    reentry_cooldown_take_profit_minutes: float = 5.0
+    reentry_cooldown_time_exit_minutes: float = 10.0
+    reentry_cooldown_stop_minutes: float = 17.0
+
 
 DEFAULT_EXIT_POLICY = ExitPolicy()
 

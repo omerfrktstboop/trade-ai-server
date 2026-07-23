@@ -47,6 +47,8 @@ from app.services.ai_call_gate import (
 from app.services.block_reason_classifier import classify_block_reason
 from app.services.cash_reservation import calculate_backend_reserved_cash
 from app.services.entry_setup import compute_entry_levels, compute_setup_score
+from app.services.exit_policy import get_active_exit_policy
+from app.services.reentry_cooldown import reentry_cooldown_block
 from app.services.daily_trade_count import get_today_trade_counts
 from app.services.decision_gate import (
     decision_context_fingerprint,
@@ -674,6 +676,30 @@ async def evaluate_symbol(
 
     # == 7. RiskEngine (makro rejim filtresiyle) ==========================
     decision = dict_to_risk_decision(raw, sig_req)
+
+    # == 6.8. Re-entry cooldown (Plan Faz 2.4) ===========================
+    # Cooldown, son pozisyonu tamamen kapatan SELL fill'inden (lifecycle
+    # closed_at) başlar ve çıkış nedenine göre değişir. Flag açıkken cooldown
+    # içindeki bir BUY, WAIT'e indirilir.
+    if (
+        settings.deterministic_entry_enabled
+        and decision.action == SignalAction.BUY
+        and not research_only
+    ):
+        try:
+            async with async_session_factory() as cd_session:
+                cooldown_reason = await reentry_cooldown_block(
+                    cd_session, sig_req.symbol, get_active_exit_policy()
+                )
+        except Exception:
+            logger.exception(
+                "Re-entry cooldown check failed symbol=%s", sig_req.symbol
+            )
+            cooldown_reason = None
+        if cooldown_reason is not None:
+            decision.action = SignalAction.WAIT
+            decision.reason = (decision.reason or "") + f" | {cooldown_reason}"
+            payload["decisionSource"] = "reentry-cooldown"
 
     # == 6.9. Deterministik fiyat seviyeleri (Plan Faz 1.5) ==============
     # Flag açıkken model-üretimli entry/stop/target emir kararında

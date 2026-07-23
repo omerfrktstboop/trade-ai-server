@@ -5,11 +5,13 @@ No token or sensitive field is ever written.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import logging.handlers
 from datetime import datetime
 from pathlib import Path
+from queue import Queue
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -39,7 +41,7 @@ def _append_json_line(path: Path, entry: dict[str, Any]) -> None:
         file.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
-def log_signal_evaluation(
+async def log_signal_evaluation(
     *,
     request_id: str,
     symbol: str,
@@ -48,7 +50,11 @@ def log_signal_evaluation(
 ) -> None:
     """Write a single JSON-lines entry to the signal log.
 
-    Every entry is a self-contained JSON object on its own line.
+    Every entry is a self-contained JSON object on its own line. The actual
+    write runs off the event loop (see ``_append_json_line`` callers below) —
+    calling this from a hot async path must never block other requests on
+    disk I/O; that starvation is what caused the connection pile-up this
+    fixes (see ``configure_file_logging``'s docstring for the full story).
     """
     _ensure_log_dir()
 
@@ -61,12 +67,12 @@ def log_signal_evaluation(
     }
 
     try:
-        _append_json_line(LOG_FILE, entry)
+        await asyncio.to_thread(_append_json_line, LOG_FILE, entry)
     except OSError:
         logger.exception("Failed to write signal log entry")
 
 
-def log_matriks_gateway(
+async def log_matriks_gateway(
     *,
     gateway_timestamp: datetime,
     level: str,
@@ -80,10 +86,10 @@ def log_matriks_gateway(
         "source": "TradeAiGateway",
         "message": message,
     }
-    _append_json_line(MATRIKS_LOG_FILE, entry)
+    await asyncio.to_thread(_append_json_line, MATRIKS_LOG_FILE, entry)
 
 
-def log_runtime_event(*, event_type: str, detail: str) -> None:
+async def log_runtime_event(*, event_type: str, detail: str) -> None:
     """Append a durable record of a safety-relevant in-memory runtime event.
 
     Flags such as the startup dispatch hard-block (``app.core.runtime_flags``)
@@ -97,16 +103,17 @@ def log_runtime_event(*, event_type: str, detail: str) -> None:
         "detail": detail,
     }
     try:
-        _append_json_line(RUNTIME_EVENTS_LOG_FILE, entry)
+        await asyncio.to_thread(_append_json_line, RUNTIME_EVENTS_LOG_FILE, entry)
     except OSError:
         logger.exception("Failed to write runtime event log entry")
 
 
 _file_logging_configured = False
+_queue_listener: logging.handlers.QueueListener | None = None
 
 
 def configure_file_logging() -> None:
-    """Attach a rotating file handler to the root logger, once.
+    """Attach a rotating file handler to the root logger, once — off-thread.
 
     Every ``logger.warning``/``logger.info`` call across the app (order
     dispatch gates, preflight rejections, account watcher events, ...)
@@ -116,23 +123,45 @@ def configure_file_logging() -> None:
     made between two restarts is unrecoverable once the next restart
     happens — which is routine during active deploys. A rotating file
     that the app itself appends to survives restarts.
+
+    A plain ``RotatingFileHandler`` on the root logger writes synchronously
+    on whatever thread calls ``logger.info(...)`` — on this app's single
+    asyncio event loop, that means every log call blocks request handling
+    for the duration of a disk write. Matriks forwards each per-symbol
+    market-data warning as its own HTTP call (``/api/gateway-log``), and its
+    60s rate-limit window resets for every subscribed symbol at close to the
+    same time, so the gateway can burst dozens of near-simultaneous requests;
+    with a blocking handler that burst froze the event loop long enough for
+    inbound TCP connections to pile up in CloseWait until the server stopped
+    accepting new ones. Routing through ``QueueHandler``/``QueueListener``
+    makes ``logger.*()`` calls a fast in-memory enqueue — the actual file
+    write happens on a dedicated listener thread, off the event loop.
     """
-    global _file_logging_configured
+    global _file_logging_configured, _queue_listener
     if _file_logging_configured:
         return
     _ensure_log_dir()
-    handler = logging.handlers.RotatingFileHandler(
+    file_handler = logging.handlers.RotatingFileHandler(
         APP_LOG_FILE, maxBytes=20_000_000, backupCount=5, encoding="utf-8"
     )
-    handler.setFormatter(
+    file_handler.setFormatter(
         logging.Formatter(
             "%(asctime)s %(levelname)s %(name)s %(message)s",
             datefmt="%Y-%m-%dT%H:%M:%S%z",
         )
     )
-    handler.setLevel(logging.INFO)
+    file_handler.setLevel(logging.INFO)
+
+    log_queue: Queue = Queue(-1)
+    queue_handler = logging.handlers.QueueHandler(log_queue)
+    queue_handler.setLevel(logging.INFO)
     root = logging.getLogger()
-    root.addHandler(handler)
+    root.addHandler(queue_handler)
     if root.level > logging.INFO or root.level == logging.NOTSET:
         root.setLevel(logging.INFO)
+
+    _queue_listener = logging.handlers.QueueListener(
+        log_queue, file_handler, respect_handler_level=True
+    )
+    _queue_listener.start()
     _file_logging_configured = True

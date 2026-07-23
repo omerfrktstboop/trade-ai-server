@@ -76,7 +76,7 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
             "reason": response.reason,
         }
         payload = build_payload(body, active_config=runtime_engine.config)
-        log_signal_evaluation(
+        await log_signal_evaluation(
             request_id=body.request_id,
             symbol=body.symbol,
             request=body.model_dump(by_alias=True, mode="json"),
@@ -111,7 +111,7 @@ async def evaluate_signal(body: SignalRequest) -> SignalResponse:
     await persist_sizing_audit(body, runtime_engine)
 
     # == 5. Persist to JSON-lines log ======================================
-    log_signal_evaluation(
+    await log_signal_evaluation(
         request_id=body.request_id,
         symbol=body.symbol,
         request=body.model_dump(by_alias=True, mode="json"),

@@ -27,7 +27,7 @@ class GatewayLogRequest(BaseModel):
 async def record_gateway_log(body: GatewayLogRequest) -> dict[str, str]:
     """Persist a gateway diagnostic without affecting trading control flow."""
     try:
-        log_matriks_gateway(
+        await log_matriks_gateway(
             gateway_timestamp=body.timestamp,
             level=body.level,
             message=body.message,

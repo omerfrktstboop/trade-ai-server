@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         _block_reason = f"startup disarm failed: {_disarm_exc}"
         block_dispatch(_block_reason)
-        log_runtime_event(event_type="DISPATCH_HARD_BLOCKED", detail=_block_reason)
+        await log_runtime_event(event_type="DISPATCH_HARD_BLOCKED", detail=_block_reason)
         # Bu latch süreç boyunca TÜM emirleri sessizce durdurur ve ancak
         # restart ile temizlenir; operatör hemen haberdar olmalı.
         await notify_error(

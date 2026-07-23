@@ -430,7 +430,7 @@ async def evaluate_symbol(
             "risk_score": 0.0,
             "reason": response.reason,
         }
-        _log_evaluation(sig_req, response)
+        await _log_evaluation(sig_req, response)
         await persist_evaluation(sig_req, payload, raw, response)
         return EvaluationResult(
             response=response,
@@ -659,7 +659,7 @@ async def evaluate_symbol(
         )
 
     # == 8. Log + persist =================================================
-    _log_evaluation(sig_req, response)
+    await _log_evaluation(sig_req, response)
     await persist_evaluation(sig_req, payload, raw, response)
     try:
         from app.services.position_management import record_position_management
@@ -707,8 +707,8 @@ async def evaluate_symbol(
     )
 
 
-def _log_evaluation(req: SignalRequest, response: SignalResponse) -> None:
-    log_signal_evaluation(
+async def _log_evaluation(req: SignalRequest, response: SignalResponse) -> None:
+    await log_signal_evaluation(
         request_id=req.request_id,
         symbol=req.symbol,
         request=req.model_dump(by_alias=True, mode="json"),

@@ -8,7 +8,7 @@ from datetime import datetime
 from app.core.logger import log_signal_evaluation
 
 
-def test_log_signal_evaluation_writes_istanbul_local_time(tmp_path, monkeypatch):
+async def test_log_signal_evaluation_writes_istanbul_local_time(tmp_path, monkeypatch):
     """Timestamps are written in Europe/Istanbul local time (not UTC) so a
     human reading logs/signal.log sees the real wall-clock time, not a
     value that's 3 hours behind."""
@@ -16,7 +16,7 @@ def test_log_signal_evaluation_writes_istanbul_local_time(tmp_path, monkeypatch)
     monkeypatch.setattr("app.core.logger.LOG_DIR", tmp_path)
     monkeypatch.setattr("app.core.logger.LOG_FILE", log_file)
 
-    log_signal_evaluation(
+    await log_signal_evaluation(
         request_id="test-tz",
         symbol="THYAO",
         request={"symbol": "THYAO"},

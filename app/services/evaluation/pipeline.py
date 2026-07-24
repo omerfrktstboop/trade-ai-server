@@ -534,6 +534,28 @@ async def evaluate_symbol(
     )
     raw: dict[str, Any] | None = None
 
+    # Sunucu tarafı quote tazelik toleransı gevşetmesi: gateway quoteReliable'ı
+    # yaş nedeniyle False işaretlemiş olsa bile, quote yaşı yapılandırılan
+    # eşiğin altındaysa ve fiyat geçerliyse preflight kapısı için güvenilir
+    # kabul edilir. Gateway kendi ~15sn tazelik kontrolünü emir anında yine
+    # uygular (son savunma hattı), bu yalnızca AI'ya danışma kapısını gevşetir.
+    effective_quote_reliable = sig_req.quote_reliable
+    if (
+        settings.quote_reliable_max_age_seconds > 0
+        and sig_req.quote_reliable is not True
+        and sig_req.quote_age_seconds is not None
+        and 0 <= sig_req.quote_age_seconds <= settings.quote_reliable_max_age_seconds
+        and sig_req.last_price is not None
+        and sig_req.last_price > 0
+    ):
+        effective_quote_reliable = True
+        logger.info(
+            "QUOTE_RELIABLE_AGE_OVERRIDE symbol=%s ageSec=%.1f threshold=%.1f",
+            sig_req.symbol,
+            sig_req.quote_age_seconds,
+            settings.quote_reliable_max_age_seconds,
+        )
+
     # Hard data-quality WAIT outranks every decision source, including an admin
     # test override. Reliable research remains analytical; reliable active
     # TRADING watchlist entries bypass only the neutral cost shortcut.
@@ -544,7 +566,7 @@ async def evaluate_symbol(
         news_context=news_context,
         evaluation_purpose=evaluation_purpose,
         trade_eligible=sig_req.trade_eligible,
-        quote_reliable=sig_req.quote_reliable,
+        quote_reliable=effective_quote_reliable,
         ohlc_reliable=sig_req.ohlc_reliable,
     )
     gate_category = (

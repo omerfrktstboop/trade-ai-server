@@ -171,6 +171,11 @@ class Settings(BaseSettings):
     # kalır (tek yetki kuralı). Kapalıyken mevcut exit davranışı birebir korunur.
     deterministic_exit_enabled: bool = False
     exit_monitor_interval_seconds: float = 7.0
+    # Sunucu tarafı quote tazelik toleransı (sn). >0 ise: gateway quoteReliable'ı
+    # yaş nedeniyle False dese bile quote bu yaştan genç ve fiyat geçerliyse
+    # preflight data-quality kapısı için güvenilir sayılır. Gateway emir anında
+    # kendi tazelik kontrolünü yine uygular. 0 = kapalı (gateway bayrağı aynen).
+    quote_reliable_max_age_seconds: float = 0.0
 
     # Makro filtre: piyasa geneli rejim bu endeks sembolünden okunur.
     # Boş string makro filtreyi tamamen kapatır.

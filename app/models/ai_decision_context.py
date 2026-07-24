@@ -161,3 +161,6 @@ class AiDecisionContext(_ContextModel):
     position: PositionContext | None = None
     events: EventsContext | None = None
     research: ResearchEvidenceContext | None = None
+    # Deterministik entry akışında (Plan Faz 1.4) sunucunun hesapladığı setup
+    # skoru + seviyeler; AI bunu veto/onay için görür. Diğer akışlarda None.
+    deterministicSetup: dict | None = None

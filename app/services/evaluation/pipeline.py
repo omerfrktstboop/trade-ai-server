@@ -591,8 +591,16 @@ async def evaluate_symbol(
     # Flag açıkken: zayıf ya da yetersiz-veri setup'ları LLM'e gitmeden elenir;
     # güçlü setup'lar bar/setup bazında kalıcı AI-call claim ile kapılanır
     # (aynı bar içinde aynı setup tekrar LLM'e sorulmaz, restart sonrası dahil).
+    # YALNIZCA yeni girişte (açık pozisyon yokken) uygulanır: açık bir pozisyon
+    # her zaman AI yönetimine gitmelidir — setup skoru giriş eşiğinin altına
+    # düşse bile pozisyon yönetimi (kar al / zarar kes / tut) kapılanmamalıdır.
     setup_score_value: float | None = None
-    if settings.deterministic_entry_enabled and raw is None and not research_only:
+    if (
+        settings.deterministic_entry_enabled
+        and raw is None
+        and not research_only
+        and sig_req.bot_position_qty == 0
+    ):
         setup = compute_setup_score(sig_req)
         setup_score_value = setup.total
         payload["setupScore"] = setup.total
